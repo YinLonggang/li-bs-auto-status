@@ -1,18 +1,25 @@
-import { ApiError, apiRequest } from './http';
+import { BASE_CONFIG_PREFIX } from '../config';
+import { ApiError, apiRequest, requestWithPrefix } from './http';
 import type {
   ApiEnvelope,
   Attachment,
   CheckItem,
   ChecklistTemplate,
   CollisionReport,
+  DashboardProgressRow,
+  DashboardSummary,
   ExportTask,
+  FactoryOption,
+  HierarchyOptions,
   InspectionModule,
   KeyIssue,
   OwnerCandidate,
   PhaseTemplate,
+  ProductionLineOption,
   Project,
   ProjectPhase,
   ReportDefinition,
+  WorkshopOption,
   WorkspaceData
 } from '../types';
 
@@ -71,13 +78,119 @@ const firstId = (record: RawRecord, keys: string[], fallback: string | number = 
   return fallback;
 };
 
+const firstOptionalId = (record: RawRecord, keys: string[]) => {
+  const value = firstId(record, keys);
+  return value === '' ? null : value;
+};
+
 const metadataOf = (record: RawRecord) => asRecord(record.metadata);
+
+const EMPTY_HIERARCHY: HierarchyOptions = {
+  factories: [],
+  workshops: [],
+  productionLines: []
+};
+
+const normalizeFactoryOption = (input: unknown): FactoryOption => {
+  const raw = asRecord(input);
+  return {
+    id: firstId(raw, ['id']),
+    code: firstString(raw, ['code']),
+    name: firstString(raw, ['name']),
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true))
+  };
+};
+
+const normalizeWorkshopOption = (input: unknown): WorkshopOption => {
+  const raw = asRecord(input);
+  return {
+    id: firstId(raw, ['id']),
+    factoryId: firstId(raw, ['factory', 'factoryId', 'factory_id']),
+    code: firstString(raw, ['code']),
+    name: firstString(raw, ['name']),
+    factoryCode: firstString(raw, ['factoryCode', 'factory_code']),
+    factoryName: firstString(raw, ['factoryName', 'factory_name']),
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true))
+  };
+};
+
+const normalizeProductionLineOption = (input: unknown): ProductionLineOption => {
+  const raw = asRecord(input);
+  return {
+    id: firstId(raw, ['id']),
+    workshopId: firstId(raw, ['workshop', 'workshopId', 'workshop_id']),
+    code: firstString(raw, ['code']),
+    name: firstString(raw, ['name']),
+    workshopCode: firstString(raw, ['workshopCode', 'workshop_code']),
+    workshopName: firstString(raw, ['workshopName', 'workshop_name']),
+    factoryCode: firstString(raw, ['factoryCode', 'factory_code']),
+    factoryName: firstString(raw, ['factoryName', 'factory_name']),
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true))
+  };
+};
+
+const buildHierarchyFromProjects = (projects: Project[]): HierarchyOptions => {
+  const factories = new Map<string, FactoryOption>();
+  const workshops = new Map<string, WorkshopOption>();
+  const productionLines = new Map<string, ProductionLineOption>();
+
+  projects.forEach(project => {
+    if (project.factoryId) {
+      const id = `${project.factoryId}`;
+      factories.set(id, {
+        id: project.factoryId,
+        code: project.factoryCode ?? '',
+        name: project.factoryName ?? project.factoryNameSnapshot ?? project.plant
+      });
+    }
+    if (project.workshopId && project.factoryId) {
+      const id = `${project.workshopId}`;
+      workshops.set(id, {
+        id: project.workshopId,
+        factoryId: project.factoryId,
+        code: project.workshopCode ?? '',
+        name: project.workshopName ?? project.workshopNameSnapshot ?? '未命名车间',
+        factoryCode: project.factoryCode,
+        factoryName: project.factoryName ?? project.factoryNameSnapshot
+      });
+    }
+    if (project.productionLineId && project.workshopId) {
+      const id = `${project.productionLineId}`;
+      productionLines.set(id, {
+        id: project.productionLineId,
+        workshopId: project.workshopId,
+        code: project.productionLineCode ?? '',
+        name: project.productionLineName ?? project.lineNameSnapshot ?? project.lineName,
+        workshopCode: project.workshopCode,
+        workshopName: project.workshopName ?? project.workshopNameSnapshot,
+        factoryCode: project.factoryCode,
+        factoryName: project.factoryName ?? project.factoryNameSnapshot
+      });
+    }
+  });
+
+  return {
+    factories: [...factories.values()],
+    workshops: [...workshops.values()],
+    productionLines: [...productionLines.values()]
+  };
+};
+
+const mergeHierarchyFallback = (hierarchy: HierarchyOptions, projects: Project[]): HierarchyOptions => {
+  const fallback = buildHierarchyFromProjects(projects);
+  return {
+    factories: hierarchy.factories.length ? hierarchy.factories : fallback.factories,
+    workshops: hierarchy.workshops.length ? hierarchy.workshops : fallback.workshops,
+    productionLines: hierarchy.productionLines.length ? hierarchy.productionLines : fallback.productionLines
+  };
+};
 
 const normalizeAttachment = (input: unknown): Attachment => {
   const raw = asRecord(input);
   return {
     id: firstId(raw, ['id']),
     fileName: firstString(raw, ['fileName', 'file_name']),
+    bucketName: firstString(raw, ['bucketName', 'bucket_name']),
     objectKey: firstString(raw, ['objectKey', 'object_key']),
     downloadUrl: firstString(raw, ['downloadUrl', 'download_url']) || null,
     contentType: firstString(raw, ['contentType', 'content_type']),
@@ -94,8 +207,26 @@ const normalizeProject = (input: unknown): Project => {
     id: firstId(raw, ['id']),
     code: firstString(raw, ['code']),
     name: firstString(raw, ['name']),
-    plant: firstString(raw, ['plant']),
-    lineName: firstString(raw, ['lineName', 'line', 'line_name']),
+    factoryId: firstOptionalId(raw, ['factoryId', 'factory']),
+    factoryCode: firstString(raw, ['factoryCode', 'factory_code']),
+    factoryName: firstString(raw, ['factoryName', 'factory_name']),
+    workshopId: firstOptionalId(raw, ['workshopId', 'workshop']),
+    workshopCode: firstString(raw, ['workshopCode', 'workshop_code']),
+    workshopName: firstString(raw, ['workshopName', 'workshop_name']),
+    productionLineId: firstOptionalId(raw, ['productionLineId', 'production_line']),
+    productionLineCode: firstString(raw, ['productionLineCode', 'production_line_code']),
+    productionLineName: firstString(raw, ['productionLineName', 'production_line_name']),
+    factoryNameSnapshot: firstString(raw, ['factoryNameSnapshot', 'factory_name_snapshot']),
+    workshopNameSnapshot: firstString(raw, ['workshopNameSnapshot', 'workshop_name_snapshot']),
+    lineNameSnapshot: firstString(raw, ['lineNameSnapshot', 'line_name_snapshot']),
+    plant:
+      firstString(raw, ['factoryName', 'factory_name']) ||
+      firstString(raw, ['factoryNameSnapshot', 'factory_name_snapshot']) ||
+      firstString(raw, ['plant']),
+    lineName:
+      firstString(raw, ['productionLineName', 'production_line_name']) ||
+      firstString(raw, ['lineNameSnapshot', 'line_name_snapshot']) ||
+      firstString(raw, ['lineName', 'line', 'line_name']),
     description: firstString(raw, ['description']),
     status: firstString(raw, ['status'], 'active'),
     ownerName:
@@ -153,12 +284,15 @@ const normalizeProjectPhase = (input: unknown): ProjectPhase => {
 
 const normalizeInspectionModule = (input: unknown): InspectionModule => {
   const raw = asRecord(input);
+  const metadata = metadataOf(raw);
   return {
     id: firstId(raw, ['id']),
     code: firstString(raw, ['code']),
     name: firstString(raw, ['name']),
     sequence: firstNumber(raw, ['sequence', 'sort_order']),
-    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true))
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
+    color: firstString(metadata, ['color']),
+    milestones: asArray(metadata.milestones).map(item => Number(item)).filter(item => Number.isFinite(item))
   };
 };
 
@@ -207,6 +341,7 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
 
 const normalizeKeyIssue = (input: unknown): KeyIssue => {
   const raw = asRecord(input);
+  const metadata = metadataOf(raw);
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
@@ -220,6 +355,19 @@ const normalizeKeyIssue = (input: unknown): KeyIssue => {
     dueDate: firstString(raw, ['dueDate', 'due_date']),
     closedAt: firstString(raw, ['closedAt', 'closed_at']) || null,
     resolution: firstString(raw, ['resolution']),
+    problemPhoto:
+      firstString(raw, ['problemPhoto', 'problem_photo']) ||
+      firstString(raw, ['problem_photo_object_key']) ||
+      firstString(metadata, ['problemPhoto', 'problem_photo']),
+    problemPhotoBucketName: firstString(raw, ['problemPhotoBucketName', 'problem_photo_bucket_name']),
+    problemPhotoObjectKey: firstString(raw, ['problemPhotoObjectKey', 'problem_photo_object_key']),
+    countermeasure: firstString(raw, ['countermeasure']) || firstString(metadata, ['countermeasure']),
+    supplier: firstString(raw, ['supplier']) || firstString(metadata, ['supplier']),
+    confirmer:
+      firstString(raw, ['confirmerName', 'confirmer_display_name', 'confirmer_name']) ||
+      firstString(metadata, ['confirmer']),
+    currentProgress: firstString(raw, ['currentProgress', 'progress_note']) || firstString(metadata, ['currentProgress', 'current_progress']),
+    remark: firstString(raw, ['remark']) || firstString(metadata, ['remark']),
     attachments: asArray(raw.attachments).map(normalizeAttachment)
   };
 };
@@ -250,6 +398,15 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
     status: firstString(raw, ['status'], 'draft'),
     riskLevel: firstString(raw, ['riskLevel', 'risk_level']) || firstString(metadata, ['riskLevel', 'risk_level', 'severity'], 'medium'),
     problemDefinition: firstString(content, ['problemDefinition', 'problem_statement', 'problem']),
+    parts: firstString(content, ['parts']),
+    vehicleModel: firstString(content, ['vehicleModel', 'vehicle_model', 'model']),
+    failureFrequency: firstString(content, ['failureFrequency', 'failure_frequency', 'frequency']),
+    responsibilityArea: firstString(content, ['responsibilityArea', 'responsibility_area', 'area']),
+    progress: firstString(content, ['progress']),
+    remark: firstString(content, ['remark']),
+    problemDescription: firstString(content, ['problemDescription', 'problem_description']),
+    diagnosisRepair: firstString(content, ['diagnosisRepair', 'diagnosis_repair']),
+    supportNeeded: firstString(content, ['supportNeeded', 'support_needed']),
     impact: firstString(content, ['impact']),
     containment: firstString(content, ['containment']),
     rootCause: firstString(content, ['rootCause', 'root_cause']),
@@ -297,15 +454,20 @@ const normalizeExportTask = (input: unknown): ExportTask => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
   const exportType = firstString(raw, ['export_type'], 'project');
+  const resultObjectKey = firstString(raw, ['resultObjectKey', 'result_object_key']);
+  const inferredFileName = resultObjectKey.split('/').filter(Boolean).at(-1) ?? '';
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
     reportName: firstString(metadata, ['reportName', 'report_name']) || exportType,
+    fileName: firstString(metadata, ['fileName', 'file_name']) || inferredFileName,
+    fileFormat: firstString(raw, ['fileFormat', 'file_format']),
     status: firstString(raw, ['status'], 'queued'),
     requestedBy: firstString(raw, ['requestedBy', 'requested_by_name'], '系统'),
     requestedAt: firstString(raw, ['requestedAt', 'created_at', 'started_at']),
     finishedAt: firstString(raw, ['finishedAt', 'finished_at']) || null,
-    downloadUrl: firstString(raw, ['downloadUrl', 'content_url']) || null,
+    resultBucketName: firstString(raw, ['resultBucketName', 'result_bucket_name']),
+    resultObjectKey,
     errorMessage: firstString(raw, ['errorMessage', 'error_message']) || null
   };
 };
@@ -313,18 +475,101 @@ const normalizeExportTask = (input: unknown): ExportTask => {
 const normalizeOwnerCandidate = (input: unknown): OwnerCandidate => {
   const raw = asRecord(input);
   return {
-    idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'id']),
+    idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']),
     displayName: firstString(raw, ['displayName', 'display_name', 'name', 'username']),
     email: firstString(raw, ['email']),
-    department: firstString(raw, ['department'])
+    department: firstString(raw, ['department', 'department_name', 'org_name'])
+  };
+};
+
+export type ProjectScopeFilters = {
+  projectId?: string | number;
+  factoryId?: string | number;
+  workshopId?: string | number;
+  productionLineId?: string | number | null;
+  status?: string;
+};
+
+const buildProjectSearchParams = (filters?: ProjectScopeFilters) => {
+  const params = new URLSearchParams();
+  if (!filters) return params;
+  if (filters.projectId) params.set('project', `${filters.projectId}`);
+  if (filters.factoryId) params.set('factory', `${filters.factoryId}`);
+  if (filters.workshopId) params.set('workshop', `${filters.workshopId}`);
+  if (filters.productionLineId !== undefined && filters.productionLineId !== null && `${filters.productionLineId}`) {
+    params.set('production_line', `${filters.productionLineId}`);
+  }
+  if (filters.status) params.set('status', filters.status);
+  return params;
+};
+
+const withQuery = (path: string, filters?: ProjectScopeFilters) => {
+  const params = buildProjectSearchParams(filters);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+};
+
+const normalizeDashboardProgressRow = (input: unknown): DashboardProgressRow => {
+  const raw = asRecord(input);
+  return {
+    key: firstString(raw, ['phase_key', 'module_code', 'key', 'code']),
+    name: firstString(raw, ['phase_name', 'module_name', 'name']),
+    checkItemCount: firstNumber(raw, ['check_item_count']),
+    completedCheckItemCount: firstNumber(raw, ['completed_check_item_count']),
+    completionRate: firstNumber(raw, ['completion_rate'])
+  };
+};
+
+const normalizeCountMap = (value: unknown): Record<string, number> => {
+  const raw = asRecord(value);
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, count]) => [key, asNumber(count)])
+  );
+};
+
+const normalizeDashboardSummary = (input: unknown): DashboardSummary => {
+  const raw = asRecord(input);
+  return {
+    refreshedAt: firstString(raw, ['refreshed_at', 'refreshedAt']),
+    filters: Object.fromEntries(
+      Object.entries(asRecord(raw.filters)).map(([key, value]) => [key, typeof value === 'string' ? value : String(value ?? '')])
+    ),
+    projectCount: firstNumber(raw, ['project_count']),
+    activeProjectCount: firstNumber(raw, ['active_project_count']),
+    archivedProjectCount: firstNumber(raw, ['archived_project_count']),
+    phaseCount: firstNumber(raw, ['phase_count']),
+    checkItemCount: firstNumber(raw, ['check_item_count']),
+    completedCheckItemCount: firstNumber(raw, ['completed_check_item_count']),
+    openCheckItemCount: firstNumber(raw, ['open_check_item_count']),
+    completionRate: firstNumber(raw, ['completion_rate']),
+    keyIssueCount: firstNumber(raw, ['key_issue_count']),
+    openKeyIssueCount: firstNumber(raw, ['open_key_issue_count']),
+    highOpenKeyIssueCount: firstNumber(raw, ['high_open_key_issue_count']),
+    collisionReportCount: firstNumber(raw, ['collision_report_count']),
+    pendingCollisionReportCount: firstNumber(raw, ['pending_collision_report_count']),
+    exportJobCount: firstNumber(raw, ['export_job_count']),
+    failedExportJobCount: firstNumber(raw, ['failed_export_job_count']),
+    byProjectStatus: normalizeCountMap(raw.by_project_status),
+    byPhaseStatus: normalizeCountMap(raw.by_phase_status),
+    byCheckItemStatus: normalizeCountMap(raw.by_check_item_status),
+    byIssueStatus: normalizeCountMap(raw.by_issue_status),
+    byIssueSeverity: normalizeCountMap(raw.by_issue_severity),
+    byCollisionStatus: normalizeCountMap(raw.by_collision_status),
+    byExportStatus: normalizeCountMap(raw.by_export_status),
+    phaseProgress: asArray(raw.phase_progress).map(normalizeDashboardProgressRow),
+    moduleProgress: asArray(raw.module_progress).map(normalizeDashboardProgressRow)
   };
 };
 
 export type CreateProjectInput = {
   name: string;
   code: string;
+  factoryId?: string | number | null;
+  workshopId?: string | number | null;
+  productionLineId?: string | number | null;
   plant: string;
   lineName: string;
+  workshopName?: string;
   ownerName: string;
   plannedStartDate: string;
   plannedEndDate: string;
@@ -336,8 +581,42 @@ export type CreateExportInput = {
   format: string;
 };
 
-export async function listProjects() {
-  return unwrap(await apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/projects/')).map(normalizeProject);
+export async function listProjects(filters?: ProjectScopeFilters) {
+  return unwrap(await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(withQuery('/projects/', filters))).map(normalizeProject);
+}
+
+export async function fetchDashboardSummary(filters?: ProjectScopeFilters): Promise<DashboardSummary | null> {
+  try {
+    return normalizeDashboardSummary(
+      unwrap(await apiRequest<ApiEnvelope<unknown> | unknown>(withQuery('/dashboard/', filters)))
+    );
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function fetchHierarchyOptions(): Promise<HierarchyOptions> {
+  try {
+    const [factories, workshops, productionLines] = await Promise.all([
+      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/factories/?is_active=true'),
+      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/workshops/?is_active=true'),
+      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/lines/?is_active=true')
+    ]);
+
+    return {
+      factories: unwrap(factories).map(normalizeFactoryOption),
+      workshops: unwrap(workshops).map(normalizeWorkshopOption),
+      productionLines: unwrap(productionLines).map(normalizeProductionLineOption)
+    };
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
+      return EMPTY_HIERARCHY;
+    }
+    throw error;
+  }
 }
 
 export async function createProject(input: CreateProjectInput) {
@@ -347,8 +626,12 @@ export async function createProject(input: CreateProjectInput) {
       body: JSON.stringify({
         code: input.code,
         name: input.name,
-        plant: input.plant,
-        line: input.lineName,
+        factory: input.factoryId,
+        workshop: input.workshopId,
+        production_line: input.productionLineId,
+        factory_name_snapshot: input.plant,
+        workshop_name_snapshot: input.workshopName,
+        line_name_snapshot: input.lineName,
         metadata: {
           owner_name: input.ownerName,
           planned_start_date: input.plannedStartDate,
@@ -363,9 +646,14 @@ export async function createProject(input: CreateProjectInput) {
 export async function fetchOwnerCandidates(query = '') {
   const search = query ? `?q=${encodeURIComponent(query)}` : '';
   try {
-    return unwrap(
+    const payload = unwrap(
       await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/idaas-candidates/${search}`)
-    ).map(normalizeOwnerCandidate);
+    );
+    const record = asRecord(payload);
+    const candidates = Array.isArray(payload)
+      ? payload
+      : asArray(record.candidates ?? record.results ?? record.items);
+    return candidates.map(normalizeOwnerCandidate).filter(candidate => candidate.idaasId || candidate.displayName);
   } catch (error) {
     if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
       return [];
@@ -374,7 +662,7 @@ export async function fetchOwnerCandidates(query = '') {
   }
 }
 
-export async function fetchProjectBundle(projectId: string | number): Promise<Omit<WorkspaceData, 'projects' | 'selectedProject'>> {
+export async function fetchProjectBundle(projectId: string | number): Promise<Omit<WorkspaceData, 'projects' | 'selectedProject' | 'hierarchy' | 'dashboardSummary'>> {
   const [
     phases,
     phaseTemplates,
@@ -413,14 +701,26 @@ export async function fetchProjectBundle(projectId: string | number): Promise<Om
   };
 }
 
-export async function fetchWorkspaceData(projectId?: string | number): Promise<WorkspaceData> {
-  const projects = await listProjects();
+export async function fetchWorkspaceData(projectId?: string | number, filters?: ProjectScopeFilters): Promise<WorkspaceData> {
+  const effectiveFilters = projectId ? { ...filters, projectId } : filters;
+  const [projects, hierarchyPayload, dashboardSummary] = await Promise.all([
+    listProjects(filters),
+    fetchHierarchyOptions()
+      .catch(error => {
+        if (error instanceof ApiError) return EMPTY_HIERARCHY;
+        throw error;
+      }),
+    fetchDashboardSummary(effectiveFilters)
+  ]);
+  const hierarchy = mergeHierarchyFallback(hierarchyPayload, projects);
   const selectedProject = projects.find(project => `${project.id}` === `${projectId}`) ?? projects[0] ?? null;
 
   if (!selectedProject) {
     return {
       projects,
       selectedProject: null,
+      hierarchy,
+      dashboardSummary,
       phases: [],
       phaseTemplates: [],
       inspectionModules: [],
@@ -437,6 +737,8 @@ export async function fetchWorkspaceData(projectId?: string | number): Promise<W
   return {
     projects,
     selectedProject,
+    hierarchy,
+    dashboardSummary,
     ...(await fetchProjectBundle(selectedProject.id))
   };
 }
@@ -470,4 +772,12 @@ export async function createExportTask(projectId: string | number, input: Create
     })
   );
   return normalizeExportTask(job);
+}
+
+export async function fetchExportDownloadLink(exportJobId: string | number) {
+  const payload = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/export-jobs/${exportJobId}/download-link/`)
+  );
+  const raw = asRecord(payload);
+  return firstString(raw, ['download_url', 'downloadUrl', 'url']);
 }

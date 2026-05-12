@@ -74,9 +74,13 @@ const messageFrom = (payload: unknown, fallback: string) => {
   return fallback;
 };
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function requestWithPrefix<T>(
+  prefix: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<T> {
   const { headers, method = 'GET', ...rest } = init;
-  const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${prefix}${path}`, {
     credentials: 'include',
     method,
     headers: buildHeaders(headers, method),
@@ -91,4 +95,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   }
 
   return payload as T;
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return requestWithPrefix<T>(API_PREFIX, path, init);
 }

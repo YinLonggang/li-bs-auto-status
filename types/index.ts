@@ -27,15 +27,61 @@ export type OwnerCandidate = {
   department?: string;
 };
 
+export type FactoryOption = {
+  id: string | number;
+  code: string;
+  name: string;
+  isActive?: boolean;
+};
+
+export type WorkshopOption = {
+  id: string | number;
+  factoryId: string | number;
+  code: string;
+  name: string;
+  factoryCode?: string;
+  factoryName?: string;
+  isActive?: boolean;
+};
+
+export type ProductionLineOption = {
+  id: string | number;
+  workshopId: string | number;
+  code: string;
+  name: string;
+  workshopCode?: string;
+  workshopName?: string;
+  factoryCode?: string;
+  factoryName?: string;
+  isActive?: boolean;
+};
+
+export type HierarchyOptions = {
+  factories: FactoryOption[];
+  workshops: WorkshopOption[];
+  productionLines: ProductionLineOption[];
+};
+
 export type ProjectStatus = 'planning' | 'active' | 'paused' | 'completed' | 'archived' | string;
 export type PhaseStatus = 'not_started' | 'in_progress' | 'blocked' | 'completed' | string;
-export type CheckItemStatus = 'not_started' | 'in_progress' | 'blocked' | 'done' | 'waived' | string;
+export type CheckItemStatus =
+  | 'pending'
+  | 'not_started'
+  | 'in_progress'
+  | 'blocked'
+  | 'done'
+  | 'waived'
+  | 'pass'
+  | 'fail'
+  | 'na'
+  | string;
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | string;
-export type ExportStatus = 'queued' | 'running' | 'succeeded' | 'failed' | string;
+export type ExportStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed' | string;
 
 export type Attachment = {
   id: string | number;
   fileName: string;
+  bucketName?: string;
   objectKey: string;
   downloadUrl?: string | null;
   contentType?: string;
@@ -48,6 +94,18 @@ export type Project = {
   id: string | number;
   code: string;
   name: string;
+  factoryId?: string | number | null;
+  factoryCode?: string;
+  factoryName?: string;
+  workshopId?: string | number | null;
+  workshopCode?: string;
+  workshopName?: string;
+  productionLineId?: string | number | null;
+  productionLineCode?: string;
+  productionLineName?: string;
+  factoryNameSnapshot?: string;
+  workshopNameSnapshot?: string;
+  lineNameSnapshot?: string;
   plant: string;
   lineName: string;
   description?: string;
@@ -94,6 +152,8 @@ export type InspectionModule = {
   name: string;
   sequence: number;
   isActive: boolean;
+  color?: string;
+  milestones?: number[];
 };
 
 export type ChecklistTemplate = {
@@ -143,6 +203,14 @@ export type KeyIssue = {
   dueDate: string;
   closedAt?: string | null;
   resolution?: string;
+  problemPhoto?: string;
+  problemPhotoBucketName?: string;
+  problemPhotoObjectKey?: string;
+  countermeasure?: string;
+  supplier?: string;
+  confirmer?: string;
+  currentProgress?: string;
+  remark?: string;
   attachments: Attachment[];
 };
 
@@ -154,6 +222,15 @@ export type CollisionReport = {
   status: string;
   riskLevel: Severity;
   problemDefinition: string;
+  parts?: string;
+  vehicleModel?: string;
+  failureFrequency?: string;
+  responsibilityArea?: string;
+  progress?: string;
+  remark?: string;
+  problemDescription?: string;
+  diagnosisRepair?: string;
+  supportNeeded?: string;
   impact: string;
   containment: string;
   rootCause: string;
@@ -179,17 +256,59 @@ export type ExportTask = {
   id: string | number;
   projectId: string | number;
   reportName: string;
+  fileName?: string;
+  fileFormat?: string;
   status: ExportStatus;
   requestedBy: string;
   requestedAt: string;
   finishedAt?: string | null;
-  downloadUrl?: string | null;
+  resultBucketName?: string;
+  resultObjectKey?: string;
   errorMessage?: string | null;
+};
+
+export type DashboardProgressRow = {
+  key: string;
+  name: string;
+  checkItemCount: number;
+  completedCheckItemCount: number;
+  completionRate: number;
+};
+
+export type DashboardSummary = {
+  refreshedAt?: string;
+  filters: Record<string, string>;
+  projectCount: number;
+  activeProjectCount: number;
+  archivedProjectCount: number;
+  phaseCount: number;
+  checkItemCount: number;
+  completedCheckItemCount: number;
+  openCheckItemCount: number;
+  completionRate: number;
+  keyIssueCount: number;
+  openKeyIssueCount: number;
+  highOpenKeyIssueCount: number;
+  collisionReportCount: number;
+  pendingCollisionReportCount: number;
+  exportJobCount: number;
+  failedExportJobCount: number;
+  byProjectStatus: Record<string, number>;
+  byPhaseStatus: Record<string, number>;
+  byCheckItemStatus: Record<string, number>;
+  byIssueStatus: Record<string, number>;
+  byIssueSeverity: Record<string, number>;
+  byCollisionStatus: Record<string, number>;
+  byExportStatus: Record<string, number>;
+  phaseProgress: DashboardProgressRow[];
+  moduleProgress: DashboardProgressRow[];
 };
 
 export type WorkspaceData = {
   projects: Project[];
   selectedProject: Project | null;
+  hierarchy: HierarchyOptions;
+  dashboardSummary: DashboardSummary | null;
   phases: ProjectPhase[];
   phaseTemplates: PhaseTemplate[];
   inspectionModules: InspectionModule[];

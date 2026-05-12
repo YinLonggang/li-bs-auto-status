@@ -20,8 +20,8 @@ import type { ThemeMode } from '../hooks/useTheme';
 import type { UserProfile } from '../types';
 
 export type AppTab =
+  | 'dashboard'
   | 'projects'
-  | 'overview'
   | 'phases'
   | 'timeline'
   | 'checks'
@@ -38,8 +38,8 @@ export type SidebarMenuItem<TView extends string = AppTab> = {
 };
 
 export const MENU_ITEMS: SidebarMenuItem[] = [
+  { id: 'dashboard', label: 'Dashboard', description: '项目状态驾驶舱', icon: LayoutDashboard },
   { id: 'projects', label: '项目列表', description: '项目切换与状态', icon: Boxes },
-  { id: 'overview', label: '项目总览', description: '指标与阶段概览', icon: LayoutDashboard },
   { id: 'phases', label: '阶段配置', description: '模板与项目阶段', icon: GitBranch },
   { id: 'timeline', label: '阶段进度', description: '时间线与打卡', icon: CalendarClock },
   { id: 'checks', label: '检查项', description: '甘特与表格', icon: ClipboardCheck },
