@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -771,7 +771,7 @@ function PortfolioOverview({
         <div>
           <p className="kicker">Portfolio Overview</p>
           <h2 className="text-xl font-semibold">项目状态总览</h2>
-          <p className="text-sm text-ink-muted">先看全部项目健康度，再从项目列表渐进展开单项目状态。</p>
+          <p className="text-sm text-ink-muted">先看全部项目健康度，再从项目列表选择项目并在下方查看详情。</p>
         </div>
         <span className="chip">{projectCount} 个项目</span>
       </div>
@@ -801,13 +801,17 @@ function PortfolioOverview({
 function ProjectStatisticsList({
   stats,
   selectedProjectId,
-  onSelectProject,
-  renderExpandedProject
+  filters,
+  onFiltersChange,
+  statusOptions,
+  onSelectProject
 }: {
   stats: ProjectStatistics[];
   selectedProjectId?: string | number;
+  filters: SearchFilterState;
+  onFiltersChange: (filters: SearchFilterState) => void;
+  statusOptions: string[];
   onSelectProject: (projectId: string | number) => void;
-  renderExpandedProject: (stat: ProjectStatistics) => ReactNode;
 }) {
   return (
     <section className="panel">
@@ -817,6 +821,13 @@ function ProjectStatisticsList({
           <h2 className="text-lg font-semibold">项目统计列表</h2>
         </div>
         <span className="chip">{stats.length} 个项目</span>
+      </div>
+      <div className="mt-4">
+        <DashboardProjectFilters
+          filters={filters}
+          onChange={onFiltersChange}
+          statusOptions={statusOptions}
+        />
       </div>
       {!stats.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无项目统计。" /></div> : null}
       <div className="table-shell mt-4">
@@ -846,64 +857,55 @@ function ProjectStatisticsList({
                 }
               };
               return (
-                <Fragment key={stat.projectId}>
-                  <tr
-                    className={`cursor-pointer transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
-                      selected ? 'bg-primary/10' : 'hover:bg-surface-soft'
-                    }`}
-                    tabIndex={0}
-                    aria-selected={selected}
-                    aria-expanded={selected}
-                    onClick={handleSelect}
-                    onKeyDown={handleRowKeyDown}
-                  >
-                    <td>
-                      <div className="font-semibold text-ink">{stat.projectName}</div>
-                      <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
-                    </td>
-                    <td>
-                      <div className="min-w-28">
-                        <div className="text-sm font-semibold text-accent">{percent(stat.completionRate)}</div>
-                        <div className="mt-1 h-1.5 rounded-full bg-surface-strong">
-                          <div className="h-1.5 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
-                        </div>
+                <tr
+                  key={stat.projectId}
+                  className={`cursor-pointer transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
+                    selected ? 'bg-primary/10' : 'hover:bg-surface-soft'
+                  }`}
+                  tabIndex={0}
+                  aria-selected={selected}
+                  onClick={handleSelect}
+                  onKeyDown={handleRowKeyDown}
+                >
+                  <td>
+                    <div className="font-semibold text-ink">{stat.projectName}</div>
+                    <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
+                  </td>
+                  <td>
+                    <div className="min-w-28">
+                      <div className="text-sm font-semibold text-accent">{percent(stat.completionRate)}</div>
+                      <div className="mt-1 h-1.5 rounded-full bg-surface-strong">
+                        <div className="h-1.5 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
                       </div>
-                    </td>
-                    <td>{stat.phaseCount}</td>
-                    <td>{stat.completedCheckItemCount}/{stat.checkItemCount}</td>
-                    <td>
-                      <span className={stat.overdueCount ? 'text-danger' : 'text-success'}>{stat.overdueCount}</span>
-                      <div className="mt-1 text-[11px] text-ink-muted">
-                        阶段 {stat.overduePhaseCount} · 检查项 {stat.overdueCheckItemCount}
-                      </div>
-                    </td>
-                    <td>{stat.openKeyIssueCount}/{stat.keyIssueCount}</td>
-                    <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
-                    <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
-                    <td>
-                      <button
-                        className="btn btn-ghost btn--sm"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleSelect();
-                        }}
-                        aria-label={`展开项目 ${stat.projectName} 状态`}
-                        aria-expanded={selected}
-                      >
-                        <ArrowUpRight className="h-4 w-4" />
-                        {selected ? '已展开' : '展开'}
-                      </button>
-                    </td>
-                  </tr>
-                  {selected ? (
-                    <tr>
-                      <td colSpan={9} className="bg-surface-soft p-3">
-                        {renderExpandedProject(stat)}
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
+                    </div>
+                  </td>
+                  <td>{stat.phaseCount}</td>
+                  <td>{stat.completedCheckItemCount}/{stat.checkItemCount}</td>
+                  <td>
+                    <span className={stat.overdueCount ? 'text-danger' : 'text-success'}>{stat.overdueCount}</span>
+                    <div className="mt-1 text-[11px] text-ink-muted">
+                      阶段 {stat.overduePhaseCount} · 检查项 {stat.overdueCheckItemCount}
+                    </div>
+                  </td>
+                  <td>{stat.openKeyIssueCount}/{stat.keyIssueCount}</td>
+                  <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
+                  <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
+                  <td>
+                    <button
+                      className="btn btn-ghost btn--sm"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleSelect();
+                      }}
+                      aria-label={`查看项目 ${stat.projectName} 详情`}
+                      aria-pressed={selected}
+                    >
+                      <ArrowUpRight className="h-4 w-4" />
+                      {selected ? '当前详情' : '查看详情'}
+                    </button>
+                  </td>
+                </tr>
               );
             })}
           </tbody>
@@ -1454,7 +1456,7 @@ function DashboardView({
   const activeCell = filterCell ?? selectedCell ?? (firstPopulatedCell ? { moduleId: firstPopulatedCell.moduleId, phaseId: firstPopulatedCell.phaseId } : null);
   const projectStats = buildProjectStatistics(data);
   const filteredProjectStats = projectStats.filter(stat => projectStatMatchesFilters(stat, dashboardFilters));
-  const selectedProjectStat = projectStats.find(stat => idOf(stat.projectId) === idOf(data.selectedProject?.id));
+  const selectedVisibleProjectStat = filteredProjectStats.find(stat => idOf(stat.projectId) === idOf(data.selectedProject?.id));
   const projectStatusOptions = statusOptionValues(projectStats.map(stat => stat.projectStatus));
   const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
 
@@ -1462,34 +1464,32 @@ function DashboardView({
     <div className="grid gap-5">
       <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
       <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
-      <DashboardProjectFilters
-        filters={dashboardFilters}
-        onChange={setDashboardFilters}
-        statusOptions={projectStatusOptions}
-      />
       <ProjectStatisticsList
         stats={filteredProjectStats}
         selectedProjectId={data.selectedProject?.id}
+        filters={dashboardFilters}
+        onFiltersChange={setDashboardFilters}
+        statusOptions={projectStatusOptions}
         onSelectProject={onSelectProject}
-        renderExpandedProject={(stat) => (
-          <ProjectDashboardExpansion
-            data={data}
-            visibleProjects={visibleProjects}
-            selectedProjectStat={selectedProjectStat}
-            fallbackStat={stat}
-            phases={sortedPhases}
-            modules={sortedModules}
-            checkItems={detailCheckItems}
-            activeCell={activeCell}
-            canWrite={canWrite}
-            detailFilters={detailFilters}
-            checkStatusOptions={checkStatusOptions}
-            onDetailFiltersChange={setDetailFilters}
-            onSelectCell={onSelectCell}
-            onCreateExport={onCreateExport}
-          />
-        )}
       />
+      {selectedVisibleProjectStat ? (
+        <ProjectDashboardExpansion
+          data={data}
+          visibleProjects={visibleProjects}
+          selectedProjectStat={selectedVisibleProjectStat}
+          fallbackStat={selectedVisibleProjectStat}
+          phases={sortedPhases}
+          modules={sortedModules}
+          checkItems={detailCheckItems}
+          activeCell={activeCell}
+          canWrite={canWrite}
+          detailFilters={detailFilters}
+          checkStatusOptions={checkStatusOptions}
+          onDetailFiltersChange={setDetailFilters}
+          onSelectCell={onSelectCell}
+          onCreateExport={onCreateExport}
+        />
+      ) : null}
     </div>
   );
 }
