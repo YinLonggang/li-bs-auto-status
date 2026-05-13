@@ -49,6 +49,11 @@
 - 审查返修：删除入口保持显式 `can_delete/canDelete === true` 才展示；Dashboard 底部导出对只读用户禁用并显示无权限反馈；配置中心检查项阶段筛选新增“全部阶段”；项目/阶段/检查项 PATCH 改为合并当前对象 `metadata` 后再覆盖表单负责字段。
 - 审查返修后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check`、根仓 `git diff --check -- li-bs-auto-status` 均通过。
 - 审查返修后 mock 残留扫描通过：排除 `node_modules`、`dist`、`memory` 和 lockfile 后，源码/配置无 `MSW`、`setupWorker`、`mockServiceWorker`、`VITE_ENABLE_MOCKS`、`mocks/` 命中；`find` 未发现运行期 mock 文件或目录。
+- Dashboard 首页补齐项目状态总览，并将项目统计列表改为点击后在项目行下方展开单项目状态。
+- 检查模块泳道横轴阶段列展示阶段计划日期；Dashboard、泳道、检查项表和时间甘特均按启用阶段数量渲染，项目只启用 5 个阶段时其它视图展示 5 阶段。
+- 配置中心检查项表补齐阶段列和阶段切换，新增检查项取消空日期前端硬阻塞，由后端在未传日期时继承所属阶段计划。
+- 项目内检查项子资源查询补齐 `search/phase/module/status/is_enabled` 过滤，避免子资源查询参数误过滤父项目导致 404。
+- 自回归通过：真实 HTTP 临时项目新增检查项、查询、修改阶段、删除检查项，并停用 1 个阶段后 dashboard 单项目统计返回 `phase_count=5`。
 
 ### 问题与风险
 

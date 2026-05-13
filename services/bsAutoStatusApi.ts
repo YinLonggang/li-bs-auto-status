@@ -98,6 +98,11 @@ const firstOptionalId = (record: RawRecord, keys: string[]) => {
   return value === '' ? null : value;
 };
 
+const optionalDate = (value?: string | null) => {
+  if (value === undefined) return undefined;
+  return value ? value : undefined;
+};
+
 const metadataOf = (record: RawRecord) => asRecord(record.metadata);
 
 const EMPTY_HIERARCHY: HierarchyOptions = {
@@ -627,6 +632,8 @@ const normalizeDashboardSummary = (input: unknown): DashboardSummary => {
     overdueCount: Number.isFinite(explicitOverdueCount)
       ? explicitOverdueCount
       : overduePhaseCount + overdueCheckItemCount,
+    overduePhaseCount,
+    overdueCheckItemCount,
     completionRate: firstNumber(raw, ['completion_rate']),
     keyIssueCount: firstNumber(raw, ['key_issue_count']),
     openKeyIssueCount: firstNumber(raw, ['open_key_issue_count']),
@@ -685,8 +692,8 @@ export type UpdateCheckItemInput = {
   moduleId?: string | number;
   projectPhaseId?: string | number;
   tags?: string[];
-  plannedStartDate?: string;
-  plannedEndDate?: string;
+  plannedStartDate?: string | null;
+  plannedEndDate?: string | null;
   ownerName?: string;
   ownerIdaasId?: string;
   status?: string;
@@ -699,8 +706,8 @@ export type CreateCheckItemInput = UpdateCheckItemInput & {
   title: string;
   moduleId: string | number;
   projectPhaseId: string | number;
-  plannedStartDate: string;
-  plannedEndDate: string;
+  plannedStartDate?: string | null;
+  plannedEndDate?: string | null;
 };
 
 export type CreateExportInput = {
@@ -1030,9 +1037,9 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         project_phase: payload.projectPhaseId,
         phase: payload.projectPhaseId,
         tags: payload.tags,
-        planned_start: payload.plannedStartDate,
-        planned_end: payload.plannedEndDate,
-        due_date: payload.plannedEndDate,
+        planned_start: optionalDate(payload.plannedStartDate),
+        planned_end: optionalDate(payload.plannedEndDate),
+        due_date: optionalDate(payload.plannedEndDate),
         owner_name: payload.ownerName,
         owner_idaas_id: payload.ownerIdaasId,
         status: payload.status,
@@ -1041,8 +1048,8 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         metadata: {
           ...(payload.metadata ?? {}),
           tags: payload.tags,
-          planned_start_date: payload.plannedStartDate,
-          planned_end_date: payload.plannedEndDate
+          planned_start_date: optionalDate(payload.plannedStartDate),
+          planned_end_date: optionalDate(payload.plannedEndDate)
         }
       })
     })
@@ -1059,9 +1066,9 @@ export async function createCheckItem(projectId: string | number, payload: Creat
         module: payload.moduleId,
         title: payload.title,
         tags: payload.tags,
-        planned_start: payload.plannedStartDate,
-        planned_end: payload.plannedEndDate,
-        due_date: payload.plannedEndDate,
+        planned_start: optionalDate(payload.plannedStartDate),
+        planned_end: optionalDate(payload.plannedEndDate),
+        due_date: optionalDate(payload.plannedEndDate),
         owner_name: payload.ownerName,
         owner_idaas_id: payload.ownerIdaasId,
         status: payload.status ?? 'pending',
@@ -1070,8 +1077,8 @@ export async function createCheckItem(projectId: string | number, payload: Creat
         metadata: {
           ...(payload.metadata ?? {}),
           tags: payload.tags,
-          planned_start_date: payload.plannedStartDate,
-          planned_end_date: payload.plannedEndDate
+          planned_start_date: optionalDate(payload.plannedStartDate),
+          planned_end_date: optionalDate(payload.plannedEndDate)
         }
       })
     })

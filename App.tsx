@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -46,6 +46,7 @@ import { ApiError } from './services/http';
 import type {
   CheckItem,
   CollisionReport,
+  DashboardSummary,
   ExportTask,
   InspectionModule,
   KeyIssue,
@@ -87,7 +88,7 @@ const EMPTY_WORKSPACE: WorkspaceData = {
 const VIEW_META: Record<AppTab, { title: string; subtitle: string }> = {
   dashboard: { title: 'Dashboard', subtitle: '项目状态、阶段进度、检查风险和签核' },
   projects: { title: '项目列表', subtitle: '项目切换与状态' },
-  baseConfig: { title: '配置中心', subtitle: '项目基础信息、六阶段、检查项、模块和负责人候选' },
+  baseConfig: { title: '配置中心', subtitle: '项目基础信息、项目阶段、检查项、模块和负责人候选' },
   phases: { title: '阶段配置', subtitle: '模板与项目阶段实例' },
   timeline: { title: '阶段进度', subtitle: '计划、实际和当前进展' },
   checks: { title: '检查项', subtitle: '检查台账与负责人维护' },
@@ -161,6 +162,13 @@ const percent = (value: number) => `${Math.max(0, Math.min(100, Math.round(value
 
 const bySequence = <T extends { sequence: number }>(items: T[]) =>
   [...items].sort((left, right) => left.sequence - right.sequence);
+
+const activePhasesOf = (phases: ProjectPhase[]) => bySequence(phases).filter(phase => phase.isActive !== false);
+
+const filterCheckItemsByPhases = (items: CheckItem[], phases: ProjectPhase[]) => {
+  const phaseIds = new Set(phases.map(phase => idOf(phase.id)));
+  return items.filter(item => phaseIds.has(idOf(item.projectPhaseId)));
+};
 
 const idOf = (value?: string | number | null) => (value === undefined || value === null ? '' : `${value}`);
 
@@ -668,16 +676,18 @@ const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
   const selectedIssues = data.keyIssues;
   const selectedReports = data.collisionReports;
   const selectedExports = data.exportTasks;
-  const selectedPhases = data.phases;
+  const selectedPhases = activePhasesOf(data.phases);
+  const selectedPhaseIds = new Set(selectedPhases.map(phase => idOf(phase.id)));
+  const selectedActiveItems = selectedItems.filter(item => selectedPhaseIds.has(idOf(item.projectPhaseId)));
 
   return data.projects.map(project => {
     const selected = idOf(project.id) === selectedProjectId;
     const summary = selected && data.selectedProjectStats ? data.selectedProjectStats : summaryStats.get(idOf(project.id));
     const phaseCount = selected ? selectedPhases.length : summary?.phaseCount ?? 0;
     const completedCheckItemCount = selected
-      ? selectedItems.filter(item => isComplete(item.status)).length
+      ? selectedActiveItems.filter(item => isComplete(item.status)).length
       : summary?.completedCheckItemCount ?? 0;
-    const checkItemCount = selected ? selectedItems.length : summary?.checkItemCount ?? 0;
+    const checkItemCount = selected ? selectedActiveItems.length : summary?.checkItemCount ?? 0;
     const openIssues = selected
       ? selectedIssues.filter(issue => !issue.closedAt && !['closed', 'resolved', 'done'].includes(issue.status)).length
       : summary?.openKeyIssueCount ?? 0;
@@ -685,7 +695,7 @@ const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
       ? selectedPhases.find(phase => ['in_progress', 'active', 'blocked'].includes(phase.status)) ?? selectedPhases[0]
       : null;
     const localOverduePhaseCount = selectedPhases.filter(phase => isOverdue(phase.plannedEndDate, phase.status)).length;
-    const localOverdueCheckItemCount = selectedItems.filter(item => isOverdue(item.plannedEndDate, item.status)).length;
+    const localOverdueCheckItemCount = selectedActiveItems.filter(item => isOverdue(item.plannedEndDate, item.status)).length;
     const overduePhaseCount = summary?.overduePhaseCount ?? (selected ? localOverduePhaseCount : 0);
     const overdueCheckItemCount = summary?.overdueCheckItemCount ?? (selected ? localOverdueCheckItemCount : 0);
 
@@ -704,7 +714,7 @@ const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
       overdueCount: summary?.overdueCount ?? overduePhaseCount + overdueCheckItemCount,
       overduePhaseCount,
       overdueCheckItemCount,
-      blockedCheckItemCount: selected ? selectedItems.filter(item => isBlocked(item.status)).length : summary?.blockedCheckItemCount ?? 0,
+      blockedCheckItemCount: selected ? selectedActiveItems.filter(item => isBlocked(item.status)).length : summary?.blockedCheckItemCount ?? 0,
       keyIssueCount: selected ? selectedIssues.length : summary?.keyIssueCount ?? 0,
       openKeyIssueCount: openIssues,
       highOpenKeyIssueCount: selected
@@ -728,14 +738,76 @@ const projectStatMatchesFilters = (stat: ProjectStatistics, filters: SearchFilte
   return dateRangeMatches(stat.plannedStartDate, stat.plannedEndDate, filters.startDate, filters.endDate);
 };
 
+function PortfolioOverview({
+  summary,
+  stats
+}: {
+  summary: DashboardSummary | null;
+  stats: ProjectStatistics[];
+}) {
+  const projectCount = summary?.projectCount ?? stats.length;
+  const activeProjectCount = summary?.activeProjectCount ?? stats.filter(stat => stat.projectStatus === 'active').length;
+  const completedProjectCount = summary?.byProjectStatus?.completed ?? stats.filter(stat => stat.projectStatus === 'completed').length;
+  const completionRate = summary?.completionRate ?? (
+    stats.length ? stats.reduce((total, stat) => total + stat.completionRate, 0) / stats.length : 0
+  );
+  const checkItemCount = summary?.checkItemCount ?? stats.reduce((total, stat) => total + stat.checkItemCount, 0);
+  const completedCheckItemCount = summary?.completedCheckItemCount ?? stats.reduce((total, stat) => total + stat.completedCheckItemCount, 0);
+  const overdueCount = summary?.overdueCount ?? stats.reduce((total, stat) => total + stat.overdueCount, 0);
+  const openIssueCount = summary?.openKeyIssueCount ?? stats.reduce((total, stat) => total + stat.openKeyIssueCount, 0);
+  const pendingCollisionCount = summary?.pendingCollisionReportCount ?? stats.reduce((total, stat) => total + stat.pendingCollisionReportCount, 0);
+  const statusCounts = summary?.byProjectStatus ?? stats.reduce<Record<string, number>>((acc, stat) => {
+    acc[stat.projectStatus] = (acc[stat.projectStatus] ?? 0) + 1;
+    return acc;
+  }, {});
+  const orderedStatuses = ['active', 'planning', 'paused', 'completed', 'archived'];
+  const statusEntries = orderedStatuses
+    .map(status => [status, statusCounts[status] ?? 0] as const)
+    .filter(([, count]) => count > 0);
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Portfolio Overview</p>
+          <h2 className="text-xl font-semibold">项目状态总览</h2>
+          <p className="text-sm text-ink-muted">先看全部项目健康度，再从项目列表渐进展开单项目状态。</p>
+        </div>
+        <span className="chip">{projectCount} 个项目</span>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="全部项目" value={projectCount} detail={`${activeProjectCount} 个进行中 · ${completedProjectCount} 个完成`} />
+        <MetricCard label="整体完成率" value={percent(completionRate)} detail={`${completedCheckItemCount}/${checkItemCount} 项完成`} />
+        <MetricCard label="逾期风险" value={overdueCount} detail={`${summary?.overduePhaseCount ?? 0} 阶段 · ${summary?.overdueCheckItemCount ?? 0} 检查项`} />
+        <MetricCard label="重点问题" value={openIssueCount} detail={`${summary?.highOpenKeyIssueCount ?? 0} 个高风险未关闭`} />
+        <MetricCard label="碰撞签核" value={pendingCollisionCount} detail={`${summary?.collisionReportCount ?? 0} 份一页纸`} />
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {statusEntries.map(([status, count]) => (
+          <div key={status} className="rounded-lg border border-outline bg-surface-soft p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-ink">{STATUS_LABEL[status] ?? status}</span>
+              <StatusPill status={status} />
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-ink">{count}</div>
+          </div>
+        ))}
+        {!statusEntries.length ? <EmptyState message="暂无项目状态数据。" /> : null}
+      </div>
+    </section>
+  );
+}
+
 function ProjectStatisticsList({
   stats,
   selectedProjectId,
-  onSelectProject
+  onSelectProject,
+  renderExpandedProject
 }: {
   stats: ProjectStatistics[];
   selectedProjectId?: string | number;
   onSelectProject: (projectId: string | number) => void;
+  renderExpandedProject: (stat: ProjectStatistics) => ReactNode;
 }) {
   return (
     <section className="panel">
@@ -766,37 +838,46 @@ function ProjectStatisticsList({
             {stats.map(stat => {
               const selected = idOf(stat.projectId) === idOf(selectedProjectId);
               return (
-                <tr key={stat.projectId} className={selected ? 'bg-primary/10' : undefined}>
-                  <td>
-                    <div className="font-semibold text-ink">{stat.projectName}</div>
-                    <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
-                  </td>
-                  <td>
-                    <div className="min-w-28">
-                      <div className="text-sm font-semibold text-accent">{percent(stat.completionRate)}</div>
-                      <div className="mt-1 h-1.5 rounded-full bg-surface-strong">
-                        <div className="h-1.5 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
+                <Fragment key={stat.projectId}>
+                  <tr className={selected ? 'bg-primary/10' : undefined}>
+                    <td>
+                      <div className="font-semibold text-ink">{stat.projectName}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
+                    </td>
+                    <td>
+                      <div className="min-w-28">
+                        <div className="text-sm font-semibold text-accent">{percent(stat.completionRate)}</div>
+                        <div className="mt-1 h-1.5 rounded-full bg-surface-strong">
+                          <div className="h-1.5 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>{stat.phaseCount}</td>
-                  <td>{stat.completedCheckItemCount}/{stat.checkItemCount}</td>
-                  <td>
-                    <span className={stat.overdueCount ? 'text-danger' : 'text-success'}>{stat.overdueCount}</span>
-                    <div className="mt-1 text-[11px] text-ink-muted">
-                      阶段 {stat.overduePhaseCount} · 检查项 {stat.overdueCheckItemCount}
-                    </div>
-                  </td>
-                  <td>{stat.openKeyIssueCount}/{stat.keyIssueCount}</td>
-                  <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
-                  <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
-                  <td>
-                    <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)} aria-label={`查看项目 ${stat.projectName} 单项目统计`}>
-                      <ArrowUpRight className="h-4 w-4" />
-                      单项目
-                    </button>
-                  </td>
-                </tr>
+                    </td>
+                    <td>{stat.phaseCount}</td>
+                    <td>{stat.completedCheckItemCount}/{stat.checkItemCount}</td>
+                    <td>
+                      <span className={stat.overdueCount ? 'text-danger' : 'text-success'}>{stat.overdueCount}</span>
+                      <div className="mt-1 text-[11px] text-ink-muted">
+                        阶段 {stat.overduePhaseCount} · 检查项 {stat.overdueCheckItemCount}
+                      </div>
+                    </td>
+                    <td>{stat.openKeyIssueCount}/{stat.keyIssueCount}</td>
+                    <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
+                    <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
+                    <td>
+                      <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)} aria-label={`展开项目 ${stat.projectName} 状态`}>
+                        <ArrowUpRight className="h-4 w-4" />
+                        {selected ? '已展开' : '展开'}
+                      </button>
+                    </td>
+                  </tr>
+                  {selected ? (
+                    <tr>
+                      <td colSpan={9} className="bg-surface-soft p-3">
+                        {renderExpandedProject(stat)}
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               );
             })}
           </tbody>
@@ -810,16 +891,19 @@ function SingleProjectStatistics({
   project,
   stat,
   phases,
-  checkItems
+  checkItems,
+  embedded = false
 }: {
   project: Project | null;
   stat?: ProjectStatistics;
   phases: ProjectPhase[];
   checkItems: CheckItem[];
+  embedded?: boolean;
 }) {
+  const shellClass = embedded ? 'rounded-lg bg-surface p-4' : 'panel';
   if (!project || !stat) {
     return (
-      <section className="panel">
+      <section className={shellClass}>
         <h2 className="text-lg font-semibold">单项目统计</h2>
         <p className="mt-3 text-sm text-ink-muted">请选择项目查看阶段和检查项统计。</p>
       </section>
@@ -827,7 +911,7 @@ function SingleProjectStatistics({
   }
 
   return (
-    <section className="panel">
+    <section className={shellClass}>
       <div className="panel-header">
         <div>
           <p className="kicker">Single Project</p>
@@ -884,7 +968,7 @@ function ModuleSwimlane({
 }) {
   const sortedPhases = bySequence(phases);
   const sortedModules = bySequence(modules);
-  const gridTemplateColumns = `190px repeat(${Math.max(sortedPhases.length, 1)}, minmax(118px, 1fr))`;
+  const gridTemplateColumns = `190px repeat(${Math.max(sortedPhases.length, 1)}, minmax(150px, 1fr))`;
   const itemsFor = (moduleId: string | number, phaseId: string | number) =>
     checkItems.filter(item => idOf(item.moduleId) === idOf(moduleId) && idOf(item.projectPhaseId) === idOf(phaseId));
 
@@ -907,6 +991,7 @@ function ModuleSwimlane({
             {sortedPhases.map(phase => (
               <div key={phase.id} className="border-r border-outline px-3 py-3 text-center last:border-r-0">
                 <div className="text-ink">{phase.name}</div>
+                <div className="mt-1 font-normal text-ink-subtle">{formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</div>
                 <div className="mt-1 font-normal">{percent(phase.progressPercent)}</div>
               </div>
             ))}
@@ -1202,10 +1287,12 @@ function DashboardView({
   const [dashboardFilters, setDashboardFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [detailFilters, setDetailFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const sortedModules = bySequence(data.inspectionModules);
-  const sortedPhases = bySequence(data.phases);
+  const sortedPhases = activePhasesOf(data.phases);
+  const activePhaseIds = new Set(sortedPhases.map(phase => idOf(phase.id)));
   const detailCheckItems = data.checkItems.filter(item => {
     const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
     const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
+    if (!activePhaseIds.has(idOf(item.projectPhaseId))) return false;
     if (detailFilters.phaseId && idOf(item.projectPhaseId) !== detailFilters.phaseId) return false;
     if (detailFilters.moduleId && idOf(item.moduleId) !== detailFilters.moduleId) return false;
     if (detailFilters.status && item.status !== detailFilters.status) return false;
@@ -1234,6 +1321,7 @@ function DashboardView({
   return (
     <div className="grid gap-5">
       <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
+      <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -1249,12 +1337,12 @@ function DashboardView({
           </div>
         </div>
       </section>
-      <PhaseRail phases={data.phases} />
+      <PhaseRail phases={sortedPhases} />
       <DashboardStats
         project={data.selectedProject}
         summary={data.dashboardSummary}
-        phases={data.phases}
-        checkItems={data.checkItems}
+        phases={sortedPhases}
+        checkItems={filterCheckItemsByPhases(data.checkItems, sortedPhases)}
         keyIssues={data.keyIssues}
         exportTasks={data.exportTasks}
       />
@@ -1263,38 +1351,39 @@ function DashboardView({
         onChange={setDashboardFilters}
         statusOptions={projectStatusOptions}
       />
-      <div className="grid gap-5 2xl:grid-cols-[1.1fr_0.9fr]">
-        <ProjectStatisticsList
-          stats={filteredProjectStats}
-          selectedProjectId={data.selectedProject?.id}
-          onSelectProject={onSelectProject}
-        />
-        <SingleProjectStatistics
-          project={data.selectedProject}
-          stat={selectedProjectStat}
-          phases={data.phases}
-          checkItems={data.checkItems}
-        />
-      </div>
+      <ProjectStatisticsList
+        stats={filteredProjectStats}
+        selectedProjectId={data.selectedProject?.id}
+        onSelectProject={onSelectProject}
+        renderExpandedProject={(stat) => (
+          <SingleProjectStatistics
+            project={data.selectedProject}
+            stat={selectedProjectStat ?? stat}
+            phases={sortedPhases}
+            checkItems={detailCheckItems}
+            embedded
+          />
+        )}
+      />
       <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
         <div className="xl:col-span-2">
           <DashboardDetailFilters
             filters={detailFilters}
             onChange={setDetailFilters}
-            phases={data.phases}
+            phases={sortedPhases}
             modules={data.inspectionModules}
             statusOptions={checkStatusOptions}
           />
         </div>
         <ModuleSwimlane
-          phases={data.phases}
+          phases={sortedPhases}
           modules={data.inspectionModules}
           checkItems={detailCheckItems}
           selectedCell={activeCell}
           onSelectCell={onSelectCell}
         />
         <ChecklistDetailPanel
-          phases={data.phases}
+          phases={sortedPhases}
           modules={data.inspectionModules}
           checkItems={detailCheckItems}
           selectedCell={activeCell}
@@ -1507,11 +1596,12 @@ function TimelineView({
   modules: InspectionModule[];
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const sorted = bySequence(phases);
+  const sorted = activePhasesOf(phases);
   const today = formatLocalDate(new Date());
-  const phaseById = new Map(phases.map(phase => [idOf(phase.id), phase]));
+  const phaseById = new Map(sorted.map(phase => [idOf(phase.id), phase]));
   const filteredCheckItems = checkItems.filter(item => {
     const phase = phaseById.get(idOf(item.projectPhaseId));
+    if (!phase) return false;
     if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
     if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
     if (filters.status && item.status !== filters.status) return false;
@@ -1566,7 +1656,7 @@ function TimelineView({
     if (['in_progress', 'active'].includes(item.status)) return 'bg-primary text-white';
     return 'bg-warning text-surface-inverse';
   };
-  const phaseStatusOptions = statusOptionValues(phases.map(phase => phase.status));
+  const phaseStatusOptions = statusOptionValues(sorted.map(phase => phase.status));
   const checkStatusOptions = statusOptionValues(checkItems.map(item => item.status));
   const timelineStatusOptions = statusOptionValues([...phaseStatusOptions, ...checkStatusOptions]);
 
@@ -1730,11 +1820,13 @@ function ChecksView({
 }) {
   const [drafts, setDrafts] = useState<Record<string, { ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const phaseById = new Map(phases.map(phase => [`${phase.id}`, phase]));
+  const visiblePhases = activePhasesOf(phases);
+  const phaseById = new Map(visiblePhases.map(phase => [`${phase.id}`, phase]));
   const moduleById = new Map(modules.map(module => [`${module.id}`, module]));
   const filteredCheckItems = checkItems.filter(item => {
     const phase = phaseById.get(idOf(item.projectPhaseId));
     const module = moduleById.get(idOf(item.moduleId));
+    if (!phase) return false;
     if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
     if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
     if (filters.status && item.status !== filters.status) return false;
@@ -1765,7 +1857,7 @@ function ChecksView({
             <span className="field-label">阶段</span>
             <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
               <option value="">全部阶段</option>
-              {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+              {visiblePhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
             </select>
           </label>
           <label>
@@ -2673,8 +2765,8 @@ function BaseConfigView({
         <div className="panel-header">
           <div>
             <p className="kicker">Project Phases</p>
-            <h2 className="text-xl font-semibold">六阶段配置</h2>
-            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留；新项目默认按六阶段模板生成，也可在此补齐缺失阶段和检查项。</p>
+            <h2 className="text-xl font-semibold">项目阶段配置</h2>
+            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留；项目展示按当前启用阶段数量渲染，也可在此补齐缺失阶段和检查项。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
@@ -2683,11 +2775,11 @@ function BaseConfigView({
               type="button"
               disabled={!canWrite || savingKey === 'seed-template'}
               onClick={() => void save('seed-template', onSeedTemplate)}
-              aria-label="补齐默认六阶段和检查项"
-              title="按默认六阶段模板补齐当前项目缺失的阶段和检查项"
+              aria-label="补齐默认阶段和检查项"
+              title="按默认阶段模板补齐当前项目缺失的阶段和检查项"
             >
               <RefreshCcw className="h-4 w-4" />
-              {savingKey === 'seed-template' ? '补齐中' : '补齐默认六阶段'}
+              {savingKey === 'seed-template' ? '补齐中' : '补齐默认阶段'}
             </button>
           </div>
         </div>
@@ -2731,7 +2823,7 @@ function BaseConfigView({
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-ink">Key: {phase.code}</div>
-                    <div className="text-xs text-ink-muted">默认阶段体验保留为六阶段。</div>
+                    <div className="text-xs text-ink-muted">关闭启用后，其它业务视图不再展示该阶段。</div>
                   </div>
                   <label className="flex items-center gap-2 text-sm text-ink-muted">
                     <input
@@ -2811,7 +2903,7 @@ function BaseConfigView({
           <div>
             <p className="kicker">Checklist</p>
             <h2 className="text-xl font-semibold">阶段检查项配置</h2>
-            <p className="text-sm text-ink-muted">默认 7 模块 / 37 项检查体验保留，可按阶段维护名称、模块、标签、计划、负责人、启用和完成状态。</p>
+            <p className="text-sm text-ink-muted">可按当前项目阶段维护检查项名称、阶段、模块、标签、计划、负责人、启用和完成状态。</p>
           </div>
           <span className="chip">{visibleCheckItems.length}/{data.checkItems.length} 项</span>
         </div>
@@ -2938,7 +3030,7 @@ function BaseConfigView({
               <button
                 className="btn btn-primary btn--sm"
                 type="button"
-                disabled={!canWrite || savingKey === 'check-create' || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId || !newCheckDraft.plannedStartDate || !newCheckDraft.plannedEndDate}
+                disabled={!canWrite || savingKey === 'check-create' || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId}
                 onClick={() => void save('check-create', () => onCreateCheckItem(newCheckDraft))}
                 aria-label="新增检查项"
               >
@@ -2949,10 +3041,11 @@ function BaseConfigView({
           </div>
         ) : null}
         <div className="table-shell mt-4">
-          <table className="data-table min-w-[1380px]">
+          <table className="data-table min-w-[1520px]">
             <thead>
               <tr>
                 <th>检查项</th>
+                <th>阶段</th>
                 <th>模块</th>
                 <th>标签</th>
                 <th>计划开始</th>
@@ -2971,6 +3064,27 @@ function BaseConfigView({
                   <tr key={item.id}>
                     <td className="min-w-[240px]">
                       <input className="input" value={draft.title} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, title: event.target.value } }))} />
+                    </td>
+                    <td className="min-w-[180px]">
+                      <select
+                        className="select"
+                        value={draft.projectPhaseId}
+                        disabled={!canWrite}
+                        onChange={event => {
+                          const phase = sortedPhases.find(item => idOf(item.id) === event.target.value);
+                          setCheckItemDrafts(current => ({
+                            ...current,
+                            [idOf(item.id)]: {
+                              ...draft,
+                              projectPhaseId: event.target.value,
+                              plannedStartDate: draft.plannedStartDate || dateInputValue(phase?.plannedStartDate),
+                              plannedEndDate: draft.plannedEndDate || dateInputValue(phase?.plannedEndDate)
+                            }
+                          }));
+                        }}
+                      >
+                        {sortedPhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+                      </select>
                     </td>
                     <td className="min-w-[180px]">
                       <select className="select" value={draft.moduleId} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, moduleId: event.target.value } }))}>
@@ -3048,7 +3162,7 @@ function BaseConfigView({
               })}
               {!visibleCheckItems.length ? (
                 <tr>
-                  <td colSpan={9} className="text-center text-ink-muted">该阶段暂无检查项。</td>
+                  <td colSpan={10} className="text-center text-ink-muted">该阶段暂无检查项。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -3348,7 +3462,7 @@ export default function App() {
       await seedProjectTemplate(workspace.selectedProject.id);
       await loadData(workspace.selectedProject.id);
     } catch (err) {
-      setError(mutationErrorMessage(err, '默认六阶段补齐失败'));
+      setError(mutationErrorMessage(err, '默认阶段补齐失败'));
       throw err;
     }
   };

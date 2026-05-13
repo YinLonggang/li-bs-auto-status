@@ -330,6 +330,8 @@ export type DashboardSummary = {
   completedCheckItemCount: number;
   openCheckItemCount: number;
   overdueCount: number;
+  overduePhaseCount?: number;
+  overdueCheckItemCount?: number;
   completionRate: number;
   keyIssueCount: number;
   openKeyIssueCount: number;
