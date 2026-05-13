@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -18,6 +19,7 @@ import {
   Search,
   ShieldCheck,
   Target,
+  Trash2,
   Workflow
 } from 'lucide-react';
 import AuthPromptCard from './components/AuthPromptCard';
@@ -27,6 +29,7 @@ import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollap
 import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
 import {
+  createCheckItem,
   createExportTask,
   createProject,
   deleteCheckItem,
@@ -83,7 +86,7 @@ const EMPTY_WORKSPACE: WorkspaceData = {
 const VIEW_META: Record<AppTab, { title: string; subtitle: string }> = {
   dashboard: { title: 'Dashboard', subtitle: '项目状态、阶段进度、检查风险和签核' },
   projects: { title: '项目列表', subtitle: '项目切换与状态' },
-  baseConfig: { title: '基础配置', subtitle: '项目信息、阶段计划和检查项配置' },
+  baseConfig: { title: '配置中心', subtitle: '项目基础信息、六阶段、检查项、模块和负责人候选' },
   phases: { title: '阶段配置', subtitle: '模板与项目阶段实例' },
   timeline: { title: '阶段进度', subtitle: '计划、实际和当前进展' },
   checks: { title: '检查项', subtitle: '检查台账与负责人维护' },
@@ -218,6 +221,68 @@ type ScopeState = {
   workshopId: string;
   productionLineId: string;
 };
+
+type SearchFilterState = {
+  keyword: string;
+  status: string;
+  phaseId: string;
+  moduleId: string;
+  owner: string;
+  severity: string;
+  startDate: string;
+  endDate: string;
+  activeState: string;
+};
+
+const EMPTY_FILTERS: SearchFilterState = {
+  keyword: '',
+  status: '',
+  phaseId: '',
+  moduleId: '',
+  owner: '',
+  severity: '',
+  startDate: '',
+  endDate: '',
+  activeState: ''
+};
+
+const normalizeText = (value?: string | number | null) => `${value ?? ''}`.trim().toLowerCase();
+
+const textMatches = (keyword: string, values: Array<string | number | null | undefined>) => {
+  const normalizedKeyword = normalizeText(keyword);
+  if (!normalizedKeyword) return true;
+  return values.some(value => normalizeText(value).includes(normalizedKeyword));
+};
+
+const dateRangeMatches = (itemStart?: string | null, itemEnd?: string | null, filterStart?: string, filterEnd?: string) => {
+  const startLimit = dateMs(filterStart);
+  const endLimit = dateMs(filterEnd);
+  if (startLimit === null && endLimit === null) return true;
+  const start = dateMs(itemStart) ?? dateMs(itemEnd);
+  const end = dateMs(itemEnd) ?? start;
+  if (start === null || end === null) return false;
+  if (startLimit !== null && end < startLimit) return false;
+  if (endLimit !== null && start > endLimit) return false;
+  return true;
+};
+
+const statusOptionValues = (items: string[]) => [...new Set(items.filter(Boolean))];
+
+function FilterShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-outline bg-surface-soft p-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">{children}</div>
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-outline bg-surface-soft p-6 text-center text-sm text-ink-muted">
+      {message}
+    </div>
+  );
+}
 
 type DashboardCell = {
   moduleId: string;
@@ -479,6 +544,120 @@ function DashboardStats({
   );
 }
 
+function DashboardProjectFilters({
+  filters,
+  onChange,
+  statusOptions
+}: {
+  filters: SearchFilterState;
+  onChange: (filters: SearchFilterState) => void;
+  statusOptions: string[];
+}) {
+  return (
+    <FilterShell>
+      <label className="xl:col-span-2">
+        <span className="field-label">关键字</span>
+        <input
+          className="input"
+          value={filters.keyword}
+          onChange={event => onChange({ ...filters, keyword: event.target.value })}
+          placeholder="项目、编号、负责人"
+          aria-label="Dashboard 项目统计关键字"
+        />
+      </label>
+      <label>
+        <span className="field-label">项目状态</span>
+        <select className="select" value={filters.status} onChange={event => onChange({ ...filters, status: event.target.value })}>
+          <option value="">全部状态</option>
+          {statusOptions.map(status => (
+            <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span className="field-label">负责人</span>
+        <input
+          className="input"
+          value={filters.owner}
+          onChange={event => onChange({ ...filters, owner: event.target.value })}
+          placeholder="负责人"
+          aria-label="Dashboard 负责人筛选"
+        />
+      </label>
+      <label>
+        <span className="field-label">计划开始</span>
+        <input className="input" type="date" value={filters.startDate} onChange={event => onChange({ ...filters, startDate: event.target.value })} />
+      </label>
+      <label>
+        <span className="field-label">计划结束</span>
+        <input className="input" type="date" value={filters.endDate} onChange={event => onChange({ ...filters, endDate: event.target.value })} />
+      </label>
+    </FilterShell>
+  );
+}
+
+function DashboardDetailFilters({
+  filters,
+  onChange,
+  phases,
+  modules,
+  statusOptions
+}: {
+  filters: SearchFilterState;
+  onChange: (filters: SearchFilterState) => void;
+  phases: ProjectPhase[];
+  modules: InspectionModule[];
+  statusOptions: string[];
+}) {
+  return (
+    <FilterShell>
+      <label className="xl:col-span-2">
+        <span className="field-label">检查项关键字</span>
+        <input
+          className="input"
+          value={filters.keyword}
+          onChange={event => onChange({ ...filters, keyword: event.target.value })}
+          placeholder="检查项、验收、负责人"
+          aria-label="Dashboard 检查项详情关键字"
+        />
+      </label>
+      <label>
+        <span className="field-label">阶段</span>
+        <select className="select" value={filters.phaseId} onChange={event => onChange({ ...filters, phaseId: event.target.value })}>
+          <option value="">全部阶段</option>
+          {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+        </select>
+      </label>
+      <label>
+        <span className="field-label">模块</span>
+        <select className="select" value={filters.moduleId} onChange={event => onChange({ ...filters, moduleId: event.target.value })}>
+          <option value="">全部模块</option>
+          {bySequence(modules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+        </select>
+      </label>
+      <label>
+        <span className="field-label">状态</span>
+        <select className="select" value={filters.status} onChange={event => onChange({ ...filters, status: event.target.value })}>
+          <option value="">全部状态</option>
+          {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+        </select>
+      </label>
+      <label>
+        <span className="field-label">负责人</span>
+        <input className="input" value={filters.owner} onChange={event => onChange({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="Dashboard 检查项负责人" />
+      </label>
+      <label>
+        <span className="field-label">开始日期</span>
+        <input className="input" type="date" value={filters.startDate} onChange={event => onChange({ ...filters, startDate: event.target.value })} />
+      </label>
+      <label>
+        <span className="field-label">结束日期</span>
+        <input className="input" type="date" value={filters.endDate} onChange={event => onChange({ ...filters, endDate: event.target.value })} />
+      </label>
+    </FilterShell>
+  );
+}
+
 const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
   const summaryStats = new Map(
     (data.projectStats.length ? data.projectStats : data.dashboardSummary?.projectStats ?? []).map(item => [idOf(item.projectId), item])
@@ -541,6 +720,13 @@ const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
   });
 };
 
+const projectStatMatchesFilters = (stat: ProjectStatistics, filters: SearchFilterState) => {
+  if (filters.status && stat.projectStatus !== filters.status) return false;
+  if (filters.owner && !textMatches(filters.owner, [stat.ownerName])) return false;
+  if (!textMatches(filters.keyword, [stat.projectName, stat.projectCode, stat.ownerName, stat.currentPhaseName])) return false;
+  return dateRangeMatches(stat.plannedStartDate, stat.plannedEndDate, filters.startDate, filters.endDate);
+};
+
 function ProjectStatisticsList({
   stats,
   selectedProjectId,
@@ -559,6 +745,7 @@ function ProjectStatisticsList({
         </div>
         <span className="chip">{stats.length} 个项目</span>
       </div>
+      {!stats.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无项目统计。" /></div> : null}
       <div className="table-shell mt-4">
         <table className="data-table min-w-[1120px]">
           <thead>
@@ -603,7 +790,7 @@ function ProjectStatisticsList({
                   <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
                   <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
                   <td>
-                    <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)}>
+                    <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)} aria-label={`查看项目 ${stat.projectName} 单项目统计`}>
                       <ArrowUpRight className="h-4 w-4" />
                       单项目
                     </button>
@@ -1011,19 +1198,37 @@ function DashboardView({
   onCreateProject: () => void;
   onCreateExport: () => void;
 }) {
+  const [dashboardFilters, setDashboardFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [detailFilters, setDetailFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const sortedModules = bySequence(data.inspectionModules);
   const sortedPhases = bySequence(data.phases);
+  const detailCheckItems = data.checkItems.filter(item => {
+    const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
+    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
+    if (detailFilters.phaseId && idOf(item.projectPhaseId) !== detailFilters.phaseId) return false;
+    if (detailFilters.moduleId && idOf(item.moduleId) !== detailFilters.moduleId) return false;
+    if (detailFilters.status && item.status !== detailFilters.status) return false;
+    if (detailFilters.owner && !textMatches(detailFilters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    if (!textMatches(detailFilters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, detailFilters.startDate, detailFilters.endDate);
+  });
   const firstPopulatedCell =
     sortedModules.flatMap(module =>
       sortedPhases.map(phase => ({
         moduleId: idOf(module.id),
         phaseId: idOf(phase.id),
-        count: data.checkItems.filter(item => idOf(item.moduleId) === idOf(module.id) && idOf(item.projectPhaseId) === idOf(phase.id)).length
+        count: detailCheckItems.filter(item => idOf(item.moduleId) === idOf(module.id) && idOf(item.projectPhaseId) === idOf(phase.id)).length
       }))
     ).find(cell => cell.count > 0) ?? null;
-  const activeCell = selectedCell ?? (firstPopulatedCell ? { moduleId: firstPopulatedCell.moduleId, phaseId: firstPopulatedCell.phaseId } : null);
+  const filterCell = detailFilters.moduleId && detailFilters.phaseId
+    ? { moduleId: detailFilters.moduleId, phaseId: detailFilters.phaseId }
+    : null;
+  const activeCell = filterCell ?? selectedCell ?? (firstPopulatedCell ? { moduleId: firstPopulatedCell.moduleId, phaseId: firstPopulatedCell.phaseId } : null);
   const projectStats = buildProjectStatistics(data);
+  const filteredProjectStats = projectStats.filter(stat => projectStatMatchesFilters(stat, dashboardFilters));
   const selectedProjectStat = projectStats.find(stat => idOf(stat.projectId) === idOf(data.selectedProject?.id));
+  const projectStatusOptions = statusOptionValues(projectStats.map(stat => stat.projectStatus));
+  const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
 
   return (
     <div className="grid gap-5">
@@ -1052,9 +1257,14 @@ function DashboardView({
         keyIssues={data.keyIssues}
         exportTasks={data.exportTasks}
       />
+      <DashboardProjectFilters
+        filters={dashboardFilters}
+        onChange={setDashboardFilters}
+        statusOptions={projectStatusOptions}
+      />
       <div className="grid gap-5 2xl:grid-cols-[1.1fr_0.9fr]">
         <ProjectStatisticsList
-          stats={projectStats}
+          stats={filteredProjectStats}
           selectedProjectId={data.selectedProject?.id}
           onSelectProject={onSelectProject}
         />
@@ -1066,17 +1276,26 @@ function DashboardView({
         />
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
+        <div className="xl:col-span-2">
+          <DashboardDetailFilters
+            filters={detailFilters}
+            onChange={setDetailFilters}
+            phases={data.phases}
+            modules={data.inspectionModules}
+            statusOptions={checkStatusOptions}
+          />
+        </div>
         <ModuleSwimlane
           phases={data.phases}
           modules={data.inspectionModules}
-          checkItems={data.checkItems}
+          checkItems={detailCheckItems}
           selectedCell={activeCell}
           onSelectCell={onSelectCell}
         />
         <ChecklistDetailPanel
           phases={data.phases}
           modules={data.inspectionModules}
-          checkItems={data.checkItems}
+          checkItems={detailCheckItems}
           selectedCell={activeCell}
           canWrite={canWrite}
         />
@@ -1088,9 +1307,16 @@ function DashboardView({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-4 py-3">
         <div className="flex items-center gap-2 text-sm text-ink-muted">
           <Flag className="h-4 w-4 text-accent" />
-          默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。
+          <span>默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
+          {!canWrite ? <span className="text-warning">当前账号只读，不能生成导出任务。</span> : null}
         </div>
-        <button className="btn btn-ghost btn--sm" type="button" disabled={!data.selectedProject} onClick={onCreateExport}>
+        <button
+          className="btn btn-ghost btn--sm"
+          type="button"
+          disabled={!canWrite || !data.selectedProject}
+          onClick={onCreateExport}
+          title={!canWrite ? '当前账号无导出权限' : undefined}
+        >
           <ArrowUpRight className="h-4 w-4" />
           生成总览导出
         </button>
@@ -1279,13 +1505,32 @@ function TimelineView({
   checkItems: CheckItem[];
   modules: InspectionModule[];
 }) {
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const sorted = bySequence(phases);
   const today = formatLocalDate(new Date());
+  const phaseById = new Map(phases.map(phase => [idOf(phase.id), phase]));
+  const filteredCheckItems = checkItems.filter(item => {
+    const phase = phaseById.get(idOf(item.projectPhaseId));
+    if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
+    if (filters.status && item.status !== filters.status) return false;
+    if (filters.owner && !textMatches(filters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
+  });
+  const filteredItemPhaseIds = new Set(filteredCheckItems.map(item => idOf(item.projectPhaseId)));
+  const visiblePhases = sorted.filter(phase => {
+    if (filters.phaseId && idOf(phase.id) !== filters.phaseId) return false;
+    if (filters.status && phase.status !== filters.status && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
+    if (!textMatches(filters.keyword, [phase.name, phase.code, phase.goal]) && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
+    if (!dateRangeMatches(phase.plannedStartDate, phase.plannedEndDate, filters.startDate, filters.endDate) && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
+    return true;
+  });
   const dates = [
     project?.plannedStartDate,
     project?.plannedEndDate,
-    ...phases.flatMap(phase => [phase.plannedStartDate, phase.plannedEndDate]),
-    ...checkItems.flatMap(item => [item.plannedStartDate, item.plannedEndDate])
+    ...visiblePhases.flatMap(phase => [phase.plannedStartDate, phase.plannedEndDate]),
+    ...filteredCheckItems.flatMap(item => [item.plannedStartDate, item.plannedEndDate])
   ].map(dateMs).filter((value): value is number => value !== null);
   const fallbackStart = dateMs(today) ?? Date.now();
   const rangeStart = dates.length ? Math.min(...dates) : fallbackStart;
@@ -1320,6 +1565,9 @@ function TimelineView({
     if (['in_progress', 'active'].includes(item.status)) return 'bg-primary text-white';
     return 'bg-warning text-surface-inverse';
   };
+  const phaseStatusOptions = statusOptionValues(phases.map(phase => phase.status));
+  const checkStatusOptions = statusOptionValues(checkItems.map(item => item.status));
+  const timelineStatusOptions = statusOptionValues([...phaseStatusOptions, ...checkStatusOptions]);
 
   return (
     <section className="panel">
@@ -1340,6 +1588,48 @@ function TimelineView({
         <span className="status-pill border-danger/40 bg-danger/10 text-danger">阻塞/逾期</span>
         <span className="status-pill border-warning/40 bg-warning/10 text-warning">未开始</span>
       </div>
+      <div className="mt-4">
+        <FilterShell>
+          <label className="xl:col-span-2">
+            <span className="field-label">关键字</span>
+            <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="阶段、检查项、负责人" aria-label="时间甘特关键字筛选" />
+          </label>
+          <label>
+            <span className="field-label">阶段</span>
+            <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
+              <option value="">全部阶段</option>
+              {sorted.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">模块</span>
+            <select className="select" value={filters.moduleId} onChange={event => setFilters({ ...filters, moduleId: event.target.value })}>
+              <option value="">全部模块</option>
+              {bySequence(modules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+              <option value="">全部状态</option>
+              {timelineStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">负责人</span>
+            <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="时间甘特负责人筛选" />
+          </label>
+          <label>
+            <span className="field-label">开始日期</span>
+            <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">结束日期</span>
+            <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+          </label>
+        </FilterShell>
+      </div>
+      {!visiblePhases.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无甘特数据。" /></div> : null}
       <div className="mt-5 overflow-x-auto rounded-lg border border-outline">
         <div className="min-w-[1040px]">
           <div className="grid border-b border-outline bg-surface-strong text-xs font-semibold text-ink-muted lg:grid-cols-[240px_1fr]">
@@ -1355,8 +1645,8 @@ function TimelineView({
               </div>
             </div>
           </div>
-          {sorted.map(phase => {
-            const items = checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+          {visiblePhases.map(phase => {
+            const items = filteredCheckItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
             const rowHeight = Math.max(108, 74 + items.length * 24);
             return (
               <div key={phase.id} className="grid border-b border-outline last:border-b-0 lg:grid-cols-[240px_1fr]">
@@ -1438,8 +1728,22 @@ function ChecksView({
   onUpdateOwner: (item: CheckItem, ownerName: string, ownerIdaasId?: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { ownerName: string; ownerIdaasId?: string }>>({});
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const phaseById = new Map(phases.map(phase => [`${phase.id}`, phase]));
   const moduleById = new Map(modules.map(module => [`${module.id}`, module]));
+  const filteredCheckItems = checkItems.filter(item => {
+    const phase = phaseById.get(idOf(item.projectPhaseId));
+    const module = moduleById.get(idOf(item.moduleId));
+    if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
+    if (filters.status && item.status !== filters.status) return false;
+    if (filters.owner && !textMatches(filters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    if (filters.activeState === 'enabled' && item.isActive === false) return false;
+    if (filters.activeState === 'disabled' && item.isActive !== false) return false;
+    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
+  });
+  const statusOptions = statusOptionValues(checkItems.map(item => item.status));
 
   return (
     <section className="panel">
@@ -1450,6 +1754,56 @@ function ChecksView({
         </div>
         <ReadOnlyNotice canWrite={canWrite} />
       </div>
+      <div className="mt-4">
+        <FilterShell>
+          <label className="xl:col-span-2">
+            <span className="field-label">关键字</span>
+            <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="检查项、阶段、模块" aria-label="检查项关键字筛选" />
+          </label>
+          <label>
+            <span className="field-label">阶段</span>
+            <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
+              <option value="">全部阶段</option>
+              {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">模块</span>
+            <select className="select" value={filters.moduleId} onChange={event => setFilters({ ...filters, moduleId: event.target.value })}>
+              <option value="">全部模块</option>
+              {bySequence(modules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+              <option value="">全部状态</option>
+              {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">负责人</span>
+            <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="检查项负责人筛选" />
+          </label>
+          <label>
+            <span className="field-label">启用状态</span>
+            <select className="select" value={filters.activeState} onChange={event => setFilters({ ...filters, activeState: event.target.value })}>
+              <option value="">全部</option>
+              <option value="enabled">启用</option>
+              <option value="disabled">停用</option>
+            </select>
+          </label>
+          <label>
+            <span className="field-label">开始日期</span>
+            <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">结束日期</span>
+            <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+          </label>
+        </FilterShell>
+      </div>
+      {!filteredCheckItems.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无检查项。" /></div> : null}
       <div className="table-shell mt-4">
         <table className="data-table">
           <thead>
@@ -1465,7 +1819,7 @@ function ChecksView({
             </tr>
           </thead>
           <tbody>
-            {checkItems.map(item => {
+            {filteredCheckItems.map(item => {
               const draft = drafts[`${item.id}`] ?? {
                 ownerName: item.ownerName,
                 ownerIdaasId: item.ownerIdaasId
@@ -1536,14 +1890,68 @@ function ChecksView({
   );
 }
 
-function IssuesView({ issues }: { issues: KeyIssue[] }) {
+function IssuesView({ issues, phases }: { issues: KeyIssue[]; phases: ProjectPhase[] }) {
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const filteredIssues = issues.filter(issue => {
+    if (filters.phaseId && idOf(issue.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.status && issue.status !== filters.status && issue.currentProgress !== filters.status) return false;
+    if (filters.severity && issue.severity !== filters.severity) return false;
+    if (filters.owner && !textMatches(filters.owner, [issue.ownerName, issue.confirmer])) return false;
+    if (!textMatches(filters.keyword, [issue.title, issue.description, issue.countermeasure, issue.supplier, issue.ownerName, issue.confirmer, issue.currentProgress, issue.remark])) return false;
+    return dateRangeMatches(issue.dueDate, issue.dueDate, filters.startDate, filters.endDate);
+  });
+  const statusOptions = statusOptionValues(issues.flatMap(issue => [issue.status, issue.currentProgress ?? '']));
+  const severityOptions = statusOptionValues(issues.map(issue => issue.severity));
   return (
     <section className="panel">
       <div className="panel-header">
         <h2 className="text-xl font-semibold">重点问题</h2>
+        <span className="chip">{filteredIssues.length}/{issues.length} 条</span>
       </div>
+      <div className="mt-4">
+        <FilterShell>
+          <label className="xl:col-span-2">
+            <span className="field-label">关键字</span>
+            <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="问题、对策、供应商" aria-label="重点问题关键字筛选" />
+          </label>
+          <label>
+            <span className="field-label">阶段</span>
+            <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
+              <option value="">全部阶段</option>
+              {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+              <option value="">全部状态</option>
+              {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">风险等级</span>
+            <select className="select" value={filters.severity} onChange={event => setFilters({ ...filters, severity: event.target.value })}>
+              <option value="">全部等级</option>
+              {severityOptions.map(severity => <option key={severity} value={severity}>{STATUS_LABEL[severity] ?? severity}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">负责人/确认人</span>
+            <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="重点问题负责人筛选" />
+          </label>
+          <label>
+            <span className="field-label">截止起</span>
+            <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">截止止</span>
+            <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+          </label>
+        </FilterShell>
+      </div>
+      {!filteredIssues.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无重点问题。" /></div> : null}
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {issues.map(issue => (
+        {filteredIssues.map(issue => (
           <article key={issue.id} className="rounded-lg border border-outline bg-surface-soft p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-base font-semibold">{issue.title}</h3>
@@ -1567,7 +1975,8 @@ function IssuesView({ issues }: { issues: KeyIssue[] }) {
   );
 }
 
-function CollisionView({ reports }: { reports: CollisionReport[] }) {
+function CollisionView({ reports, phases }: { reports: CollisionReport[]; phases: ProjectPhase[] }) {
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const fields: Array<[keyof CollisionReport, string]> = [
     ['problemDefinition', '问题定义'],
     ['parts', '涉及零件'],
@@ -1583,10 +1992,68 @@ function CollisionView({ reports }: { reports: CollisionReport[] }) {
     ['supportNeeded', '5 所需支持'],
     ['approvalSignoff', '签核槽位']
   ];
+  const filteredReports = reports.filter(report => {
+    if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.status && report.status !== filters.status) return false;
+    if (filters.severity && report.riskLevel !== filters.severity) return false;
+    if (filters.owner && !textMatches(filters.owner, [report.owner])) return false;
+    if (!textMatches(filters.keyword, [report.title, report.problemDefinition, report.parts, report.vehicleModel, report.responsibilityArea, report.progress, report.owner, report.rootCause, report.correctiveAction])) return false;
+    return dateRangeMatches(report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
+  });
+  const statusOptions = statusOptionValues(reports.map(report => report.status));
+  const riskOptions = statusOptionValues(reports.map(report => report.riskLevel));
 
   return (
     <div className="grid gap-5">
-      {reports.map(report => (
+      <section className="panel">
+        <div className="panel-header">
+          <h2 className="text-xl font-semibold">碰撞一页纸筛选</h2>
+          <span className="chip">{filteredReports.length}/{reports.length} 份</span>
+        </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-2">
+              <span className="field-label">关键字</span>
+              <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="问题、零件、车型、责任区域" aria-label="碰撞一页纸关键字筛选" />
+            </label>
+            <label>
+              <span className="field-label">阶段</span>
+              <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
+                <option value="">全部阶段</option>
+                {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">风险等级</span>
+              <select className="select" value={filters.severity} onChange={event => setFilters({ ...filters, severity: event.target.value })}>
+                <option value="">全部风险</option>
+                {riskOptions.map(risk => <option key={risk} value={risk}>{STATUS_LABEL[risk] ?? risk}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="碰撞一页纸负责人筛选" />
+            </label>
+            <label>
+              <span className="field-label">日期起</span>
+              <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">日期止</span>
+              <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+            </label>
+          </FilterShell>
+        </div>
+      </section>
+      {!filteredReports.length ? <EmptyState message="当前筛选下暂无碰撞一页纸。" /> : null}
+      {filteredReports.map(report => (
         <section key={report.id} className="panel">
           <div className="panel-header">
             <div>
@@ -1631,6 +2098,18 @@ function ReportsView({
   onDownloadExport: (task: ExportTask) => Promise<void>;
 }) {
   const [downloadState, setDownloadState] = useState<Record<string, { loading?: boolean; error?: string }>>({});
+  const [definitionFilters, setDefinitionFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [taskFilters, setTaskFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const filteredReports = reports.filter(report =>
+    textMatches(definitionFilters.keyword, [report.name, report.description, report.format])
+  );
+  const filteredTasks = tasks.filter(task => {
+    if (taskFilters.status && task.status !== taskFilters.status) return false;
+    if (taskFilters.owner && !textMatches(taskFilters.owner, [task.requestedBy])) return false;
+    if (!textMatches(taskFilters.keyword, [task.reportName, task.fileName, task.fileFormat, task.requestedBy, task.errorMessage])) return false;
+    return dateRangeMatches(task.requestedAt, task.finishedAt ?? task.requestedAt, taskFilters.startDate, taskFilters.endDate);
+  });
+  const taskStatusOptions = statusOptionValues(tasks.map(task => task.status));
 
   const handleDownload = async (task: ExportTask) => {
     const key = idOf(task.id);
@@ -1656,26 +2135,63 @@ function ReportsView({
           <h2 className="text-xl font-semibold">报告定义</h2>
           <ReadOnlyNotice canWrite={canWrite} />
         </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-6">
+              <span className="field-label">报告搜索</span>
+              <input className="input" value={definitionFilters.keyword} onChange={event => setDefinitionFilters({ ...definitionFilters, keyword: event.target.value })} placeholder="报告名称、说明、格式" aria-label="报告定义搜索" />
+            </label>
+          </FilterShell>
+        </div>
         <div className="mt-4 space-y-3">
-          {reports.map(report => (
+          {filteredReports.map(report => (
             <div key={report.id} className="rounded-lg border border-outline bg-surface-soft p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="font-semibold text-ink">{report.name}</div>
                   <div className="text-xs text-ink-muted">{report.description}</div>
                 </div>
-                <button className="btn btn-primary btn--sm" disabled={!canWrite} type="button" onClick={() => onCreateExport(report)}>
+                <button className="btn btn-primary btn--sm" disabled={!canWrite} type="button" onClick={() => onCreateExport(report)} aria-label={`导出 ${report.name}`}>
                   <FileDown className="h-4 w-4" />
                   导出
                 </button>
               </div>
             </div>
           ))}
+          {!filteredReports.length ? <EmptyState message="当前筛选下暂无报告定义。" /> : null}
         </div>
       </section>
       <section className="panel">
         <div className="panel-header">
           <h2 className="text-xl font-semibold">导出任务</h2>
+          <span className="chip">{filteredTasks.length}/{tasks.length} 个任务</span>
+        </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-2">
+              <span className="field-label">关键字</span>
+              <input className="input" value={taskFilters.keyword} onChange={event => setTaskFilters({ ...taskFilters, keyword: event.target.value })} placeholder="报告、文件、申请人" aria-label="导出任务关键字筛选" />
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={taskFilters.status} onChange={event => setTaskFilters({ ...taskFilters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {taskStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">申请人</span>
+              <input className="input" value={taskFilters.owner} onChange={event => setTaskFilters({ ...taskFilters, owner: event.target.value })} placeholder="申请人" aria-label="导出任务申请人筛选" />
+            </label>
+            <label>
+              <span className="field-label">申请起</span>
+              <input className="input" type="date" value={taskFilters.startDate} onChange={event => setTaskFilters({ ...taskFilters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">申请止</span>
+              <input className="input" type="date" value={taskFilters.endDate} onChange={event => setTaskFilters({ ...taskFilters, endDate: event.target.value })} />
+            </label>
+          </FilterShell>
         </div>
         <div className="table-shell mt-4">
           <table className="data-table">
@@ -1689,7 +2205,7 @@ function ReportsView({
               </tr>
             </thead>
             <tbody>
-              {tasks.map(task => {
+              {filteredTasks.map(task => {
                 const state = downloadState[idOf(task.id)] ?? {};
                 const hasArtifact = task.hasResult === true;
                 const canDownload = canWrite && task.status === 'succeeded' && hasArtifact;
@@ -1721,6 +2237,7 @@ function ReportsView({
                           disabled={!canDownload || state.loading}
                           onClick={() => void handleDownload(task)}
                           title={!canWrite ? '当前账号无导出下载权限' : !hasArtifact ? '导出产物尚未生成' : undefined}
+                          aria-label={`下载导出任务 ${task.reportName}`}
                         >
                           <Download className="h-4 w-4" />
                           {state.loading ? '获取中' : '下载'}
@@ -1731,6 +2248,11 @@ function ReportsView({
                   </tr>
                 );
               })}
+              {!filteredTasks.length ? (
+                <tr>
+                  <td colSpan={5} className="text-center text-ink-muted">当前筛选下暂无导出任务。</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -1777,36 +2299,151 @@ type CheckItemConfigDraft = {
 
 function BaseConfigView({
   data,
+  scope,
   canWrite,
+  onScopeChange,
+  onSelectProject,
+  onCreateProject,
   onUpdateProject,
   onUpdatePhase,
   onDeletePhase,
+  onCreateCheckItem,
   onUpdateCheckItem,
   onDeleteCheckItem
 }: {
   data: WorkspaceData;
+  scope: ScopeState;
   canWrite: boolean;
+  onScopeChange: (scope: ScopeState) => void;
+  onSelectProject: (projectId: string | number) => void;
+  onCreateProject: () => void;
   onUpdateProject: (draft: ProjectConfigDraft) => Promise<void>;
   onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<void>;
   onDeletePhase: (phase: ProjectPhase) => Promise<void>;
+  onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
   onUpdateCheckItem: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
   onDeleteCheckItem: (item: CheckItem) => Promise<void>;
 }) {
   const [projectDraft, setProjectDraft] = useState<ProjectConfigDraft | null>(null);
   const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseConfigDraft>>({});
   const [checkItemDrafts, setCheckItemDrafts] = useState<Record<string, CheckItemConfigDraft>>({});
-  const [phaseFilter, setPhaseFilter] = useState('');
+  const [projectFilters, setProjectFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
   const project = data.selectedProject;
   const sortedPhases = bySequence(data.phases);
-  const selectedPhaseId = phaseFilter || idOf(sortedPhases[0]?.id);
-  const visibleCheckItems = data.checkItems.filter(item => idOf(item.projectPhaseId) === selectedPhaseId);
+  const selectedPhaseId = checkFilters.phaseId;
+  const visibleProjects = data.projects.filter(item => {
+    if (scope.factoryId && idOf(item.factoryId) !== scope.factoryId) return false;
+    if (scope.workshopId && idOf(item.workshopId) !== scope.workshopId) return false;
+    if (scope.productionLineId && idOf(item.productionLineId) !== scope.productionLineId) return false;
+    if (projectFilters.status && item.status !== projectFilters.status) return false;
+    if (projectFilters.owner && !textMatches(projectFilters.owner, [item.ownerName])) return false;
+    if (!textMatches(projectFilters.keyword, [item.name, item.code, item.ownerName, item.plant, item.workshopName, item.lineName])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, projectFilters.startDate, projectFilters.endDate);
+  });
+  const visiblePhases = sortedPhases.filter(phase => {
+    if (phaseFilters.status && phase.status !== phaseFilters.status) return false;
+    if (phaseFilters.activeState === 'enabled' && phase.isActive === false) return false;
+    if (phaseFilters.activeState === 'disabled' && phase.isActive !== false) return false;
+    if (!textMatches(phaseFilters.keyword, [phase.name, phase.code, phase.goal])) return false;
+    return dateRangeMatches(phase.plannedStartDate, phase.plannedEndDate, phaseFilters.startDate, phaseFilters.endDate);
+  });
+  const visibleCheckItems = data.checkItems.filter(item => {
+    const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
+    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
+    if (selectedPhaseId && idOf(item.projectPhaseId) !== selectedPhaseId) return false;
+    if (checkFilters.moduleId && idOf(item.moduleId) !== checkFilters.moduleId) return false;
+    if (checkFilters.status && item.status !== checkFilters.status) return false;
+    if (checkFilters.owner && !textMatches(checkFilters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    if (checkFilters.activeState === 'enabled' && item.isActive === false) return false;
+    if (checkFilters.activeState === 'disabled' && item.isActive !== false) return false;
+    if (!textMatches(checkFilters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name, item.tags?.join(' ')])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, checkFilters.startDate, checkFilters.endDate);
+  });
   const workshops = data.hierarchy.workshops.filter(
     workshop => !projectDraft?.factoryId || idOf(workshop.factoryId) === projectDraft.factoryId
   );
   const productionLines = data.hierarchy.productionLines.filter(
     line => !projectDraft?.workshopId || idOf(line.workshopId) === projectDraft.workshopId
+  );
+  const projectStatusOptions = statusOptionValues(data.projects.map(item => item.status));
+  const phaseStatusOptions = statusOptionValues(data.phases.map(item => item.status));
+  const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
+  const selectedPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
+  const selectedModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
+  const projectWorkbench = (
+    <>
+      <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Configuration Center</p>
+            <h2 className="text-xl font-semibold">项目范围与项目列表</h2>
+            <p className="text-sm text-ink-muted">先按工厂、车间、产线缩小范围，再选择项目维护基础信息、阶段和检查项。</p>
+          </div>
+          <span className="chip">{visibleProjects.length}/{data.projects.length} 个项目</span>
+        </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-2">
+              <span className="field-label">项目搜索</span>
+              <input className="input" value={projectFilters.keyword} onChange={event => setProjectFilters({ ...projectFilters, keyword: event.target.value })} placeholder="项目、编号、范围、负责人" aria-label="配置中心项目搜索" />
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={projectFilters.status} onChange={event => setProjectFilters({ ...projectFilters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {projectStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input className="input" value={projectFilters.owner} onChange={event => setProjectFilters({ ...projectFilters, owner: event.target.value })} placeholder="负责人" aria-label="配置中心项目负责人筛选" />
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={projectFilters.startDate} onChange={event => setProjectFilters({ ...projectFilters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={projectFilters.endDate} onChange={event => setProjectFilters({ ...projectFilters, endDate: event.target.value })} />
+            </label>
+          </FilterShell>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {visibleProjects.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelectProject(item.id)}
+              className={`rounded-lg border p-4 text-left transition hover:border-primary/60 ${
+                idOf(project?.id) === idOf(item.id) ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft'
+              }`}
+              aria-label={`选择项目 ${item.name}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-base font-semibold text-ink">{item.name}</div>
+                  <div className="mt-1 text-xs text-ink-muted">{item.code}</div>
+                </div>
+                <StatusPill status={item.status} />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-ink-muted">
+                <span>{item.plant || '未设置工厂'}</span>
+                <span>{item.workshopName || item.lineName || '未设置范围'}</span>
+                <span>负责人：{item.ownerName}</span>
+                <span>进度：{percent(item.progressPercent)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+        {!visibleProjects.length ? <div className="mt-4"><EmptyState message="当前范围与筛选下暂无项目，可调整筛选或按范围创建。" /></div> : null}
+      </section>
+    </>
   );
 
   useEffect(() => {
@@ -1815,7 +2452,8 @@ function BaseConfigView({
       setProjectDraft(null);
       setPhaseDrafts({});
       setCheckItemDrafts({});
-      setPhaseFilter('');
+      setCheckFilters(EMPTY_FILTERS);
+      setNewCheckDraft(null);
       return;
     }
     setProjectDraft({
@@ -1865,7 +2503,21 @@ function BaseConfigView({
         ])
       )
     );
-    setPhaseFilter(idOf(sortedPhases[0]?.id));
+    const firstPhaseId = idOf(sortedPhases[0]?.id);
+    const firstModuleId = idOf(bySequence(data.inspectionModules)[0]?.id);
+    setCheckFilters(current => ({ ...current, phaseId: current.phaseId }));
+    setNewCheckDraft({
+      title: '',
+      moduleId: firstModuleId,
+      projectPhaseId: firstPhaseId,
+      tags: '',
+      plannedStartDate: dateInputValue(sortedPhases[0]?.plannedStartDate),
+      plannedEndDate: dateInputValue(sortedPhases[0]?.plannedEndDate),
+      ownerName: project.ownerName,
+      ownerIdaasId: undefined,
+      status: 'pending',
+      isActive: true
+    });
   }, [project?.id, data.phases, data.checkItems]);
 
   const save = async (key: string, action: () => Promise<void>) => {
@@ -1887,15 +2539,19 @@ function BaseConfigView({
 
   if (!project || !projectDraft) {
     return (
-      <section className="panel">
-        <h2 className="text-xl font-semibold">基础配置</h2>
-        <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段和检查项。</p>
-      </section>
+      <div className="grid gap-5">
+        {projectWorkbench}
+        <section className="panel">
+          <h2 className="text-xl font-semibold">配置中心</h2>
+          <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段、检查项、模块与负责人候选。</p>
+        </section>
+      </div>
     );
   }
 
   return (
     <div className="grid gap-5">
+      {projectWorkbench}
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -2017,10 +2673,41 @@ function BaseConfigView({
             <h2 className="text-xl font-semibold">六阶段配置</h2>
             <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留，名称、计划、目标、排序和启用状态可按项目调整。</p>
           </div>
-          <span className="chip">{sortedPhases.length} 阶段</span>
+          <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
+        </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-2">
+              <span className="field-label">阶段搜索</span>
+              <input className="input" value={phaseFilters.keyword} onChange={event => setPhaseFilters({ ...phaseFilters, keyword: event.target.value })} placeholder="阶段名称、Key、目标" aria-label="配置中心阶段搜索" />
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={phaseFilters.status} onChange={event => setPhaseFilters({ ...phaseFilters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {phaseStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">启用状态</span>
+              <select className="select" value={phaseFilters.activeState} onChange={event => setPhaseFilters({ ...phaseFilters, activeState: event.target.value })}>
+                <option value="">全部</option>
+                <option value="enabled">启用</option>
+                <option value="disabled">停用</option>
+              </select>
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={phaseFilters.startDate} onChange={event => setPhaseFilters({ ...phaseFilters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={phaseFilters.endDate} onChange={event => setPhaseFilters({ ...phaseFilters, endDate: event.target.value })} />
+            </label>
+          </FilterShell>
         </div>
         <div className="mt-4 grid gap-3 xl:grid-cols-2">
-          {sortedPhases.map(phase => {
+          {visiblePhases.map(phase => {
             const draft = phaseDrafts[idOf(phase.id)];
             if (!draft) return null;
             return (
@@ -2091,6 +2778,7 @@ function BaseConfigView({
                         }
                       }}
                     >
+                      <Trash2 className="h-4 w-4" />
                       删除阶段
                     </button>
                   ) : null}
@@ -2099,6 +2787,7 @@ function BaseConfigView({
             );
           })}
         </div>
+        {!visiblePhases.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无阶段。" /></div> : null}
       </section>
 
       <section className="panel">
@@ -2108,15 +2797,141 @@ function BaseConfigView({
             <h2 className="text-xl font-semibold">阶段检查项配置</h2>
             <p className="text-sm text-ink-muted">默认 7 模块 / 37 项检查体验保留，可按阶段维护名称、模块、标签、计划、负责人、启用和完成状态。</p>
           </div>
-          <label className="min-w-[240px]">
-            <span className="field-label">阶段筛选</span>
-            <select className="select" value={selectedPhaseId} onChange={event => setPhaseFilter(event.target.value)}>
-              {sortedPhases.map(phase => (
-                <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>
-              ))}
-            </select>
-          </label>
+          <span className="chip">{visibleCheckItems.length}/{data.checkItems.length} 项</span>
         </div>
+        <div className="mt-4">
+          <FilterShell>
+            <label className="xl:col-span-2">
+              <span className="field-label">检查项搜索</span>
+              <input className="input" value={checkFilters.keyword} onChange={event => setCheckFilters({ ...checkFilters, keyword: event.target.value })} placeholder="标题、标签、负责人" aria-label="配置中心检查项搜索" />
+            </label>
+            <label>
+              <span className="field-label">阶段</span>
+              <select
+                className="select"
+                value={selectedPhaseId}
+                onChange={event => setCheckFilters({ ...checkFilters, phaseId: event.target.value })}
+              >
+                <option value="">全部阶段</option>
+                {sortedPhases.map(phase => (
+                  <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">模块</span>
+              <select className="select" value={checkFilters.moduleId} onChange={event => setCheckFilters({ ...checkFilters, moduleId: event.target.value })}>
+                <option value="">全部模块</option>
+                {bySequence(data.inspectionModules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={checkFilters.status} onChange={event => setCheckFilters({ ...checkFilters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {checkStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input className="input" value={checkFilters.owner} onChange={event => setCheckFilters({ ...checkFilters, owner: event.target.value })} placeholder="负责人" aria-label="配置中心检查项负责人筛选" />
+            </label>
+            <label>
+              <span className="field-label">启用状态</span>
+              <select className="select" value={checkFilters.activeState} onChange={event => setCheckFilters({ ...checkFilters, activeState: event.target.value })}>
+                <option value="">全部</option>
+                <option value="enabled">启用</option>
+                <option value="disabled">停用</option>
+              </select>
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={checkFilters.startDate} onChange={event => setCheckFilters({ ...checkFilters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={checkFilters.endDate} onChange={event => setCheckFilters({ ...checkFilters, endDate: event.target.value })} />
+            </label>
+          </FilterShell>
+        </div>
+        {newCheckDraft ? (
+          <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-ink">新增检查项</div>
+                <div className="text-xs text-ink-muted">默认归属 {selectedPhase?.name ?? '当前阶段'} / {selectedModule?.name ?? '当前模块'}。</div>
+              </div>
+              <ReadOnlyNotice canWrite={canWrite} />
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-4">
+              <label className="lg:col-span-2">
+                <span className="field-label">检查项标题</span>
+                <input className="input" value={newCheckDraft.title} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, title: event.target.value })} placeholder="输入检查项标题" aria-label="新增检查项标题" />
+              </label>
+              <label>
+                <span className="field-label">阶段</span>
+                <select
+                  className="select"
+                  value={newCheckDraft.projectPhaseId}
+                  disabled={!canWrite}
+                  onChange={event => {
+                    const phase = sortedPhases.find(item => idOf(item.id) === event.target.value);
+                    setNewCheckDraft({
+                      ...newCheckDraft,
+                      projectPhaseId: event.target.value,
+                      plannedStartDate: dateInputValue(phase?.plannedStartDate),
+                      plannedEndDate: dateInputValue(phase?.plannedEndDate)
+                    });
+                  }}
+                >
+                  {sortedPhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">模块</span>
+                <select className="select" value={newCheckDraft.moduleId} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, moduleId: event.target.value })}>
+                  {bySequence(data.inspectionModules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">标签</span>
+                <input className="input" value={newCheckDraft.tags} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, tags: event.target.value })} placeholder="逗号分隔" />
+              </label>
+              <label>
+                <span className="field-label">计划开始</span>
+                <input className="input" type="date" value={newCheckDraft.plannedStartDate} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, plannedStartDate: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">计划结束</span>
+                <input className="input" type="date" value={newCheckDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, plannedEndDate: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">负责人</span>
+                <input className="input" list="base-config-owner-candidates" value={newCheckDraft.ownerName} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, ownerName: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">状态</span>
+                <select className="select" value={newCheckDraft.status} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, status: event.target.value })}>
+                  {['pending', 'in_progress', 'blocked', 'done', 'pass', 'fail', 'na', 'waived'].map(status => (
+                    <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3">
+              <button
+                className="btn btn-primary btn--sm"
+                type="button"
+                disabled={!canWrite || savingKey === 'check-create' || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId || !newCheckDraft.plannedStartDate || !newCheckDraft.plannedEndDate}
+                onClick={() => void save('check-create', () => onCreateCheckItem(newCheckDraft))}
+                aria-label="新增检查项"
+              >
+                <Plus className="h-4 w-4" />
+                {savingKey === 'check-create' ? '新增中' : '新增检查项'}
+              </button>
+            </div>
+          </div>
+        ) : null}
         <div className="table-shell mt-4">
           <table className="data-table min-w-[1380px]">
             <thead>
@@ -2206,6 +3021,7 @@ function BaseConfigView({
                               }
                             }}
                           >
+                            <Trash2 className="h-4 w-4" />
                             删除
                           </button>
                         ) : null}
@@ -2221,6 +3037,57 @@ function BaseConfigView({
               ) : null}
             </tbody>
           </table>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Base Data</p>
+            <h2 className="text-xl font-semibold">模块与负责人候选</h2>
+            <p className="text-sm text-ink-muted">检查项模块、模板和 IDaaS 候选人在同一配置中心查看，避免基础数据维护入口分叉。</p>
+          </div>
+          <span className="chip">{data.inspectionModules.length} 模块 · {data.ownerCandidates.length} 候选人</span>
+        </div>
+        <div className="mt-4 grid gap-4 xl:grid-cols-3">
+          <div className="rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="text-sm font-semibold text-ink">检查模块</div>
+            <div className="mt-3 space-y-2">
+              {bySequence(data.inspectionModules).map(module => (
+                <div key={module.id} className="flex items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-ink">{module.name}</div>
+                    <div className="text-xs text-ink-muted">{module.code}</div>
+                  </div>
+                  <StatusPill status={module.isActive ? 'active' : 'disabled'} />
+                </div>
+              ))}
+              {!data.inspectionModules.length ? <EmptyState message="暂无检查模块。" /> : null}
+            </div>
+          </div>
+          <div className="rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="text-sm font-semibold text-ink">检查项模板</div>
+            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+              {data.checklistTemplates.map(template => (
+                <div key={template.id} className="rounded-lg border border-outline bg-surface px-3 py-2">
+                  <div className="text-sm font-semibold text-ink">{template.title}</div>
+                  <div className="mt-1 text-xs text-ink-muted">{template.code} · {template.defaultOwnerRole ?? '未设置角色'}</div>
+                </div>
+              ))}
+              {!data.checklistTemplates.length ? <EmptyState message="暂无检查项模板。" /> : null}
+            </div>
+          </div>
+          <div className="rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="text-sm font-semibold text-ink">负责人候选</div>
+            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+              {data.ownerCandidates.map(owner => (
+                <div key={owner.idaasId || owner.displayName} className="rounded-lg border border-outline bg-surface px-3 py-2">
+                  <div className="text-sm font-semibold text-ink">{owner.displayName}</div>
+                  <div className="mt-1 text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
+                </div>
+              ))}
+              {!data.ownerCandidates.length ? <EmptyState message="暂无负责人候选，负责人字段仍可手工输入。" /> : null}
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -2365,7 +3232,7 @@ export default function App() {
     void loadData(undefined, nextScope);
   };
 
-  const handleCreateProject = async () => {
+  const handleCreateProject = async (nextView: AppTab = currentView) => {
     if (!canWrite) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === scope.factoryId);
     const workshop = workspace.hierarchy.workshops.find(item => idOf(item.id) === scope.workshopId);
@@ -2392,7 +3259,7 @@ export default function App() {
         plannedEndDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10)
       });
       await loadData(project.id);
-      setCurrentView('dashboard');
+      setCurrentView(nextView);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建项目失败');
     }
@@ -2401,7 +3268,7 @@ export default function App() {
   const handleUpdateOwner = async (item: CheckItem, ownerName: string, ownerIdaasId?: string) => {
     if (!canWrite) return;
     try {
-      await updateCheckItemOwner(item.id, { ownerName, ownerIdaasId });
+      await updateCheckItemOwner(item.id, { ownerName, ownerIdaasId, metadata: item.metadata });
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '负责人更新失败'));
@@ -2429,7 +3296,8 @@ export default function App() {
         lineName: productionLine?.name ?? '车间级项目',
         ownerName: draft.ownerName,
         plannedStartDate: draft.plannedStartDate,
-        plannedEndDate: draft.plannedEndDate
+        plannedEndDate: draft.plannedEndDate,
+        metadata: workspace.selectedProject.metadata
       });
       await loadData(workspace.selectedProject.id);
     } catch (err) {
@@ -2448,7 +3316,8 @@ export default function App() {
         plannedStartDate: draft.plannedStartDate,
         plannedEndDate: draft.plannedEndDate,
         status: draft.status,
-        isActive: draft.isActive
+        isActive: draft.isActive,
+        metadata: phase.metadata
       });
       await loadData();
     } catch (err) {
@@ -2468,6 +3337,29 @@ export default function App() {
     }
   };
 
+  const handleCreateCheckItemConfig = async (draft: CheckItemConfigDraft) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await createCheckItem(workspace.selectedProject.id, {
+        title: draft.title,
+        moduleId: draft.moduleId,
+        projectPhaseId: draft.projectPhaseId,
+        tags: draft.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
+        plannedStartDate: draft.plannedStartDate,
+        plannedEndDate: draft.plannedEndDate,
+        ownerName: draft.ownerName,
+        ownerIdaasId: draft.ownerIdaasId,
+        status: draft.status,
+        isActive: draft.isActive,
+        progressPercent: isComplete(draft.status) ? 100 : 0
+      });
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项新增失败'));
+      throw err;
+    }
+  };
+
   const handleUpdateCheckItemConfig = async (item: CheckItem, draft: CheckItemConfigDraft) => {
     if (!canWrite) return;
     try {
@@ -2482,7 +3374,8 @@ export default function App() {
         ownerIdaasId: draft.ownerIdaasId,
         status: draft.status,
         isActive: draft.isActive,
-        progressPercent: isComplete(draft.status) ? 100 : item.progressPercent
+        progressPercent: isComplete(draft.status) ? 100 : item.progressPercent,
+        metadata: item.metadata
       });
       await loadData();
     } catch (err) {
@@ -2552,7 +3445,7 @@ export default function App() {
           onScopeChange={handleScopeChange}
           onSelectProject={projectId => void loadData(projectId)}
           onSelectCell={setSelectedDashboardCell}
-          onCreateProject={handleCreateProject}
+          onCreateProject={() => void handleCreateProject('dashboard')}
           onCreateExport={() => void handleCreateProjectExport()}
         />
       );
@@ -2567,7 +3460,7 @@ export default function App() {
             void loadData(projectId);
             setCurrentView('dashboard');
           }}
-          onCreateProject={handleCreateProject}
+          onCreateProject={() => void handleCreateProject('baseConfig')}
         />
       );
     }
@@ -2575,10 +3468,15 @@ export default function App() {
       return (
         <BaseConfigView
           data={workspace}
+          scope={scope}
           canWrite={canWrite}
+          onScopeChange={handleScopeChange}
+          onSelectProject={projectId => void loadData(projectId)}
+          onCreateProject={() => void handleCreateProject('baseConfig')}
           onUpdateProject={handleUpdateProject}
           onUpdatePhase={handleUpdatePhase}
           onDeletePhase={handleDeletePhase}
+          onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateCheckItem={handleUpdateCheckItemConfig}
           onDeleteCheckItem={handleDeleteCheckItem}
         />
@@ -2607,8 +3505,8 @@ export default function App() {
         />
       );
     }
-    if (currentView === 'issues') return <IssuesView issues={workspace.keyIssues} />;
-    if (currentView === 'collision') return <CollisionView reports={workspace.collisionReports} />;
+    if (currentView === 'issues') return <IssuesView issues={workspace.keyIssues} phases={workspace.phases} />;
+    if (currentView === 'collision') return <CollisionView reports={workspace.collisionReports} phases={workspace.phases} />;
     if (currentView === 'reports') {
       return (
         <ReportsView

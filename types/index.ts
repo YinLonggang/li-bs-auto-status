@@ -116,6 +116,7 @@ export type Project = {
   actualStartDate?: string | null;
   actualEndDate?: string | null;
   progressPercent: number;
+  metadata?: Record<string, unknown>;
   updatedAt: string;
 };
 
@@ -147,6 +148,7 @@ export type ProjectPhase = {
   canDelete?: boolean;
   isDefault?: boolean;
   notes?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type InspectionModule = {
@@ -194,6 +196,7 @@ export type CheckItem = {
   blockerReason?: string;
   progressPercent: number;
   notes?: string;
+  metadata?: Record<string, unknown>;
   attachments: Attachment[];
 };
 

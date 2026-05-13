@@ -257,6 +257,7 @@ const normalizeProject = (input: unknown): Project => {
     actualStartDate: firstString(raw, ['actualStartDate', 'actual_start_date']) || null,
     actualEndDate: firstString(raw, ['actualEndDate', 'actual_end_date']) || null,
     progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
+    metadata,
     updatedAt: firstString(raw, ['updatedAt', 'updated_at'])
   };
 };
@@ -296,7 +297,8 @@ const normalizeProjectPhase = (input: unknown): ProjectPhase => {
     isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
     canDelete: asBoolean(raw.canDelete, asBoolean(raw.can_delete, false)),
     isDefault: asBoolean(raw.isDefault, asBoolean(raw.is_default, false)),
-    notes: firstString(metadata, ['notes'])
+    notes: firstString(metadata, ['notes']),
+    metadata
   };
 };
 
@@ -357,6 +359,7 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
     blockerReason: firstString(raw, ['blockerReason', 'blocker_reason']),
     progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
     notes: firstString(metadata, ['notes']),
+    metadata,
     attachments: asArray(raw.attachments).map(normalizeAttachment)
   };
 };
@@ -657,11 +660,13 @@ export type CreateProjectInput = {
   ownerName: string;
   plannedStartDate: string;
   plannedEndDate: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type UpdateProjectInput = Partial<CreateProjectInput> & {
   status?: string;
   description?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type UpdateProjectPhaseInput = {
@@ -672,6 +677,7 @@ export type UpdateProjectPhaseInput = {
   plannedEndDate?: string;
   status?: string;
   isActive?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type UpdateCheckItemInput = {
@@ -686,6 +692,15 @@ export type UpdateCheckItemInput = {
   status?: string;
   isActive?: boolean;
   progressPercent?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type CreateCheckItemInput = UpdateCheckItemInput & {
+  title: string;
+  moduleId: string | number;
+  projectPhaseId: string | number;
+  plannedStartDate: string;
+  plannedEndDate: string;
 };
 
 export type CreateExportInput = {
@@ -802,6 +817,7 @@ export async function createProject(input: CreateProjectInput) {
         workshop_name_snapshot: input.workshopName,
         line_name_snapshot: input.lineName,
         metadata: {
+          ...(input.metadata ?? {}),
           owner_name: input.ownerName,
           planned_start_date: input.plannedStartDate,
           planned_end_date: input.plannedEndDate
@@ -831,6 +847,7 @@ export async function updateProject(projectId: string | number, input: UpdatePro
         planned_start_date: input.plannedStartDate,
         planned_end_date: input.plannedEndDate,
         metadata: {
+          ...(input.metadata ?? {}),
           owner_name: input.ownerName,
           planned_start_date: input.plannedStartDate,
           planned_end_date: input.plannedEndDate
@@ -967,7 +984,7 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
 
 export async function updateCheckItemOwner(
   checkItemId: string | number,
-  payload: { ownerName: string; ownerIdaasId?: string }
+  payload: { ownerName: string; ownerIdaasId?: string; metadata?: Record<string, unknown> }
 ) {
   return updateCheckItem(checkItemId, payload);
 }
@@ -986,6 +1003,7 @@ export async function updateProjectPhase(phaseId: string | number, payload: Upda
         status: payload.status,
         is_enabled: payload.isActive,
         metadata: {
+          ...(payload.metadata ?? {}),
           notes: payload.goal
         }
       })
@@ -1012,6 +1030,36 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         is_enabled: payload.isActive,
         progress_percent: payload.progressPercent,
         metadata: {
+          ...(payload.metadata ?? {}),
+          tags: payload.tags,
+          planned_start_date: payload.plannedStartDate,
+          planned_end_date: payload.plannedEndDate
+        }
+      })
+    })
+  ));
+}
+
+export async function createCheckItem(projectId: string | number, payload: CreateCheckItemInput) {
+  return normalizeCheckItem(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/check-items/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        phase: payload.projectPhaseId,
+        project_phase: payload.projectPhaseId,
+        module: payload.moduleId,
+        title: payload.title,
+        tags: payload.tags,
+        planned_start: payload.plannedStartDate,
+        planned_end: payload.plannedEndDate,
+        due_date: payload.plannedEndDate,
+        owner_name: payload.ownerName,
+        owner_idaas_id: payload.ownerIdaasId,
+        status: payload.status ?? 'pending',
+        is_enabled: payload.isActive ?? true,
+        progress_percent: payload.progressPercent,
+        metadata: {
+          ...(payload.metadata ?? {}),
           tags: payload.tags,
           planned_start_date: payload.plannedStartDate,
           planned_end_date: payload.plannedEndDate

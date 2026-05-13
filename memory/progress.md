@@ -30,6 +30,10 @@
 - Dashboard 项目统计补齐 `planned_start` / `planned_end`、阶段逾期和检查项逾期字段兼容；逾期总数缺失时由两类逾期相加。
 - 基础配置默认阶段/检查项删除入口下线，只有后端返回 `can_delete=true` 的自定义项才展示删除；默认项通过启用/停用维护。
 - 导出任务下载按钮改为使用 `has_result` 判断，timeline 项目 ID 兼容顶层 `project_id` 与 `project.id`。
+- 侧边栏配置入口收敛为“配置中心”，项目列表、项目基础信息、六阶段、阶段检查项、模块/模板和负责人候选在同一工作台完成。
+- 配置中心补齐检查项新增路径，调用真实 `/projects/{id}/check-items/`，并保持编辑、停用和自定义项删除路径。
+- Dashboard 项目统计、Dashboard 模块泳道/检查项详情、配置中心项目/阶段/检查项、时间甘特、检查项表、重点问题、碰撞一页纸、报告定义和导出任务均补齐稳定筛选/搜索。
+- 删除空 `li-bs-auto-status/mocks` 目录，运行期仍无 MSW、mock worker 或本地填充数据入口。
 
 ### 验证
 
@@ -39,6 +43,11 @@
 - 3005 真实后端 DOM smoke 通过，38 个 `/api/...` 请求，`mock_resources: []`。
 - `npm run permission-regression` 通过，失败数 0；当前缺少只读/可写 cookie，三态场景按脚本规则 SKIP。
 - `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+- 本轮收口重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check`、根仓 `git diff --check -- li-bs-auto-status` 均通过。
+- mock 残留扫描通过：排除 `node_modules`、`dist`、`memory` 和 lockfile 后，源码/配置无 `MSW`、`setupWorker`、`mockServiceWorker`、`VITE_ENABLE_MOCKS`、`mocks/` 命中；`find` 未发现运行期 mock 文件或目录。
+- 审查返修：删除入口保持显式 `can_delete/canDelete === true` 才展示；Dashboard 底部导出对只读用户禁用并显示无权限反馈；配置中心检查项阶段筛选新增“全部阶段”；项目/阶段/检查项 PATCH 改为合并当前对象 `metadata` 后再覆盖表单负责字段。
+- 审查返修后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check`、根仓 `git diff --check -- li-bs-auto-status` 均通过。
+- 审查返修后 mock 残留扫描通过：排除 `node_modules`、`dist`、`memory` 和 lockfile 后，源码/配置无 `MSW`、`setupWorker`、`mockServiceWorker`、`VITE_ENABLE_MOCKS`、`mocks/` 命中；`find` 未发现运行期 mock 文件或目录。
 
 ### 问题与风险
 
