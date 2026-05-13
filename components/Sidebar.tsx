@@ -11,6 +11,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  SlidersHorizontal,
   Settings,
   Sun,
   X
@@ -22,6 +23,7 @@ import type { UserProfile } from '../types';
 export type AppTab =
   | 'dashboard'
   | 'projects'
+  | 'baseConfig'
   | 'phases'
   | 'timeline'
   | 'checks'
@@ -40,6 +42,7 @@ export type SidebarMenuItem<TView extends string = AppTab> = {
 export const MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', description: '项目状态驾驶舱', icon: LayoutDashboard },
   { id: 'projects', label: '项目列表', description: '项目切换与状态', icon: Boxes },
+  { id: 'baseConfig', label: '基础配置', description: '项目信息与检查配置', icon: SlidersHorizontal },
   { id: 'phases', label: '阶段配置', description: '模板与项目阶段', icon: GitBranch },
   { id: 'timeline', label: '阶段进度', description: '时间线与打卡', icon: CalendarClock },
   { id: 'checks', label: '检查项', description: '甘特与表格', icon: ClipboardCheck },

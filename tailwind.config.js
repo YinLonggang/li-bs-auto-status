@@ -8,7 +8,6 @@ export default {
     './components/**/*.{ts,tsx}',
     './hooks/**/*.{ts,tsx}',
     './services/**/*.{ts,tsx}',
-    './mocks/**/*.{ts,tsx}',
     './types/**/*.{ts,tsx}'
   ],
   darkMode: ['class', '[data-theme="dark"]'],

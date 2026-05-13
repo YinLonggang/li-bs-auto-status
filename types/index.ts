@@ -143,6 +143,9 @@ export type ProjectPhase = {
   actualEndAt?: string | null;
   status: PhaseStatus;
   progressPercent: number;
+  isActive?: boolean;
+  canDelete?: boolean;
+  isDefault?: boolean;
   notes?: string;
 };
 
@@ -176,6 +179,7 @@ export type CheckItem = {
   title: string;
   description?: string;
   acceptanceCriteria?: string;
+  tags?: string[];
   ownerName: string;
   ownerIdaasId?: string;
   plannedStartDate: string;
@@ -183,6 +187,9 @@ export type CheckItem = {
   actualStartAt?: string | null;
   actualEndAt?: string | null;
   status: CheckItemStatus;
+  isActive?: boolean;
+  canDelete?: boolean;
+  isDefault?: boolean;
   result?: string;
   blockerReason?: string;
   progressPercent: number;
@@ -264,6 +271,7 @@ export type ExportTask = {
   finishedAt?: string | null;
   resultBucketName?: string;
   resultObjectKey?: string;
+  hasResult?: boolean;
   errorMessage?: string | null;
 };
 
@@ -273,6 +281,39 @@ export type DashboardProgressRow = {
   checkItemCount: number;
   completedCheckItemCount: number;
   completionRate: number;
+};
+
+export type ProjectStatistics = {
+  projectId: string | number;
+  projectCode: string;
+  projectName: string;
+  projectStatus: ProjectStatus;
+  ownerName: string;
+  plannedStartDate: string;
+  plannedEndDate: string;
+  completionRate: number;
+  phaseCount: number;
+  checkItemCount: number;
+  completedCheckItemCount: number;
+  overdueCount: number;
+  overduePhaseCount: number;
+  overdueCheckItemCount: number;
+  blockedCheckItemCount: number;
+  keyIssueCount: number;
+  openKeyIssueCount: number;
+  highOpenKeyIssueCount: number;
+  collisionReportCount: number;
+  pendingCollisionReportCount: number;
+  exportJobCount: number;
+  failedExportJobCount: number;
+  currentPhaseName?: string;
+};
+
+export type ProjectTimeline = {
+  projectId?: string | number;
+  refreshedAt?: string;
+  phases: ProjectPhase[];
+  checkItems: CheckItem[];
 };
 
 export type DashboardSummary = {
@@ -285,6 +326,7 @@ export type DashboardSummary = {
   checkItemCount: number;
   completedCheckItemCount: number;
   openCheckItemCount: number;
+  overdueCount: number;
   completionRate: number;
   keyIssueCount: number;
   openKeyIssueCount: number;
@@ -302,6 +344,7 @@ export type DashboardSummary = {
   byExportStatus: Record<string, number>;
   phaseProgress: DashboardProgressRow[];
   moduleProgress: DashboardProgressRow[];
+  projectStats: ProjectStatistics[];
 };
 
 export type WorkspaceData = {
@@ -309,6 +352,9 @@ export type WorkspaceData = {
   selectedProject: Project | null;
   hierarchy: HierarchyOptions;
   dashboardSummary: DashboardSummary | null;
+  projectStats: ProjectStatistics[];
+  selectedProjectStats: ProjectStatistics | null;
+  timeline: ProjectTimeline | null;
   phases: ProjectPhase[];
   phaseTemplates: PhaseTemplate[];
   inspectionModules: InspectionModule[];

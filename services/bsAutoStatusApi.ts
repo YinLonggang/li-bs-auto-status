@@ -18,6 +18,8 @@ import type {
   ProductionLineOption,
   Project,
   ProjectPhase,
+  ProjectStatistics,
+  ProjectTimeline,
   ReportDefinition,
   WorkshopOption,
   WorkspaceData
@@ -52,6 +54,19 @@ const asNumber = (value: unknown, fallback = 0) => {
 
 const asBoolean = (value: unknown, fallback = false) =>
   typeof value === 'boolean' ? value : fallback;
+
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[,，、]/)
+      .map(item => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
 
 const firstString = (record: RawRecord, keys: string[], fallback = '') => {
   for (const key of keys) {
@@ -272,12 +287,15 @@ const normalizeProjectPhase = (input: unknown): ProjectPhase => {
     name: firstString(raw, ['name']),
     sequence: firstNumber(raw, ['sequence', 'sort_order']),
     goal: firstString(raw, ['goal', 'description']),
-    plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start']),
-    plannedEndDate: firstString(raw, ['plannedEndDate', 'planned_end']),
+    plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start', 'planned_start_date']),
+    plannedEndDate: firstString(raw, ['plannedEndDate', 'planned_end', 'planned_end_date']),
     actualStartAt: firstString(raw, ['actualStartAt', 'actual_start']) || null,
     actualEndAt: firstString(raw, ['actualEndAt', 'actual_end']) || null,
     status: firstString(raw, ['status'], 'not_started'),
     progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
+    isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
+    canDelete: asBoolean(raw.canDelete, asBoolean(raw.can_delete, false)),
+    isDefault: asBoolean(raw.isDefault, asBoolean(raw.is_default, false)),
     notes: firstString(metadata, ['notes'])
   };
 };
@@ -319,18 +337,22 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
-    projectPhaseId: firstId(raw, ['projectPhaseId', 'phase']),
+    projectPhaseId: firstId(raw, ['projectPhaseId', 'project_phase', 'project_phase_id', 'phase']),
     moduleId: firstId(raw, ['moduleId', 'module']),
     title: firstString(raw, ['title']),
     description: firstString(raw, ['description']),
     acceptanceCriteria: firstString(raw, ['acceptanceCriteria', 'acceptance_criteria']) || firstString(metadata, ['acceptanceCriteria', 'acceptance_criteria']),
+    tags: asStringArray(raw.tags).length ? asStringArray(raw.tags) : asStringArray(metadata.tags),
     ownerName: firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置'),
     ownerIdaasId: firstString(raw, ['ownerIdaasId', 'owner_idaas_id']),
-    plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start_date']) || firstString(metadata, ['plannedStartDate', 'planned_start_date']),
-    plannedEndDate: firstString(raw, ['plannedEndDate', 'due_date']),
+    plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start', 'planned_start_date']) || firstString(metadata, ['plannedStartDate', 'planned_start_date']),
+    plannedEndDate: firstString(raw, ['plannedEndDate', 'planned_end', 'planned_end_date', 'due_date']) || firstString(metadata, ['plannedEndDate', 'planned_end_date']),
     actualStartAt: firstString(raw, ['actualStartAt', 'actual_start_at']) || null,
     actualEndAt: firstString(raw, ['actualEndAt', 'completed_at']) || null,
     status: firstString(raw, ['status'], 'pending'),
+    isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
+    canDelete: asBoolean(raw.canDelete, asBoolean(raw.can_delete, false)),
+    isDefault: asBoolean(raw.isDefault, asBoolean(raw.is_default, false)),
     result: firstString(raw, ['result', 'result_note']),
     blockerReason: firstString(raw, ['blockerReason', 'blocker_reason']),
     progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
@@ -468,6 +490,7 @@ const normalizeExportTask = (input: unknown): ExportTask => {
     finishedAt: firstString(raw, ['finishedAt', 'finished_at']) || null,
     resultBucketName: firstString(raw, ['resultBucketName', 'result_bucket_name']),
     resultObjectKey,
+    hasResult: asBoolean(raw.hasResult, asBoolean(raw.has_result, false)),
     errorMessage: firstString(raw, ['errorMessage', 'error_message']) || null
   };
 };
@@ -520,6 +543,60 @@ const normalizeDashboardProgressRow = (input: unknown): DashboardProgressRow => 
   };
 };
 
+const normalizeProjectStatistics = (input: unknown): ProjectStatistics => {
+  const raw = asRecord(input);
+  const overduePhaseCount = firstNumber(raw, ['overdue_phase_count', 'overduePhaseCount']);
+  const overdueCheckItemCount = firstNumber(raw, ['overdue_check_item_count', 'overdueCheckItemCount']);
+  const explicitOverdueCount = firstNumber(raw, ['overdue_count', 'overdueCount'], Number.NaN);
+  const overdueCount = Number.isFinite(explicitOverdueCount)
+    ? explicitOverdueCount
+    : overduePhaseCount + overdueCheckItemCount;
+  return {
+    projectId: firstId(raw, ['project_id', 'projectId', 'project', 'id']),
+    projectCode: firstString(raw, ['project_code', 'projectCode', 'code']),
+    projectName: firstString(raw, ['project_name', 'projectName', 'name']),
+    projectStatus: firstString(raw, ['project_status', 'projectStatus', 'status'], 'active'),
+    ownerName: firstString(raw, ['owner_name', 'ownerName'], '未设置'),
+    plannedStartDate: firstString(raw, ['planned_start', 'planned_start_date', 'plannedStartDate']),
+    plannedEndDate: firstString(raw, ['planned_end', 'planned_end_date', 'plannedEndDate']),
+    completionRate: firstNumber(raw, ['completion_rate', 'completionRate', 'progress_percent']),
+    phaseCount: firstNumber(raw, ['phase_count', 'phaseCount']),
+    checkItemCount: firstNumber(raw, ['check_item_count', 'checkItemCount']),
+    completedCheckItemCount: firstNumber(raw, ['completed_check_item_count', 'completedCheckItemCount']),
+    overdueCount,
+    overduePhaseCount,
+    overdueCheckItemCount,
+    blockedCheckItemCount: firstNumber(raw, ['blocked_check_item_count', 'blockedCheckItemCount']),
+    keyIssueCount: firstNumber(raw, ['key_issue_count', 'keyIssueCount']),
+    openKeyIssueCount: firstNumber(raw, ['open_key_issue_count', 'openKeyIssueCount']),
+    highOpenKeyIssueCount: firstNumber(raw, ['high_open_key_issue_count', 'highOpenKeyIssueCount']),
+    collisionReportCount: firstNumber(raw, ['collision_report_count', 'collisionReportCount']),
+    pendingCollisionReportCount: firstNumber(raw, ['pending_collision_report_count', 'pendingCollisionReportCount']),
+    exportJobCount: firstNumber(raw, ['export_job_count', 'exportJobCount']),
+    failedExportJobCount: firstNumber(raw, ['failed_export_job_count', 'failedExportJobCount']),
+    currentPhaseName: firstString(raw, ['current_phase_name', 'currentPhaseName', 'current_phase'])
+  };
+};
+
+const normalizeProjectTimeline = (input: unknown): ProjectTimeline => {
+  const raw = asRecord(input);
+  const timeline = asRecord(raw.timeline);
+  const source = Object.keys(timeline).length ? timeline : raw;
+  const sourceProject = asRecord(source.project);
+  const rawProject = asRecord(raw.project);
+  return {
+    projectId:
+      firstOptionalId(source, ['project_id', 'projectId']) ??
+      firstOptionalId(raw, ['project_id', 'projectId']) ??
+      firstOptionalId(sourceProject, ['id']) ??
+      firstOptionalId(rawProject, ['id']) ??
+      undefined,
+    refreshedAt: firstString(source, ['refreshed_at', 'refreshedAt']),
+    phases: asArray(source.phases ?? source.phase_timeline ?? source.phase_windows).map(normalizeProjectPhase),
+    checkItems: asArray(source.check_items ?? source.checkItems ?? source.items).map(normalizeCheckItem)
+  };
+};
+
 const normalizeCountMap = (value: unknown): Record<string, number> => {
   const raw = asRecord(value);
   return Object.fromEntries(
@@ -529,6 +606,9 @@ const normalizeCountMap = (value: unknown): Record<string, number> => {
 
 const normalizeDashboardSummary = (input: unknown): DashboardSummary => {
   const raw = asRecord(input);
+  const overduePhaseCount = firstNumber(raw, ['overdue_phase_count', 'overduePhaseCount']);
+  const overdueCheckItemCount = firstNumber(raw, ['overdue_check_item_count', 'overdueCheckItemCount']);
+  const explicitOverdueCount = firstNumber(raw, ['overdue_count', 'overdueCount'], Number.NaN);
   return {
     refreshedAt: firstString(raw, ['refreshed_at', 'refreshedAt']),
     filters: Object.fromEntries(
@@ -541,6 +621,9 @@ const normalizeDashboardSummary = (input: unknown): DashboardSummary => {
     checkItemCount: firstNumber(raw, ['check_item_count']),
     completedCheckItemCount: firstNumber(raw, ['completed_check_item_count']),
     openCheckItemCount: firstNumber(raw, ['open_check_item_count']),
+    overdueCount: Number.isFinite(explicitOverdueCount)
+      ? explicitOverdueCount
+      : overduePhaseCount + overdueCheckItemCount,
     completionRate: firstNumber(raw, ['completion_rate']),
     keyIssueCount: firstNumber(raw, ['key_issue_count']),
     openKeyIssueCount: firstNumber(raw, ['open_key_issue_count']),
@@ -557,7 +640,8 @@ const normalizeDashboardSummary = (input: unknown): DashboardSummary => {
     byCollisionStatus: normalizeCountMap(raw.by_collision_status),
     byExportStatus: normalizeCountMap(raw.by_export_status),
     phaseProgress: asArray(raw.phase_progress).map(normalizeDashboardProgressRow),
-    moduleProgress: asArray(raw.module_progress).map(normalizeDashboardProgressRow)
+    moduleProgress: asArray(raw.module_progress).map(normalizeDashboardProgressRow),
+    projectStats: asArray(raw.project_summaries ?? raw.project_statistics ?? raw.project_stats ?? raw.projects).map(normalizeProjectStatistics)
   };
 };
 
@@ -575,6 +659,35 @@ export type CreateProjectInput = {
   plannedEndDate: string;
 };
 
+export type UpdateProjectInput = Partial<CreateProjectInput> & {
+  status?: string;
+  description?: string;
+};
+
+export type UpdateProjectPhaseInput = {
+  name?: string;
+  sequence?: number;
+  goal?: string;
+  plannedStartDate?: string;
+  plannedEndDate?: string;
+  status?: string;
+  isActive?: boolean;
+};
+
+export type UpdateCheckItemInput = {
+  title?: string;
+  moduleId?: string | number;
+  projectPhaseId?: string | number;
+  tags?: string[];
+  plannedStartDate?: string;
+  plannedEndDate?: string;
+  ownerName?: string;
+  ownerIdaasId?: string;
+  status?: string;
+  isActive?: boolean;
+  progressPercent?: number;
+};
+
 export type CreateExportInput = {
   reportName: string;
   reportType?: string | number;
@@ -589,6 +702,62 @@ export async function fetchDashboardSummary(filters?: ProjectScopeFilters): Prom
   try {
     return normalizeDashboardSummary(
       unwrap(await apiRequest<ApiEnvelope<unknown> | unknown>(withQuery('/dashboard/', filters)))
+    );
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function fetchDashboardProjectStatistics(filters?: ProjectScopeFilters): Promise<ProjectStatistics[]> {
+  try {
+    const payload = unwrap(
+      await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(withQuery('/dashboard/projects/', filters))
+    );
+    const record = asRecord(payload);
+    const items = Array.isArray(payload)
+      ? payload
+      : asArray(record.project_summaries ?? record.results ?? record.items);
+    return items.map(normalizeProjectStatistics);
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+type DashboardProjectDetail = {
+  stats: ProjectStatistics | null;
+  timeline: ProjectTimeline | null;
+};
+
+export async function fetchDashboardProjectDetail(projectId: string | number): Promise<DashboardProjectDetail> {
+  try {
+    const payload = unwrap(
+      await apiRequest<ApiEnvelope<unknown> | unknown>(`/dashboard/projects/${projectId}/`)
+    );
+    const raw = asRecord(payload);
+    const statSource = raw.project_summary ?? raw.summary ?? payload;
+    const timelineSource = raw.timeline ?? raw.project_timeline;
+    return {
+      stats: normalizeProjectStatistics(statSource),
+      timeline: timelineSource ? normalizeProjectTimeline(timelineSource) : null
+    };
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
+      return { stats: null, timeline: null };
+    }
+    throw error;
+  }
+}
+
+export async function fetchProjectTimeline(projectId: string | number): Promise<ProjectTimeline | null> {
+  try {
+    return normalizeProjectTimeline(
+      unwrap(await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/timeline/`))
     );
   } catch (error) {
     if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
@@ -643,6 +812,35 @@ export async function createProject(input: CreateProjectInput) {
   return normalizeProject(project);
 }
 
+export async function updateProject(projectId: string | number, input: UpdateProjectInput) {
+  const project = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        code: input.code,
+        name: input.name,
+        description: input.description,
+        status: input.status,
+        factory: input.factoryId,
+        workshop: input.workshopId,
+        production_line: input.productionLineId,
+        factory_name_snapshot: input.plant,
+        workshop_name_snapshot: input.workshopName,
+        line_name_snapshot: input.lineName,
+        owner_name: input.ownerName,
+        planned_start_date: input.plannedStartDate,
+        planned_end_date: input.plannedEndDate,
+        metadata: {
+          owner_name: input.ownerName,
+          planned_start_date: input.plannedStartDate,
+          planned_end_date: input.plannedEndDate
+        }
+      })
+    })
+  );
+  return normalizeProject(project);
+}
+
 export async function fetchOwnerCandidates(query = '') {
   const search = query ? `?q=${encodeURIComponent(query)}` : '';
   try {
@@ -662,7 +860,9 @@ export async function fetchOwnerCandidates(query = '') {
   }
 }
 
-export async function fetchProjectBundle(projectId: string | number): Promise<Omit<WorkspaceData, 'projects' | 'selectedProject' | 'hierarchy' | 'dashboardSummary'>> {
+export async function fetchProjectBundle(
+  projectId: string | number
+): Promise<Omit<WorkspaceData, 'projects' | 'selectedProject' | 'hierarchy' | 'dashboardSummary' | 'projectStats' | 'selectedProjectStats' | 'timeline'>> {
   const [
     phases,
     phaseTemplates,
@@ -703,24 +903,32 @@ export async function fetchProjectBundle(projectId: string | number): Promise<Om
 
 export async function fetchWorkspaceData(projectId?: string | number, filters?: ProjectScopeFilters): Promise<WorkspaceData> {
   const effectiveFilters = projectId ? { ...filters, projectId } : filters;
-  const [projects, hierarchyPayload, dashboardSummary] = await Promise.all([
+  const [projects, hierarchyPayload, dashboardSummary, dashboardProjectStats] = await Promise.all([
     listProjects(filters),
     fetchHierarchyOptions()
       .catch(error => {
         if (error instanceof ApiError) return EMPTY_HIERARCHY;
         throw error;
       }),
-    fetchDashboardSummary(effectiveFilters)
+    fetchDashboardSummary(effectiveFilters),
+    fetchDashboardProjectStatistics(filters)
   ]);
   const hierarchy = mergeHierarchyFallback(hierarchyPayload, projects);
   const selectedProject = projects.find(project => `${project.id}` === `${projectId}`) ?? projects[0] ?? null;
+  const projectStats = dashboardProjectStats.length ? dashboardProjectStats : dashboardSummary?.projectStats ?? [];
+  const summaryWithProjectStats = dashboardSummary
+    ? { ...dashboardSummary, projectStats: projectStats.length ? projectStats : dashboardSummary.projectStats }
+    : null;
 
   if (!selectedProject) {
     return {
       projects,
       selectedProject: null,
       hierarchy,
-      dashboardSummary,
+      dashboardSummary: summaryWithProjectStats,
+      projectStats,
+      selectedProjectStats: null,
+      timeline: null,
       phases: [],
       phaseTemplates: [],
       inspectionModules: [],
@@ -734,12 +942,26 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
     };
   }
 
+  const [bundle, dashboardProjectDetail, projectTimeline] = await Promise.all([
+    fetchProjectBundle(selectedProject.id),
+    fetchDashboardProjectDetail(selectedProject.id),
+    fetchProjectTimeline(selectedProject.id)
+  ]);
+  const selectedProjectStats =
+    dashboardProjectDetail.stats ??
+    projectStats.find(stat => `${stat.projectId}` === `${selectedProject.id}`) ??
+    null;
+  const timeline = dashboardProjectDetail.timeline ?? projectTimeline;
+
   return {
     projects,
     selectedProject,
     hierarchy,
-    dashboardSummary,
-    ...(await fetchProjectBundle(selectedProject.id))
+    dashboardSummary: summaryWithProjectStats,
+    projectStats,
+    selectedProjectStats,
+    timeline,
+    ...bundle
   };
 }
 
@@ -747,15 +969,68 @@ export async function updateCheckItemOwner(
   checkItemId: string | number,
   payload: { ownerName: string; ownerIdaasId?: string }
 ) {
+  return updateCheckItem(checkItemId, payload);
+}
+
+export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {
+  return normalizeProjectPhase(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        name: payload.name,
+        sort_order: payload.sequence,
+        goal: payload.goal,
+        description: payload.goal,
+        planned_start: payload.plannedStartDate,
+        planned_end: payload.plannedEndDate,
+        status: payload.status,
+        is_enabled: payload.isActive,
+        metadata: {
+          notes: payload.goal
+        }
+      })
+    })
+  ));
+}
+
+export async function updateCheckItem(checkItemId: string | number, payload: UpdateCheckItemInput) {
   return normalizeCheckItem(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-items/${checkItemId}/`, {
       method: 'PATCH',
       body: JSON.stringify({
+        title: payload.title,
+        module: payload.moduleId,
+        project_phase: payload.projectPhaseId,
+        phase: payload.projectPhaseId,
+        tags: payload.tags,
+        planned_start: payload.plannedStartDate,
+        planned_end: payload.plannedEndDate,
+        due_date: payload.plannedEndDate,
         owner_name: payload.ownerName,
-        owner_idaas_id: payload.ownerIdaasId
+        owner_idaas_id: payload.ownerIdaasId,
+        status: payload.status,
+        is_enabled: payload.isActive,
+        progress_percent: payload.progressPercent,
+        metadata: {
+          tags: payload.tags,
+          planned_start_date: payload.plannedStartDate,
+          planned_end_date: payload.plannedEndDate
+        }
       })
     })
   ));
+}
+
+export async function deleteProjectPhase(phaseId: string | number) {
+  await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {
+    method: 'DELETE'
+  });
+}
+
+export async function deleteCheckItem(checkItemId: string | number) {
+  await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-items/${checkItemId}/`, {
+    method: 'DELETE'
+  });
 }
 
 export async function createExportTask(projectId: string | number, input: CreateExportInput) {

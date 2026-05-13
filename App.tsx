@@ -29,9 +29,14 @@ import { AuthError, fetchUserProfile } from './services/auth';
 import {
   createExportTask,
   createProject,
+  deleteCheckItem,
+  deleteProjectPhase,
   fetchExportDownloadLink,
   fetchWorkspaceData,
-  updateCheckItemOwner
+  updateCheckItem,
+  updateCheckItemOwner,
+  updateProject,
+  updateProjectPhase
 } from './services/bsAutoStatusApi';
 import { ApiError } from './services/http';
 import type {
@@ -43,6 +48,7 @@ import type {
   OwnerCandidate,
   Project,
   ProjectPhase,
+  ProjectStatistics,
   ReportDefinition,
   UserProfile,
   WorkspaceData
@@ -59,6 +65,9 @@ const EMPTY_WORKSPACE: WorkspaceData = {
     productionLines: []
   },
   dashboardSummary: null,
+  projectStats: [],
+  selectedProjectStats: null,
+  timeline: null,
   phases: [],
   phaseTemplates: [],
   inspectionModules: [],
@@ -74,6 +83,7 @@ const EMPTY_WORKSPACE: WorkspaceData = {
 const VIEW_META: Record<AppTab, { title: string; subtitle: string }> = {
   dashboard: { title: 'Dashboard', subtitle: '项目状态、阶段进度、检查风险和签核' },
   projects: { title: '项目列表', subtitle: '项目切换与状态' },
+  baseConfig: { title: '基础配置', subtitle: '项目信息、阶段计划和检查项配置' },
   phases: { title: '阶段配置', subtitle: '模板与项目阶段实例' },
   timeline: { title: '阶段进度', subtitle: '计划、实际和当前进展' },
   checks: { title: '检查项', subtitle: '检查台账与负责人维护' },
@@ -134,12 +144,41 @@ const formatDate = (value?: string | null) => {
   return value.slice(0, 10);
 };
 
+const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
+
+const formatLocalDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const percent = (value: number) => `${Math.max(0, Math.min(100, Math.round(value)))}%`;
 
 const bySequence = <T extends { sequence: number }>(items: T[]) =>
   [...items].sort((left, right) => left.sequence - right.sequence);
 
 const idOf = (value?: string | number | null) => (value === undefined || value === null ? '' : `${value}`);
+
+const COMPLETE_STATUSES = new Set(['done', 'completed', 'pass', 'na', 'waived', 'succeeded', 'approved', 'signed']);
+const BLOCKED_STATUSES = new Set(['blocked', 'fail', 'failed', 'critical']);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const dateMs = (value?: string | null) => {
+  if (!value) return null;
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  const time = date.getTime();
+  return Number.isFinite(time) ? time : null;
+};
+
+const isComplete = (status: string) => COMPLETE_STATUSES.has(status);
+const isBlocked = (status: string) => BLOCKED_STATUSES.has(status);
+
+const isOverdue = (plannedEndDate: string, status: string, today = formatLocalDate(new Date())) =>
+  Boolean(plannedEndDate) && plannedEndDate.slice(0, 10) < today && !isComplete(status);
+
+const completionRateFor = (items: CheckItem[], fallback = 0) =>
+  items.length ? (items.filter(item => isComplete(item.status)).length / items.length) * 100 : fallback;
 
 const hierarchyLabel = (item?: { code?: string; name?: string } | null) =>
   item ? [item.code, item.name].filter(Boolean).join(' · ') || '未命名' : '未设置';
@@ -433,10 +472,212 @@ function DashboardStats({
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <MetricCard label="范围完成率" value={percent(completionRate)} detail={project?.lineName ?? '按筛选条件聚合'} />
       <MetricCard label="项目数量" value={summary?.projectCount ?? (project ? 1 : 0)} detail={`${summary?.activeProjectCount ?? 0} 个进行中`} />
-      <MetricCard label="检查闭环" value={`${doneChecks}/${totalChecks}`} detail={`${openCheckCount} 项未关闭`} />
+      <MetricCard label="检查闭环" value={`${doneChecks}/${totalChecks}`} detail={`${openCheckCount} 项未关闭 · ${summary?.overdueCount ?? 0} 项逾期`} />
       <MetricCard label="重点问题" value={summary?.openKeyIssueCount ?? openIssues} detail={`${summary?.highOpenKeyIssueCount ?? 0} 个高风险`} />
       <MetricCard label="导出/签核" value={summary?.exportJobCount ?? signedReports} detail={`${summary?.pendingCollisionReportCount ?? 0} 个一页纸待签`} />
     </div>
+  );
+}
+
+const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
+  const summaryStats = new Map(
+    (data.projectStats.length ? data.projectStats : data.dashboardSummary?.projectStats ?? []).map(item => [idOf(item.projectId), item])
+  );
+  const selectedProjectId = idOf(data.selectedProject?.id);
+  const selectedItems = data.checkItems;
+  const selectedIssues = data.keyIssues;
+  const selectedReports = data.collisionReports;
+  const selectedExports = data.exportTasks;
+  const selectedPhases = data.phases;
+
+  return data.projects.map(project => {
+    const selected = idOf(project.id) === selectedProjectId;
+    const summary = selected && data.selectedProjectStats ? data.selectedProjectStats : summaryStats.get(idOf(project.id));
+    const phaseCount = selected ? selectedPhases.length : summary?.phaseCount ?? 0;
+    const completedCheckItemCount = selected
+      ? selectedItems.filter(item => isComplete(item.status)).length
+      : summary?.completedCheckItemCount ?? 0;
+    const checkItemCount = selected ? selectedItems.length : summary?.checkItemCount ?? 0;
+    const openIssues = selected
+      ? selectedIssues.filter(issue => !issue.closedAt && !['closed', 'resolved', 'done'].includes(issue.status)).length
+      : summary?.openKeyIssueCount ?? 0;
+    const currentPhase = selected
+      ? selectedPhases.find(phase => ['in_progress', 'active', 'blocked'].includes(phase.status)) ?? selectedPhases[0]
+      : null;
+    const localOverduePhaseCount = selectedPhases.filter(phase => isOverdue(phase.plannedEndDate, phase.status)).length;
+    const localOverdueCheckItemCount = selectedItems.filter(item => isOverdue(item.plannedEndDate, item.status)).length;
+    const overduePhaseCount = summary?.overduePhaseCount ?? (selected ? localOverduePhaseCount : 0);
+    const overdueCheckItemCount = summary?.overdueCheckItemCount ?? (selected ? localOverdueCheckItemCount : 0);
+
+    return {
+      projectId: project.id,
+      projectCode: summary?.projectCode || project.code,
+      projectName: summary?.projectName || project.name,
+      projectStatus: summary?.projectStatus || project.status,
+      ownerName: summary?.ownerName || project.ownerName,
+      plannedStartDate: summary?.plannedStartDate || project.plannedStartDate,
+      plannedEndDate: summary?.plannedEndDate || project.plannedEndDate,
+      completionRate: selected ? completionRateFor(selectedItems, project.progressPercent) : summary?.completionRate ?? project.progressPercent,
+      phaseCount,
+      checkItemCount,
+      completedCheckItemCount,
+      overdueCount: summary?.overdueCount ?? overduePhaseCount + overdueCheckItemCount,
+      overduePhaseCount,
+      overdueCheckItemCount,
+      blockedCheckItemCount: selected ? selectedItems.filter(item => isBlocked(item.status)).length : summary?.blockedCheckItemCount ?? 0,
+      keyIssueCount: selected ? selectedIssues.length : summary?.keyIssueCount ?? 0,
+      openKeyIssueCount: openIssues,
+      highOpenKeyIssueCount: selected
+        ? selectedIssues.filter(issue => !issue.closedAt && ['high', 'critical'].includes(issue.severity)).length
+        : summary?.highOpenKeyIssueCount ?? 0,
+      collisionReportCount: selected ? selectedReports.length : summary?.collisionReportCount ?? 0,
+      pendingCollisionReportCount: selected
+        ? selectedReports.filter(report => !['approved', 'signed', 'closed'].includes(report.status)).length
+        : summary?.pendingCollisionReportCount ?? 0,
+      exportJobCount: selected ? selectedExports.length : summary?.exportJobCount ?? 0,
+      failedExportJobCount: selected ? selectedExports.filter(task => task.status === 'failed').length : summary?.failedExportJobCount ?? 0,
+      currentPhaseName: currentPhase?.name ?? summary?.currentPhaseName
+    };
+  });
+};
+
+function ProjectStatisticsList({
+  stats,
+  selectedProjectId,
+  onSelectProject
+}: {
+  stats: ProjectStatistics[];
+  selectedProjectId?: string | number;
+  onSelectProject: (projectId: string | number) => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Project Statistics</p>
+          <h2 className="text-lg font-semibold">项目统计列表</h2>
+        </div>
+        <span className="chip">{stats.length} 个项目</span>
+      </div>
+      <div className="table-shell mt-4">
+        <table className="data-table min-w-[1120px]">
+          <thead>
+            <tr>
+              <th>项目</th>
+              <th>完成率</th>
+              <th>阶段</th>
+              <th>检查项</th>
+              <th>逾期</th>
+              <th>重点问题</th>
+              <th>碰撞</th>
+              <th>导出任务</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.map(stat => {
+              const selected = idOf(stat.projectId) === idOf(selectedProjectId);
+              return (
+                <tr key={stat.projectId} className={selected ? 'bg-primary/10' : undefined}>
+                  <td>
+                    <div className="font-semibold text-ink">{stat.projectName}</div>
+                    <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
+                  </td>
+                  <td>
+                    <div className="min-w-28">
+                      <div className="text-sm font-semibold text-accent">{percent(stat.completionRate)}</div>
+                      <div className="mt-1 h-1.5 rounded-full bg-surface-strong">
+                        <div className="h-1.5 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
+                      </div>
+                    </div>
+                  </td>
+                  <td>{stat.phaseCount}</td>
+                  <td>{stat.completedCheckItemCount}/{stat.checkItemCount}</td>
+                  <td>
+                    <span className={stat.overdueCount ? 'text-danger' : 'text-success'}>{stat.overdueCount}</span>
+                    <div className="mt-1 text-[11px] text-ink-muted">
+                      阶段 {stat.overduePhaseCount} · 检查项 {stat.overdueCheckItemCount}
+                    </div>
+                  </td>
+                  <td>{stat.openKeyIssueCount}/{stat.keyIssueCount}</td>
+                  <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
+                  <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
+                  <td>
+                    <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)}>
+                      <ArrowUpRight className="h-4 w-4" />
+                      单项目
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function SingleProjectStatistics({
+  project,
+  stat,
+  phases,
+  checkItems
+}: {
+  project: Project | null;
+  stat?: ProjectStatistics;
+  phases: ProjectPhase[];
+  checkItems: CheckItem[];
+}) {
+  if (!project || !stat) {
+    return (
+      <section className="panel">
+        <h2 className="text-lg font-semibold">单项目统计</h2>
+        <p className="mt-3 text-sm text-ink-muted">请选择项目查看阶段和检查项统计。</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Single Project</p>
+          <h2 className="text-lg font-semibold">{project.name}</h2>
+          <p className="text-sm text-ink-muted">
+            {formatDate(project.plannedStartDate)} 至 {formatDate(project.plannedEndDate)} · 当前阶段：{stat.currentPhaseName || '未开始'}
+          </p>
+        </div>
+        <StatusPill status={project.status} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="完成率" value={percent(stat.completionRate)} detail={`${stat.completedCheckItemCount}/${stat.checkItemCount} 项完成`} />
+        <MetricCard label="阶段数" value={stat.phaseCount} detail={`${phases.filter(phase => phase.isActive !== false).length} 个启用`} />
+        <MetricCard label="风险检查项" value={stat.overdueCheckItemCount + stat.blockedCheckItemCount} detail={`${stat.overduePhaseCount} 阶段逾期 · ${stat.overdueCheckItemCount} 检查项逾期 · ${stat.blockedCheckItemCount} 阻塞`} />
+        <MetricCard label="问题/导出" value={`${stat.openKeyIssueCount}/${stat.exportJobCount}`} detail={`${stat.pendingCollisionReportCount} 个碰撞待签`} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {bySequence(phases).map(phase => {
+          const items = checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+          const rate = completionRateFor(items, phase.progressPercent);
+          return (
+            <div key={phase.id} className="rounded-lg border border-outline bg-surface-soft p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-ink">{phase.name}</div>
+                  <div className="text-xs text-ink-muted">Key: {phase.code} · {formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</div>
+                </div>
+                <StatusPill status={phase.status} />
+              </div>
+              <div className="mt-3 h-2 rounded-full bg-surface-strong">
+                <div className="h-2 rounded-full bg-primary" style={{ width: percent(rate) }} />
+              </div>
+              <div className="mt-2 text-xs text-ink-muted">{items.filter(item => isComplete(item.status)).length}/{items.length} 项完成</div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -781,6 +1022,8 @@ function DashboardView({
       }))
     ).find(cell => cell.count > 0) ?? null;
   const activeCell = selectedCell ?? (firstPopulatedCell ? { moduleId: firstPopulatedCell.moduleId, phaseId: firstPopulatedCell.phaseId } : null);
+  const projectStats = buildProjectStatistics(data);
+  const selectedProjectStat = projectStats.find(stat => idOf(stat.projectId) === idOf(data.selectedProject?.id));
 
   return (
     <div className="grid gap-5">
@@ -809,6 +1052,19 @@ function DashboardView({
         keyIssues={data.keyIssues}
         exportTasks={data.exportTasks}
       />
+      <div className="grid gap-5 2xl:grid-cols-[1.1fr_0.9fr]">
+        <ProjectStatisticsList
+          stats={projectStats}
+          selectedProjectId={data.selectedProject?.id}
+          onSelectProject={onSelectProject}
+        />
+        <SingleProjectStatistics
+          project={data.selectedProject}
+          stat={selectedProjectStat}
+          phases={data.phases}
+          checkItems={data.checkItems}
+        />
+      </div>
       <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
         <ModuleSwimlane
           phases={data.phases}
@@ -893,6 +1149,10 @@ function ProjectsView({
             </div>
             <div className="mt-3 h-2 rounded-full bg-surface-strong">
               <div className="h-2 rounded-full bg-accent" style={{ width: percent(project.progressPercent) }} />
+            </div>
+            <div className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-primary">
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              查看单项目统计
             </div>
           </button>
         ))}
@@ -1008,30 +1268,155 @@ function PhasesView({ data }: { data: WorkspaceData }) {
   );
 }
 
-function TimelineView({ phases }: { phases: ProjectPhase[] }) {
+function TimelineView({
+  project,
+  phases,
+  checkItems,
+  modules
+}: {
+  project: Project | null;
+  phases: ProjectPhase[];
+  checkItems: CheckItem[];
+  modules: InspectionModule[];
+}) {
   const sorted = bySequence(phases);
+  const today = formatLocalDate(new Date());
+  const dates = [
+    project?.plannedStartDate,
+    project?.plannedEndDate,
+    ...phases.flatMap(phase => [phase.plannedStartDate, phase.plannedEndDate]),
+    ...checkItems.flatMap(item => [item.plannedStartDate, item.plannedEndDate])
+  ].map(dateMs).filter((value): value is number => value !== null);
+  const fallbackStart = dateMs(today) ?? Date.now();
+  const rangeStart = dates.length ? Math.min(...dates) : fallbackStart;
+  const rangeEnd = dates.length ? Math.max(...dates) : fallbackStart + 7 * DAY_MS;
+  const paddedStart = rangeStart - DAY_MS;
+  const paddedEnd = rangeEnd + DAY_MS;
+  const totalDays = Math.max(1, Math.round((paddedEnd - paddedStart) / DAY_MS) + 1);
+  const todayMs = dateMs(today);
+  const todayPosition = todayMs === null ? null : ((todayMs - paddedStart) / (totalDays * DAY_MS)) * 100;
+  const showToday = todayPosition !== null && todayPosition >= 0 && todayPosition <= 100;
+  const moduleById = new Map(modules.map(module => [idOf(module.id), module]));
+  const ticks = Array.from({ length: 5 }, (_, index) => {
+    const value = paddedStart + Math.round(((totalDays - 1) * index) / 4) * DAY_MS;
+    return {
+      left: `${(index / 4) * 100}%`,
+      label: formatDate(new Date(value).toISOString())
+    };
+  });
+  const rangeStyle = (startDate?: string, endDate?: string) => {
+    const start = dateMs(startDate) ?? paddedStart;
+    const end = dateMs(endDate) ?? start;
+    const left = ((start - paddedStart) / (totalDays * DAY_MS)) * 100;
+    const width = ((Math.max(end, start) - start) / DAY_MS + 1) / totalDays * 100;
+    return {
+      left: `${Math.max(0, Math.min(100, left))}%`,
+      width: `${Math.max(1.5, Math.min(100, width))}%`
+    };
+  };
+  const itemClass = (item: CheckItem) => {
+    if (isComplete(item.status)) return 'bg-success text-white';
+    if (isBlocked(item.status) || isOverdue(item.plannedEndDate, item.status, today)) return 'bg-danger text-white';
+    if (['in_progress', 'active'].includes(item.status)) return 'bg-primary text-white';
+    return 'bg-warning text-surface-inverse';
+  };
+
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2 className="text-xl font-semibold">阶段进度</h2>
+        <div>
+          <p className="kicker">Time Gantt</p>
+          <h2 className="text-xl font-semibold">时间甘特</h2>
+          <p className="text-sm text-ink-muted">阶段和检查项均按计划开始/结束时间计算位置。</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="chip"><Clock3 className="h-3.5 w-3.5" />当前日期 {today}</span>
+          <span className="chip">{formatDate(new Date(paddedStart).toISOString())} 至 {formatDate(new Date(paddedEnd).toISOString())}</span>
+        </div>
       </div>
-      <div className="mt-5 space-y-4">
-        {sorted.map(phase => (
-          <div key={phase.id} className="grid gap-3 rounded-lg border border-outline bg-surface-soft p-4 lg:grid-cols-[180px_1fr_120px]">
-            <div>
-              <div className="font-semibold text-ink">{phase.name}</div>
-              <div className="text-xs text-ink-muted">{formatDate(phase.plannedStartDate)} / {formatDate(phase.plannedEndDate)}</div>
-            </div>
-            <div className="flex items-center">
-              <div className="h-4 w-full rounded-full bg-surface-strong">
-                <div className="h-4 rounded-full bg-accent" style={{ width: percent(phase.progressPercent) }} />
+      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+        <span className="status-pill border-success/40 bg-success/10 text-success">完成</span>
+        <span className="status-pill border-primary/40 bg-primary/10 text-primary">进行中</span>
+        <span className="status-pill border-danger/40 bg-danger/10 text-danger">阻塞/逾期</span>
+        <span className="status-pill border-warning/40 bg-warning/10 text-warning">未开始</span>
+      </div>
+      <div className="mt-5 overflow-x-auto rounded-lg border border-outline">
+        <div className="min-w-[1040px]">
+          <div className="grid border-b border-outline bg-surface-strong text-xs font-semibold text-ink-muted lg:grid-cols-[240px_1fr]">
+            <div className="border-r border-outline px-3 py-3">阶段</div>
+            <div className="relative px-3 py-3">
+              <div className="relative h-7">
+                {ticks.map(tick => (
+                  <div key={tick.label} className="absolute top-0 -translate-x-1/2 text-center" style={{ left: tick.left }}>
+                    <div className="mx-auto h-2 w-px bg-outline" />
+                    <div className="mt-1 whitespace-nowrap">{tick.label}</div>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="flex items-center justify-start lg:justify-end">
-              <StatusPill status={phase.status} />
-            </div>
           </div>
-        ))}
+          {sorted.map(phase => {
+            const items = checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+            const rowHeight = Math.max(108, 74 + items.length * 24);
+            return (
+              <div key={phase.id} className="grid border-b border-outline last:border-b-0 lg:grid-cols-[240px_1fr]">
+                <div className="border-r border-outline bg-surface-soft px-3 py-4" style={{ minHeight: rowHeight }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-semibold text-ink">{phase.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">Key: {phase.code}</div>
+                    </div>
+                    <StatusPill status={phase.status} />
+                  </div>
+                  <div className="mt-3 text-xs text-ink-muted">
+                    {formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}
+                  </div>
+                  <div className="mt-2 text-xs text-ink-subtle">{items.length} 个检查项 · {percent(phase.progressPercent)}</div>
+                </div>
+                <div className="relative bg-surface px-3 py-4" style={{ minHeight: rowHeight }}>
+                  {ticks.map(tick => (
+                    <div key={`${phase.id}-${tick.label}`} className="absolute bottom-0 top-0 w-px bg-outline/50" style={{ left: tick.left }} />
+                  ))}
+                  {showToday ? (
+                    <div className="absolute bottom-0 top-0 z-10 w-px bg-danger" style={{ left: `${todayPosition}%` }}>
+                      <span className="absolute -top-1 left-1 rounded-full bg-danger px-2 py-0.5 text-[11px] font-semibold text-white">
+                        今天
+                      </span>
+                    </div>
+                  ) : null}
+                  <div
+                    className="absolute top-5 h-7 rounded-lg border border-primary/40 bg-primary/20"
+                    style={rangeStyle(phase.plannedStartDate, phase.plannedEndDate)}
+                    title={`${phase.name}: ${formatDate(phase.plannedStartDate)} 至 ${formatDate(phase.plannedEndDate)}`}
+                  >
+                    <div className="h-full rounded-lg bg-primary/50" style={{ width: percent(phase.progressPercent) }} />
+                  </div>
+                  {items.map((item, index) => {
+                    const module = moduleById.get(idOf(item.moduleId));
+                    const overdue = isOverdue(item.plannedEndDate, item.status, today);
+                    return (
+                      <div
+                        key={item.id}
+                        className={`absolute h-4 overflow-hidden rounded-full px-2 text-[11px] font-semibold leading-4 shadow-sm ${itemClass(item)}`}
+                        style={{ ...rangeStyle(item.plannedStartDate, item.plannedEndDate), top: 58 + index * 24 }}
+                        title={`${item.title} · ${module?.name ?? '未设置模块'} · ${formatDate(item.plannedStartDate)} 至 ${formatDate(item.plannedEndDate)} · ${overdue ? '逾期' : STATUS_LABEL[item.status] ?? item.status}`}
+                      >
+                        <span className="block truncate">
+                          {overdue ? '逾期 · ' : ''}{module?.name ?? '模块'} / {item.title}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {!items.length ? (
+                    <div className="absolute left-3 right-3 top-16 rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">
+                      该阶段暂无检查项。
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -1306,7 +1691,7 @@ function ReportsView({
             <tbody>
               {tasks.map(task => {
                 const state = downloadState[idOf(task.id)] ?? {};
-                const hasArtifact = Boolean(task.resultObjectKey);
+                const hasArtifact = task.hasResult === true;
                 const canDownload = canWrite && task.status === 'succeeded' && hasArtifact;
                 return (
                   <tr key={task.id}>
@@ -1346,6 +1731,494 @@ function ReportsView({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type ProjectConfigDraft = {
+  name: string;
+  code: string;
+  status: string;
+  ownerName: string;
+  plannedStartDate: string;
+  plannedEndDate: string;
+  description: string;
+  factoryId: string;
+  workshopId: string;
+  productionLineId: string;
+};
+
+type PhaseConfigDraft = {
+  name: string;
+  sequence: string;
+  goal: string;
+  plannedStartDate: string;
+  plannedEndDate: string;
+  status: string;
+  isActive: boolean;
+};
+
+type CheckItemConfigDraft = {
+  title: string;
+  moduleId: string;
+  projectPhaseId: string;
+  tags: string;
+  plannedStartDate: string;
+  plannedEndDate: string;
+  ownerName: string;
+  ownerIdaasId?: string;
+  status: string;
+  isActive: boolean;
+};
+
+function BaseConfigView({
+  data,
+  canWrite,
+  onUpdateProject,
+  onUpdatePhase,
+  onDeletePhase,
+  onUpdateCheckItem,
+  onDeleteCheckItem
+}: {
+  data: WorkspaceData;
+  canWrite: boolean;
+  onUpdateProject: (draft: ProjectConfigDraft) => Promise<void>;
+  onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<void>;
+  onDeletePhase: (phase: ProjectPhase) => Promise<void>;
+  onUpdateCheckItem: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
+  onDeleteCheckItem: (item: CheckItem) => Promise<void>;
+}) {
+  const [projectDraft, setProjectDraft] = useState<ProjectConfigDraft | null>(null);
+  const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseConfigDraft>>({});
+  const [checkItemDrafts, setCheckItemDrafts] = useState<Record<string, CheckItemConfigDraft>>({});
+  const [phaseFilter, setPhaseFilter] = useState('');
+  const [savingKey, setSavingKey] = useState('');
+  const [message, setMessage] = useState('');
+  const project = data.selectedProject;
+  const sortedPhases = bySequence(data.phases);
+  const selectedPhaseId = phaseFilter || idOf(sortedPhases[0]?.id);
+  const visibleCheckItems = data.checkItems.filter(item => idOf(item.projectPhaseId) === selectedPhaseId);
+  const workshops = data.hierarchy.workshops.filter(
+    workshop => !projectDraft?.factoryId || idOf(workshop.factoryId) === projectDraft.factoryId
+  );
+  const productionLines = data.hierarchy.productionLines.filter(
+    line => !projectDraft?.workshopId || idOf(line.workshopId) === projectDraft.workshopId
+  );
+
+  useEffect(() => {
+    setMessage('');
+    if (!project) {
+      setProjectDraft(null);
+      setPhaseDrafts({});
+      setCheckItemDrafts({});
+      setPhaseFilter('');
+      return;
+    }
+    setProjectDraft({
+      name: project.name,
+      code: project.code,
+      status: project.status,
+      ownerName: project.ownerName,
+      plannedStartDate: dateInputValue(project.plannedStartDate),
+      plannedEndDate: dateInputValue(project.plannedEndDate),
+      description: project.description ?? '',
+      factoryId: idOf(project.factoryId),
+      workshopId: idOf(project.workshopId),
+      productionLineId: idOf(project.productionLineId)
+    });
+    setPhaseDrafts(
+      Object.fromEntries(
+        sortedPhases.map(phase => [
+          idOf(phase.id),
+          {
+            name: phase.name,
+            sequence: String(phase.sequence),
+            goal: phase.goal,
+            plannedStartDate: dateInputValue(phase.plannedStartDate),
+            plannedEndDate: dateInputValue(phase.plannedEndDate),
+            status: phase.status,
+            isActive: phase.isActive !== false
+          }
+        ])
+      )
+    );
+    setCheckItemDrafts(
+      Object.fromEntries(
+        data.checkItems.map(item => [
+          idOf(item.id),
+          {
+            title: item.title,
+            moduleId: idOf(item.moduleId),
+            projectPhaseId: idOf(item.projectPhaseId),
+            tags: (item.tags?.length ? item.tags : item.acceptanceCriteria ? [item.acceptanceCriteria] : []).join('，'),
+            plannedStartDate: dateInputValue(item.plannedStartDate),
+            plannedEndDate: dateInputValue(item.plannedEndDate),
+            ownerName: item.ownerName,
+            ownerIdaasId: item.ownerIdaasId,
+            status: item.status,
+            isActive: item.isActive !== false
+          }
+        ])
+      )
+    );
+    setPhaseFilter(idOf(sortedPhases[0]?.id));
+  }, [project?.id, data.phases, data.checkItems]);
+
+  const save = async (key: string, action: () => Promise<void>) => {
+    if (!canWrite) {
+      setMessage('当前账号只读，写操作已禁用。');
+      return;
+    }
+    setSavingKey(key);
+    setMessage('');
+    try {
+      await action();
+      setMessage('已保存。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '保存失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  if (!project || !projectDraft) {
+    return (
+      <section className="panel">
+        <h2 className="text-xl font-semibold">基础配置</h2>
+        <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段和检查项。</p>
+      </section>
+    );
+  }
+
+  return (
+    <div className="grid gap-5">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Project Base</p>
+            <h2 className="text-xl font-semibold">项目基础信息</h2>
+          </div>
+          <ReadOnlyNotice canWrite={canWrite} />
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <label>
+            <span className="field-label">工厂</span>
+            <select
+              className="select"
+              value={projectDraft.factoryId}
+              disabled={!canWrite}
+              onChange={event =>
+                setProjectDraft({
+                  ...projectDraft,
+                  factoryId: event.target.value,
+                  workshopId: '',
+                  productionLineId: ''
+                })
+              }
+            >
+              <option value="">请选择工厂</option>
+              {data.hierarchy.factories.map(factory => (
+                <option key={factory.id} value={idOf(factory.id)}>{hierarchyLabel(factory)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">车间</span>
+            <select
+              className="select"
+              value={projectDraft.workshopId}
+              disabled={!canWrite || !projectDraft.factoryId}
+              onChange={event => setProjectDraft({ ...projectDraft, workshopId: event.target.value, productionLineId: '' })}
+            >
+              <option value="">请选择车间</option>
+              {workshops.map(workshop => (
+                <option key={workshop.id} value={idOf(workshop.id)}>{hierarchyLabel(workshop)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">产线（可选）</span>
+            <select
+              className="select"
+              value={projectDraft.productionLineId}
+              disabled={!canWrite || !projectDraft.workshopId}
+              onChange={event => setProjectDraft({ ...projectDraft, productionLineId: event.target.value })}
+            >
+              <option value="">车间级项目</option>
+              {productionLines.map(line => (
+                <option key={line.id} value={idOf(line.id)}>{hierarchyLabel(line)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">项目名称</span>
+            <input className="input" value={projectDraft.name} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, name: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">项目编号</span>
+            <input className="input" value={projectDraft.code} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, code: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={projectDraft.status} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, status: event.target.value })}>
+              {['planning', 'active', 'paused', 'completed', 'archived'].map(status => (
+                <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">负责人</span>
+            <input
+              className="input"
+              list="base-config-owner-candidates"
+              value={projectDraft.ownerName}
+              disabled={!canWrite}
+              onChange={event => setProjectDraft({ ...projectDraft, ownerName: event.target.value })}
+            />
+            <datalist id="base-config-owner-candidates">
+              {data.ownerCandidates.map(owner => <option key={owner.idaasId} value={owner.displayName} />)}
+            </datalist>
+          </label>
+          <label>
+            <span className="field-label">计划开始</span>
+            <input className="input" type="date" value={projectDraft.plannedStartDate} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, plannedStartDate: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">计划结束</span>
+            <input className="input" type="date" value={projectDraft.plannedEndDate} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, plannedEndDate: event.target.value })} />
+          </label>
+          <label className="lg:col-span-3">
+            <span className="field-label">项目说明</span>
+            <textarea className="input min-h-24" value={projectDraft.description} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, description: event.target.value })} />
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={!canWrite || savingKey === 'project'}
+            onClick={() => void save('project', () => onUpdateProject(projectDraft))}
+          >
+            <Save className="h-4 w-4" />
+            {savingKey === 'project' ? '保存中' : '保存项目'}
+          </button>
+          {message ? <span className="text-sm text-ink-muted">{message}</span> : null}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Project Phases</p>
+            <h2 className="text-xl font-semibold">六阶段配置</h2>
+            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留，名称、计划、目标、排序和启用状态可按项目调整。</p>
+          </div>
+          <span className="chip">{sortedPhases.length} 阶段</span>
+        </div>
+        <div className="mt-4 grid gap-3 xl:grid-cols-2">
+          {sortedPhases.map(phase => {
+            const draft = phaseDrafts[idOf(phase.id)];
+            if (!draft) return null;
+            return (
+              <article key={phase.id} className="rounded-lg border border-outline bg-surface-soft p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-ink">Key: {phase.code}</div>
+                    <div className="text-xs text-ink-muted">默认阶段体验保留为六阶段。</div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={draft.isActive}
+                      disabled={!canWrite}
+                      onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, isActive: event.target.checked } }))}
+                    />
+                    启用
+                  </label>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label>
+                    <span className="field-label">阶段名称</span>
+                    <input className="input" value={draft.name} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, name: event.target.value } }))} />
+                  </label>
+                  <label>
+                    <span className="field-label">排序</span>
+                    <input className="input" type="number" value={draft.sequence} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, sequence: event.target.value } }))} />
+                  </label>
+                  <label>
+                    <span className="field-label">计划开始</span>
+                    <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, plannedStartDate: event.target.value } }))} />
+                  </label>
+                  <label>
+                    <span className="field-label">计划结束</span>
+                    <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
+                  </label>
+                  <label>
+                    <span className="field-label">状态</span>
+                    <select className="select" value={draft.status} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, status: event.target.value } }))}>
+                      {['not_started', 'in_progress', 'blocked', 'completed'].map(status => (
+                        <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="sm:col-span-2">
+                    <span className="field-label">阶段目标</span>
+                    <textarea className="input min-h-20" value={draft.goal} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, goal: event.target.value } }))} />
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="btn btn-primary btn--sm"
+                    type="button"
+                    disabled={!canWrite || savingKey === `phase-${phase.id}`}
+                    onClick={() => void save(`phase-${phase.id}`, () => onUpdatePhase(phase, draft))}
+                  >
+                    <Save className="h-4 w-4" />
+                    保存阶段
+                  </button>
+                  {phase.canDelete === true ? (
+                    <button
+                      className="btn btn-ghost btn--sm"
+                      type="button"
+                      disabled={!canWrite || savingKey === `phase-delete-${phase.id}`}
+                      onClick={() => {
+                        if (window.confirm(`确认删除阶段「${phase.name}」？`)) {
+                          void save(`phase-delete-${phase.id}`, () => onDeletePhase(phase));
+                        }
+                      }}
+                    >
+                      删除阶段
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Checklist</p>
+            <h2 className="text-xl font-semibold">阶段检查项配置</h2>
+            <p className="text-sm text-ink-muted">默认 7 模块 / 37 项检查体验保留，可按阶段维护名称、模块、标签、计划、负责人、启用和完成状态。</p>
+          </div>
+          <label className="min-w-[240px]">
+            <span className="field-label">阶段筛选</span>
+            <select className="select" value={selectedPhaseId} onChange={event => setPhaseFilter(event.target.value)}>
+              {sortedPhases.map(phase => (
+                <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1380px]">
+            <thead>
+              <tr>
+                <th>检查项</th>
+                <th>模块</th>
+                <th>标签</th>
+                <th>计划开始</th>
+                <th>计划结束</th>
+                <th>负责人</th>
+                <th>状态</th>
+                <th>启用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleCheckItems.map(item => {
+                const draft = checkItemDrafts[idOf(item.id)];
+                if (!draft) return null;
+                return (
+                  <tr key={item.id}>
+                    <td className="min-w-[240px]">
+                      <input className="input" value={draft.title} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, title: event.target.value } }))} />
+                    </td>
+                    <td className="min-w-[180px]">
+                      <select className="select" value={draft.moduleId} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, moduleId: event.target.value } }))}>
+                        {bySequence(data.inspectionModules).map(module => (
+                          <option key={module.id} value={idOf(module.id)}>{module.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="min-w-[180px]">
+                      <input className="input" value={draft.tags} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, tags: event.target.value } }))} />
+                    </td>
+                    <td className="min-w-[150px]">
+                      <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedStartDate: event.target.value } }))} />
+                    </td>
+                    <td className="min-w-[150px]">
+                      <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
+                    </td>
+                    <td className="min-w-[190px]">
+                      <input
+                        className="input"
+                        list="base-config-owner-candidates"
+                        value={draft.ownerName}
+                        disabled={!canWrite}
+                        onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, ownerName: event.target.value } }))}
+                      />
+                    </td>
+                    <td className="min-w-[160px]">
+                      <select className="select" value={draft.status} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, status: event.target.value } }))}>
+                        {['pending', 'in_progress', 'blocked', 'done', 'pass', 'fail', 'na', 'waived'].map(status => (
+                          <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <label className="flex items-center gap-2 text-sm text-ink-muted">
+                        <input
+                          type="checkbox"
+                          checked={draft.isActive}
+                          disabled={!canWrite}
+                          onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, isActive: event.target.checked } }))}
+                        />
+                        启用
+                      </label>
+                    </td>
+                    <td>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="btn btn-primary btn--sm"
+                          type="button"
+                          disabled={!canWrite || savingKey === `check-${item.id}`}
+                          onClick={() => void save(`check-${item.id}`, () => onUpdateCheckItem(item, draft))}
+                        >
+                          <Save className="h-4 w-4" />
+                          保存
+                        </button>
+                        {item.canDelete === true ? (
+                          <button
+                            className="btn btn-ghost btn--sm"
+                            type="button"
+                            disabled={!canWrite || savingKey === `check-delete-${item.id}`}
+                            onClick={() => {
+                              if (window.confirm(`确认删除检查项「${item.title}」？`)) {
+                                void save(`check-delete-${item.id}`, () => onDeleteCheckItem(item));
+                              }
+                            }}
+                          >
+                            删除
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!visibleCheckItems.length ? (
+                <tr>
+                  <td colSpan={9} className="text-center text-ink-muted">该阶段暂无检查项。</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -1401,6 +2274,13 @@ const projectMatchesScope = (project: Project | null | undefined, scope: ScopeSt
   if (scope.productionLineId && idOf(project.productionLineId) !== scope.productionLineId) return false;
   return true;
 };
+
+const mutationErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof ApiError && error.status === 403
+    ? '当前账号没有写权限，已保留只读访问。'
+    : error instanceof Error
+      ? error.message
+      : fallback;
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppTab>('dashboard');
@@ -1524,7 +2404,101 @@ export default function App() {
       await updateCheckItemOwner(item.id, { ownerName, ownerIdaasId });
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '负责人更新失败');
+      setError(mutationErrorMessage(err, '负责人更新失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateProject = async (draft: ProjectConfigDraft) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === draft.factoryId);
+    const workshop = workspace.hierarchy.workshops.find(item => idOf(item.id) === draft.workshopId);
+    const productionLine = workspace.hierarchy.productionLines.find(item => idOf(item.id) === draft.productionLineId);
+
+    try {
+      await updateProject(workspace.selectedProject.id, {
+        name: draft.name,
+        code: draft.code,
+        status: draft.status,
+        description: draft.description,
+        factoryId: draft.factoryId || null,
+        workshopId: draft.workshopId || null,
+        productionLineId: draft.productionLineId || null,
+        plant: factory?.name ?? workspace.selectedProject.plant,
+        workshopName: workshop?.name,
+        lineName: productionLine?.name ?? '车间级项目',
+        ownerName: draft.ownerName,
+        plannedStartDate: draft.plannedStartDate,
+        plannedEndDate: draft.plannedEndDate
+      });
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '项目基础信息保存失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdatePhase = async (phase: ProjectPhase, draft: PhaseConfigDraft) => {
+    if (!canWrite) return;
+    try {
+      await updateProjectPhase(phase.id, {
+        name: draft.name,
+        sequence: Number(draft.sequence),
+        goal: draft.goal,
+        plannedStartDate: draft.plannedStartDate,
+        plannedEndDate: draft.plannedEndDate,
+        status: draft.status,
+        isActive: draft.isActive
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '阶段配置保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeletePhase = async (phase: ProjectPhase) => {
+    if (!canWrite) return;
+    try {
+      await deleteProjectPhase(phase.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '阶段删除失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateCheckItemConfig = async (item: CheckItem, draft: CheckItemConfigDraft) => {
+    if (!canWrite) return;
+    try {
+      await updateCheckItem(item.id, {
+        title: draft.title,
+        moduleId: draft.moduleId,
+        projectPhaseId: draft.projectPhaseId,
+        tags: draft.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
+        plannedStartDate: draft.plannedStartDate,
+        plannedEndDate: draft.plannedEndDate,
+        ownerName: draft.ownerName,
+        ownerIdaasId: draft.ownerIdaasId,
+        status: draft.status,
+        isActive: draft.isActive,
+        progressPercent: isComplete(draft.status) ? 100 : item.progressPercent
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项配置保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeleteCheckItem = async (item: CheckItem) => {
+    if (!canWrite) return;
+    try {
+      await deleteCheckItem(item.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项删除失败'));
+      throw err;
     }
   };
 
@@ -1589,13 +2563,38 @@ export default function App() {
           projects={workspace.projects}
           selectedProject={workspace.selectedProject}
           canWrite={canWrite}
-          onSelectProject={projectId => void loadData(projectId)}
+          onSelectProject={projectId => {
+            void loadData(projectId);
+            setCurrentView('dashboard');
+          }}
           onCreateProject={handleCreateProject}
         />
       );
     }
+    if (currentView === 'baseConfig') {
+      return (
+        <BaseConfigView
+          data={workspace}
+          canWrite={canWrite}
+          onUpdateProject={handleUpdateProject}
+          onUpdatePhase={handleUpdatePhase}
+          onDeletePhase={handleDeletePhase}
+          onUpdateCheckItem={handleUpdateCheckItemConfig}
+          onDeleteCheckItem={handleDeleteCheckItem}
+        />
+      );
+    }
     if (currentView === 'phases') return <PhasesView data={workspace} />;
-    if (currentView === 'timeline') return <TimelineView phases={workspace.phases} />;
+    if (currentView === 'timeline') {
+      return (
+        <TimelineView
+          project={workspace.selectedProject}
+          phases={workspace.timeline?.phases.length ? workspace.timeline.phases : workspace.phases}
+          checkItems={workspace.timeline?.checkItems.length ? workspace.timeline.checkItems : workspace.checkItems}
+          modules={workspace.inspectionModules}
+        />
+      );
+    }
     if (currentView === 'checks') {
       return (
         <ChecksView
