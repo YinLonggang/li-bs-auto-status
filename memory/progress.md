@@ -76,6 +76,7 @@
 - Dashboard 模块视觉层级优化：新增 `DashboardLayer` 与对应样式，将项目状态、阶段检查、风险与签核分成带轨道线的纵向层级，改善连续 panel 堆叠的扫描体验。
 - 本轮顶层筛选下线与 Dashboard 视觉层级优化后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
 - 用户澄清返修：顶部导航固定展示 Auto Status 应用自身信息，不读取当前业务项目名称、编号、路径或状态；返修后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过。
+- Dashboard 首页新增全量统计与子项目图表层：项目状态环形图、检查项闭环环形图、子项目完成率柱状图和子项目风险压力柱状图，图表不参与筛选并保留数值图例。
 - 按 dev-environment-bootstrap 技能重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200；后端 `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
 
 ### 问题与风险

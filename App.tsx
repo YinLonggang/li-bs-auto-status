@@ -294,6 +294,195 @@ type DashboardCell = {
   phaseId: string;
 };
 
+type ChartDatum = {
+  key: string;
+  label: string;
+  value: number;
+  detail?: string;
+  color?: string;
+};
+
+const CHART_COLORS = [
+  'rgb(var(--chart-blue))',
+  'rgb(var(--chart-teal))',
+  'rgb(var(--chart-green))',
+  'rgb(var(--chart-amber))',
+  'rgb(var(--chart-red))',
+  'rgb(var(--chart-slate))'
+];
+
+const chartColor = (index: number) => CHART_COLORS[index % CHART_COLORS.length];
+
+const sumStatuses = (record: Record<string, number> | undefined, statuses: string[]) =>
+  statuses.reduce((total, status) => total + (record?.[status] ?? 0), 0);
+
+const chartDataFromRecord = (
+  record: Record<string, number>,
+  preferredOrder: string[]
+): ChartDatum[] => {
+  const orderedKeys = [
+    ...preferredOrder,
+    ...Object.keys(record)
+      .filter(key => !preferredOrder.includes(key))
+      .sort((left, right) => left.localeCompare(right))
+  ];
+
+  return orderedKeys
+    .map((key, index) => ({
+      key,
+      label: STATUS_LABEL[key] ?? key,
+      value: record[key] ?? 0,
+      color: chartColor(index)
+    }))
+    .filter(item => item.value > 0);
+};
+
+function DonutChart({
+  title,
+  description,
+  data,
+  centerLabel
+}: {
+  title: string;
+  description: string;
+  data: ChartDatum[];
+  centerLabel: string;
+}) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const radius = 54;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+
+  return (
+    <article className="chart-card">
+      <div className="chart-card-header">
+        <div>
+          <h3 className="text-base font-semibold text-ink">{title}</h3>
+          <p className="text-sm text-ink-muted">{description}</p>
+        </div>
+        <span className="chip">合计 {total}</span>
+      </div>
+      {total > 0 ? (
+        <div className="chart-donut-layout">
+          <div className="chart-donut-wrap">
+            <svg
+              className="h-40 w-40"
+              viewBox="0 0 160 160"
+              role="img"
+              aria-label={`${title}，合计 ${total}`}
+            >
+              <title>{title}</title>
+              <circle
+                cx="80"
+                cy="80"
+                r={radius}
+                fill="none"
+                stroke="rgb(var(--surface-strong))"
+                strokeWidth="20"
+              />
+              {data.map((item, index) => {
+                const segmentLength = (item.value / total) * circumference;
+                const dashOffset = -offset;
+                offset += segmentLength;
+                return (
+                  <circle
+                    key={item.key}
+                    cx="80"
+                    cy="80"
+                    r={radius}
+                    fill="none"
+                    stroke={item.color ?? chartColor(index)}
+                    strokeWidth="20"
+                    strokeDasharray={`${segmentLength} ${circumference - segmentLength}`}
+                    strokeDashoffset={dashOffset}
+                    strokeLinecap={data.length === 1 ? 'round' : 'butt'}
+                    transform="rotate(-90 80 80)"
+                  />
+                );
+              })}
+            </svg>
+            <div className="chart-donut-center">
+              <span className="text-xs text-ink-muted">{centerLabel}</span>
+              <strong>{total}</strong>
+            </div>
+          </div>
+          <dl className="chart-legend">
+            {data.map((item, index) => (
+              <div key={item.key} className="chart-legend-row">
+                <dt className="flex min-w-0 items-center gap-2">
+                  <span className="chart-swatch" style={{ background: item.color ?? chartColor(index) }} />
+                  <span className="truncate">{item.label}</span>
+                </dt>
+                <dd className="font-semibold text-ink">
+                  {item.value}
+                  <span className="ml-1 text-xs font-normal text-ink-muted">{percent((item.value / total) * 100)}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : (
+        <EmptyState message="暂无可统计数据。" />
+      )}
+    </article>
+  );
+}
+
+function HorizontalBarChart({
+  title,
+  description,
+  data,
+  maxValue,
+  valueFormatter,
+  wide = false
+}: {
+  title: string;
+  description: string;
+  data: ChartDatum[];
+  maxValue?: number;
+  valueFormatter?: (value: number) => string;
+  wide?: boolean;
+}) {
+  const max = maxValue ?? Math.max(...data.map(item => item.value), 1);
+  const formatValue = valueFormatter ?? ((value: number) => `${value}`);
+
+  return (
+    <article className={`chart-card ${wide ? 'xl:col-span-2' : ''}`}>
+      <div className="chart-card-header">
+        <div>
+          <h3 className="text-base font-semibold text-ink">{title}</h3>
+          <p className="text-sm text-ink-muted">{description}</p>
+        </div>
+        <span className="chip">{data.length} 个项目</span>
+      </div>
+      {data.length ? (
+        <div className="chart-bar-body">
+          {data.map((item, index) => {
+            const width = max > 0 ? `${Math.min(100, Math.max(0, Math.round((item.value / max) * 100)))}%` : '0%';
+            return (
+              <div key={item.key} className="chart-bar-row" aria-label={`${item.label}：${formatValue(item.value)}`}>
+                <div className="chart-bar-label">
+                  <span className="truncate text-sm font-semibold text-ink">{item.label}</span>
+                  {item.detail ? <span className="truncate text-xs text-ink-muted">{item.detail}</span> : null}
+                </div>
+                <div className="chart-bar-track" aria-hidden="true">
+                  <span
+                    className="chart-bar-fill"
+                    style={{ width, background: item.color ?? chartColor(index) }}
+                  />
+                </div>
+                <div className="chart-bar-value">{formatValue(item.value)}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState message="暂无子项目统计数据。" />
+      )}
+    </article>
+  );
+}
+
 function ScopeToolbar({
   hierarchy,
   scope,
@@ -759,6 +948,122 @@ function PortfolioOverview({
           </div>
         ))}
         {!statusEntries.length ? <EmptyState message="暂无项目状态数据。" /> : null}
+      </div>
+    </section>
+  );
+}
+
+function DashboardCharts({
+  summary,
+  stats
+}: {
+  summary: DashboardSummary | null;
+  stats: ProjectStatistics[];
+}) {
+  const summaryProjectStatusCounts = summary?.byProjectStatus ?? {};
+  const projectStatusCounts = Object.keys(summaryProjectStatusCounts).length ? summaryProjectStatusCounts : stats.reduce<Record<string, number>>((acc, stat) => {
+    acc[stat.projectStatus] = (acc[stat.projectStatus] ?? 0) + 1;
+    return acc;
+  }, {});
+  const projectStatusData = chartDataFromRecord(
+    projectStatusCounts,
+    ['active', 'planning', 'paused', 'completed', 'archived']
+  );
+  const totalCheckItems = summary?.checkItemCount ?? stats.reduce((total, stat) => total + stat.checkItemCount, 0);
+  const completedCheckItems = summary?.completedCheckItemCount ?? stats.reduce((total, stat) => total + stat.completedCheckItemCount, 0);
+  const summaryCheckItemStatusCounts = summary?.byCheckItemStatus ?? {};
+  const blockedCheckItems = Object.keys(summaryCheckItemStatusCounts).length
+    ? sumStatuses(summaryCheckItemStatusCounts, ['blocked', 'fail', 'failed', 'critical'])
+    : stats.reduce((total, stat) => total + stat.blockedCheckItemCount, 0);
+  const openCheckItems = Math.max(0, totalCheckItems - completedCheckItems - blockedCheckItems);
+  const checkClosureData = [
+    {
+      key: 'completed',
+      label: '已完成',
+      value: completedCheckItems,
+      color: 'rgb(var(--chart-green))'
+    },
+    {
+      key: 'blocked',
+      label: '阻塞/失败',
+      value: blockedCheckItems,
+      color: 'rgb(var(--chart-red))'
+    },
+    {
+      key: 'open',
+      label: '待推进',
+      value: openCheckItems,
+      color: 'rgb(var(--chart-amber))'
+    }
+  ].filter(item => item.value > 0);
+  const completionBars = stats.map(stat => ({
+    key: idOf(stat.projectId),
+    label: stat.projectName,
+    value: Math.round(stat.completionRate),
+    detail: `${stat.completedCheckItemCount}/${stat.checkItemCount} 检查项 · ${stat.currentPhaseName ?? '未进入阶段'}`,
+    color:
+      stat.completionRate >= 85
+        ? 'rgb(var(--chart-green))'
+        : stat.completionRate >= 60
+          ? 'rgb(var(--chart-teal))'
+          : stat.completionRate >= 35
+            ? 'rgb(var(--chart-amber))'
+            : 'rgb(var(--chart-red))'
+  }));
+  const riskBars = [...stats]
+    .sort((left, right) => {
+      const leftRisk = left.overdueCount + left.openKeyIssueCount + left.pendingCollisionReportCount;
+      const rightRisk = right.overdueCount + right.openKeyIssueCount + right.pendingCollisionReportCount;
+      return rightRisk - leftRisk || left.projectName.localeCompare(right.projectName);
+    })
+    .map(stat => {
+      const riskValue = stat.overdueCount + stat.openKeyIssueCount + stat.pendingCollisionReportCount;
+      return {
+        key: idOf(stat.projectId),
+        label: stat.projectName,
+        value: riskValue,
+        detail: `逾期 ${stat.overdueCount} · 问题 ${stat.openKeyIssueCount} · 签核 ${stat.pendingCollisionReportCount}`,
+        color: riskValue > 0 ? 'rgb(var(--chart-red))' : 'rgb(var(--chart-green))'
+      };
+    });
+
+  return (
+    <section className="dashboard-chart-section">
+      <div className="dashboard-chart-header">
+        <div>
+          <p className="kicker">Dashboard Charts</p>
+          <h2 className="text-xl font-semibold">全量统计与子项目图表</h2>
+          <p className="text-sm text-ink-muted">用全量分布判断整体健康度，用子项目柱状图定位需要优先处理的项目。</p>
+        </div>
+        <span className="chip">不参与页面筛选</span>
+      </div>
+      <div className="dashboard-chart-grid">
+        <DonutChart
+          title="所有项目状态"
+          description="按项目当前状态统计。"
+          data={projectStatusData}
+          centerLabel="项目"
+        />
+        <DonutChart
+          title="所有检查项闭环"
+          description="已完成、阻塞和待推进检查项分布。"
+          data={checkClosureData}
+          centerLabel="检查项"
+        />
+        <HorizontalBarChart
+          title="子项目完成率"
+          description="每个项目的检查项完成情况。"
+          data={completionBars}
+          maxValue={100}
+          valueFormatter={value => `${Math.round(value)}%`}
+          wide
+        />
+        <HorizontalBarChart
+          title="子项目风险压力"
+          description="按逾期、未关闭重点问题和待签核一页纸汇总。"
+          data={riskBars}
+          wide
+        />
       </div>
     </section>
   );
@@ -1523,6 +1828,7 @@ function DashboardView({
   return (
     <div className="grid gap-5">
       <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
+      <DashboardCharts summary={data.dashboardSummary} stats={projectStats} />
       <ProjectStatisticsList
         stats={filteredProjectStats}
         selectedProjectId={data.selectedProject?.id}

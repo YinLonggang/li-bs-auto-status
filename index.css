@@ -18,6 +18,12 @@
     --primary-strong: 29 78 216;
     --accent: 20 184 166;
     --accent-soft: 45 212 191;
+    --chart-blue: 37 99 235;
+    --chart-teal: 20 184 166;
+    --chart-green: 22 163 74;
+    --chart-amber: 217 119 6;
+    --chart-red: 220 38 38;
+    --chart-slate: 100 116 139;
   }
 
   [data-theme='light'] {
@@ -35,6 +41,12 @@
     --primary-strong: 30 64 175;
     --accent: 13 148 136;
     --accent-soft: 20 184 166;
+    --chart-blue: 29 78 216;
+    --chart-teal: 13 148 136;
+    --chart-green: 22 163 74;
+    --chart-amber: 180 83 9;
+    --chart-red: 185 28 28;
+    --chart-slate: 71 85 105;
   }
 
   html,
@@ -161,6 +173,78 @@
 
   .dashboard-flow {
     @apply grid gap-7;
+  }
+
+  .dashboard-chart-section {
+    @apply grid gap-4;
+  }
+
+  .dashboard-chart-header {
+    @apply flex flex-wrap items-start justify-between gap-3 px-1;
+  }
+
+  .dashboard-chart-grid {
+    @apply grid gap-4 xl:grid-cols-4;
+  }
+
+  .chart-card {
+    @apply rounded-lg border border-outline/90 bg-surface p-4 shadow-card sm:p-5;
+  }
+
+  .chart-card-header {
+    @apply flex flex-wrap items-start justify-between gap-3;
+  }
+
+  .chart-donut-layout {
+    @apply mt-5 grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center;
+  }
+
+  .chart-donut-wrap {
+    @apply relative mx-auto flex h-40 w-40 items-center justify-center;
+  }
+
+  .chart-donut-center {
+    @apply absolute inset-0 flex flex-col items-center justify-center text-center;
+  }
+
+  .chart-donut-center strong {
+    @apply text-2xl font-semibold text-ink;
+  }
+
+  .chart-legend {
+    @apply grid gap-2 text-sm;
+  }
+
+  .chart-legend-row {
+    @apply flex items-center justify-between gap-3 rounded-lg border border-outline/70 bg-surface-soft px-3 py-2 text-ink-muted;
+  }
+
+  .chart-swatch {
+    @apply h-2.5 w-2.5 shrink-0 rounded-full;
+  }
+
+  .chart-bar-body {
+    @apply mt-5 grid max-h-[420px] gap-3 overflow-y-auto pr-1;
+  }
+
+  .chart-bar-row {
+    @apply grid gap-2 rounded-lg border border-outline/70 bg-surface-soft px-3 py-2 sm:grid-cols-[minmax(150px,240px)_1fr_auto] sm:items-center;
+  }
+
+  .chart-bar-label {
+    @apply grid min-w-0 gap-0.5;
+  }
+
+  .chart-bar-track {
+    @apply h-2.5 overflow-hidden rounded-full bg-surface-strong;
+  }
+
+  .chart-bar-fill {
+    @apply block h-full rounded-full;
+  }
+
+  .chart-bar-value {
+    @apply text-right text-sm font-semibold tabular-nums text-ink;
   }
 
   .dashboard-layer {
