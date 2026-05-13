@@ -12,14 +12,17 @@ import {
   FileText,
   Flag,
   Lock,
+  Moon,
   Paperclip,
   Plus,
   RefreshCcw,
   Save,
   Search,
   ShieldCheck,
+  Sun,
   Target,
   Trash2,
+  UserRound,
   Workflow
 } from 'lucide-react';
 import AuthPromptCard from './components/AuthPromptCard';
@@ -83,19 +86,6 @@ const EMPTY_WORKSPACE: WorkspaceData = {
   reports: [],
   exportTasks: [],
   ownerCandidates: []
-};
-
-const VIEW_META: Record<AppTab, { title: string; subtitle: string }> = {
-  dashboard: { title: 'Dashboard', subtitle: '项目状态、阶段进度、检查风险和签核' },
-  projects: { title: '项目列表', subtitle: '项目切换与状态' },
-  baseConfig: { title: '配置中心', subtitle: '项目基础信息、项目阶段、检查项、模块和负责人候选' },
-  phases: { title: '阶段配置', subtitle: '模板与项目阶段实例' },
-  timeline: { title: '阶段进度', subtitle: '计划、实际和当前进展' },
-  checks: { title: '检查项', subtitle: '检查台账与负责人维护' },
-  issues: { title: '重点问题', subtitle: '风险、遏制与关闭' },
-  collision: { title: '碰撞一页纸', subtitle: 'A3/8D 轻量评审材料' },
-  reports: { title: '报告导出', subtitle: '导出定义与任务队列' },
-  settings: { title: '配置管理', subtitle: '阶段模板、模块和检查项模板' }
 };
 
 const TONE_CLASS: Record<StatusTone, string> = {
@@ -231,6 +221,12 @@ type ScopeState = {
   productionLineId: string;
 };
 
+const EMPTY_SCOPE: ScopeState = {
+  factoryId: '',
+  workshopId: '',
+  productionLineId: ''
+};
+
 type SearchFilterState = {
   keyword: string;
   status: string;
@@ -297,56 +293,6 @@ type DashboardCell = {
   moduleId: string;
   phaseId: string;
 };
-
-function HeaderProjectSelector({
-  projects,
-  selectedProject,
-  summary,
-  onSelectProject,
-  onCreateExport,
-  canWrite
-}: {
-  projects: Project[];
-  selectedProject: Project | null;
-  summary: WorkspaceData['dashboardSummary'];
-  onSelectProject: (projectId: string | number) => void;
-  onCreateExport: () => void;
-  canWrite: boolean;
-}) {
-  const progress = summary?.completionRate ?? selectedProject?.progressPercent ?? 0;
-  const options = projects.length ? projects : selectedProject ? [selectedProject] : [];
-
-  return (
-    <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-      <label className="flex min-h-11 min-w-[260px] flex-1 items-center gap-2 rounded-lg border border-outline bg-surface-strong px-3 text-sm lg:min-w-[360px] lg:flex-none">
-        <span className="shrink-0 text-xs font-semibold text-ink-muted">项目</span>
-        <select
-          className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-ink outline-none"
-          value={selectedProject ? idOf(selectedProject.id) : ''}
-          onChange={event => onSelectProject(event.target.value)}
-        >
-          {options.length ? null : <option value="">暂无项目</option>}
-          {options.map(project => (
-            <option key={project.id} value={idOf(project.id)}>
-              {project.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex min-h-11 items-center gap-2 rounded-lg border border-outline bg-surface-strong px-3">
-        <span className="text-xs text-ink-muted">总完成率</span>
-        <div className="h-2 w-24 rounded-full bg-surface">
-          <div className="h-2 rounded-full bg-accent" style={{ width: percent(progress) }} />
-        </div>
-        <span className="min-w-10 text-right text-sm font-semibold text-accent">{percent(progress)}</span>
-      </div>
-      <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !selectedProject} onClick={onCreateExport}>
-        <FileDown className="h-4 w-4" />
-        导出
-      </button>
-    </div>
-  );
-}
 
 function ScopeToolbar({
   hierarchy,
@@ -550,6 +496,26 @@ function DashboardStats({
       <MetricCard label="重点问题" value={summary?.openKeyIssueCount ?? openIssues} detail={`${summary?.highOpenKeyIssueCount ?? 0} 个高风险`} />
       <MetricCard label="导出/签核" value={summary?.exportJobCount ?? signedReports} detail={`${summary?.pendingCollisionReportCount ?? 0} 个一页纸待签`} />
     </div>
+  );
+}
+
+function DashboardLayer({
+  index,
+  title,
+  children
+}: {
+  index: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="dashboard-layer">
+      <div className="dashboard-layer-header">
+        <span className="dashboard-layer-index">{index}</span>
+        <h2 className="dashboard-layer-title">{title}</h2>
+      </div>
+      <div className="dashboard-layer-body">{children}</div>
+    </section>
   );
 }
 
@@ -947,8 +913,8 @@ function ProjectDashboardExpansion({
   onCreateExport: () => void;
 }) {
   return (
-    <div className="grid gap-5">
-      <section className="rounded-lg border border-outline bg-surface p-4">
+    <div className="dashboard-flow">
+      <section className="panel dashboard-context-panel">
         <div className="panel-header">
           <div>
             <p className="kicker">Project Context</p>
@@ -958,28 +924,30 @@ function ProjectDashboardExpansion({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <span className="chip"><FactoryIcon className="h-3.5 w-3.5" />匹配项目 {visibleProjects.length}</span>
+            <span className="chip"><FactoryIcon className="h-3.5 w-3.5" />项目总数 {visibleProjects.length}</span>
             {data.selectedProject ? <StatusPill status={data.selectedProject.status} /> : <StatusPill status={fallbackStat.projectStatus} />}
           </div>
         </div>
       </section>
-      <SingleProjectStatistics
-        project={data.selectedProject}
-        stat={selectedProjectStat ?? fallbackStat}
-        phases={phases}
-        checkItems={checkItems}
-        embedded
-      />
-      <PhaseRail phases={phases} />
-      <DashboardStats
-        project={data.selectedProject}
-        summary={data.dashboardSummary}
-        phases={phases}
-        checkItems={filterCheckItemsByPhases(data.checkItems, phases)}
-        keyIssues={data.keyIssues}
-        exportTasks={data.exportTasks}
-      />
-      <div className="grid gap-5">
+      <DashboardLayer index="01" title="项目状态">
+        <SingleProjectStatistics
+          project={data.selectedProject}
+          stat={selectedProjectStat ?? fallbackStat}
+          phases={phases}
+          checkItems={checkItems}
+          embedded
+        />
+        <PhaseRail phases={phases} />
+        <DashboardStats
+          project={data.selectedProject}
+          summary={data.dashboardSummary}
+          phases={phases}
+          checkItems={filterCheckItemsByPhases(data.checkItems, phases)}
+          keyIssues={data.keyIssues}
+          exportTasks={data.exportTasks}
+        />
+      </DashboardLayer>
+      <DashboardLayer index="02" title="阶段检查">
         <DashboardDetailFilters
           filters={detailFilters}
           onChange={onDetailFiltersChange}
@@ -1001,10 +969,12 @@ function ProjectDashboardExpansion({
           selectedCell={activeCell}
           canWrite={canWrite}
         />
-      </div>
-      <KeyIssueTable issues={data.keyIssues} />
-      <CollisionOnePager reports={data.collisionReports} />
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-4 py-3">
+      </DashboardLayer>
+      <DashboardLayer index="03" title="风险与签核">
+        <KeyIssueTable issues={data.keyIssues} />
+        <CollisionOnePager reports={data.collisionReports} />
+      </DashboardLayer>
+      <div className="dashboard-actionbar">
         <div className="flex items-center gap-2 text-sm text-ink-muted">
           <Flag className="h-4 w-4 text-accent" />
           <span>默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
@@ -1502,24 +1472,18 @@ function CollisionOnePager({ reports }: { reports: CollisionReport[] }) {
 function DashboardView({
   data,
   visibleProjects,
-  scope,
   selectedCell,
   canWrite,
-  onScopeChange,
   onSelectProject,
   onSelectCell,
-  onCreateProject,
   onCreateExport
 }: {
   data: WorkspaceData;
   visibleProjects: Project[];
-  scope: ScopeState;
   selectedCell: DashboardCell | null;
   canWrite: boolean;
-  onScopeChange: (scope: ScopeState) => void;
   onSelectProject: (projectId: string | number) => void;
   onSelectCell: (cell: DashboardCell) => void;
-  onCreateProject: () => void;
   onCreateExport: () => void;
 }) {
   const [dashboardFilters, setDashboardFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -1558,7 +1522,6 @@ function DashboardView({
 
   return (
     <div className="grid gap-5">
-      <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
       <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
       <ProjectStatisticsList
         stats={filteredProjectStats}
@@ -3858,7 +3821,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<AppTab>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | number | undefined>();
-  const [scope, setScope] = useState<ScopeState>({ factoryId: '', workshopId: '', productionLineId: '' });
+  const [scope, setScope] = useState<ScopeState>(EMPTY_SCOPE);
   const [selectedDashboardCell, setSelectedDashboardCell] = useState<DashboardCell | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceData>(EMPTY_WORKSPACE);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -3919,18 +3882,17 @@ export default function App() {
     setSelectedDashboardCell(null);
   }, [workspace.selectedProject?.id]);
 
+  useEffect(() => {
+    if (currentView !== 'dashboard') return;
+    if (!scope.factoryId && !scope.workshopId && !scope.productionLineId) return;
+    setScope(EMPTY_SCOPE);
+    void loadData(selectedProjectId, EMPTY_SCOPE);
+  }, [currentView]);
+
   const visibleProjects = useMemo(
     () => workspace.projects.filter(project => projectMatchesScope(project, scope)),
     [workspace.projects, scope]
   );
-
-  const viewMeta = VIEW_META[currentView];
-  const headerStatus = useMemo(() => {
-    if (loading) return { icon: Clock3, label: '同步中', tone: 'text-warning' };
-    if (error) return { icon: AlertTriangle, label: '接口异常', tone: 'text-danger' };
-    return { icon: CheckCircle2, label: '已同步', tone: 'text-success' };
-  }, [error, loading]);
-  const HeaderIcon = headerStatus.icon;
 
   const handleScopeChange = (nextScope: ScopeState) => {
     setScope(nextScope);
@@ -4154,14 +4116,11 @@ export default function App() {
       return (
         <DashboardView
           data={workspace}
-          visibleProjects={visibleProjects}
-          scope={scope}
+          visibleProjects={workspace.projects}
           selectedCell={selectedDashboardCell}
           canWrite={canWrite}
-          onScopeChange={handleScopeChange}
-          onSelectProject={projectId => void loadData(projectId)}
+          onSelectProject={projectId => void loadData(projectId, EMPTY_SCOPE)}
           onSelectCell={setSelectedDashboardCell}
-          onCreateProject={() => void handleCreateProject('baseConfig')}
           onCreateExport={() => void handleCreateProjectExport()}
         />
       );
@@ -4262,43 +4221,47 @@ export default function App() {
       />
       <div className={`min-w-0 flex-1 transition-[padding] duration-200 ${isCollapsed ? 'lg:pl-20' : 'lg:pl-72'}`}>
         <header className="sticky top-0 z-20 border-b border-outline bg-surface/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
-          <div className="mx-auto flex max-w-[1520px] flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
+          <div className="mx-auto flex max-w-[1520px] flex-wrap items-center justify-between gap-4">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <MobileMenuButton onClick={() => setSidebarOpen(true)} />
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="truncate text-lg font-semibold sm:text-xl">{viewMeta.title}</h1>
-                  <span className={`chip ${headerStatus.tone}`}>
-                    <HeaderIcon className="h-3.5 w-3.5" />
-                    {headerStatus.label}
-                  </span>
+                <p className="kicker">LI-BS-AUTO-STATUS</p>
+                <h1 className="truncate text-lg font-semibold sm:text-xl">
+                  Auto Status 自动化项目状态
+                </h1>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+                  <span className="truncate">焊装自动化六阶段项目状态、检查项、风险签核与一页纸导出</span>
                 </div>
-                <p className="truncate text-xs text-ink-muted">{viewMeta.subtitle}</p>
               </div>
             </div>
-            <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
-              <HeaderProjectSelector
-                projects={visibleProjects}
-                selectedProject={workspace.selectedProject}
-                summary={workspace.dashboardSummary}
-                onSelectProject={projectId => void loadData(projectId)}
-                onCreateExport={() => void handleCreateProjectExport()}
-                canWrite={canWrite}
-              />
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {profile ? (
-                <span className="chip">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  {profile.permissionLabel}
-                </span>
-              ) : null}
-              <button className="btn btn-ghost btn--sm" type="button" onClick={() => void loadData()}>
-                <RefreshCcw className="h-4 w-4" />
-                刷新
+                <div className="header-user">
+                  <UserRound className="h-4 w-4 text-primary" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-ink">{profile.displayName}</span>
+                    <span className="block truncate text-[11px] text-ink-muted">{profile.permissionLabel}</span>
+                  </span>
+                </div>
+              ) : (
+                <div className="header-user">
+                  <UserRound className="h-4 w-4 text-ink-muted" />
+                  <span className="text-sm font-semibold text-ink-muted">未登录</span>
+                </div>
+              )}
+              <button
+                className="btn btn-ghost btn--sm"
+                type="button"
+                onClick={toggleTheme}
+                aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+              >
+                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {theme === 'dark' ? '浅色' : '深色'}
               </button>
             </div>
           </div>
         </header>
-        <main className="page-shell">
+        <main className="page-shell" aria-busy={loading}>
           {!profile && !authWarning ? (
             <AuthPromptCard loginUrl={LOGIN_URL} authError={authWarning} onRefresh={() => void loadAuth()} />
           ) : null}

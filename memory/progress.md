@@ -72,6 +72,11 @@
 - 用户澄清返修：Dashboard 项目筛选归入项目列表栏，`ProjectStatisticsList` 在同一 panel 内承载筛选区和横向项目统计表，顶层顺序保持 ScopeToolbar -> PortfolioOverview -> ProjectStatisticsList -> ProjectDashboardExpansion。
 - 本轮最终重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200；后端 `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
 - 本轮泳道/重点问题返修后再次重启 3005，`GET http://127.0.0.1:3005/` 返回 HTTP 200。
+- Dashboard 顶层筛选下线：首页不再渲染 `ScopeToolbar`，sticky header 不再放项目下拉、导出和刷新；顶部收敛为 `li-bs-auto-status` 应用自身介绍、用户信息和明暗切换，不再跟随当前选中业务项目。
+- Dashboard 模块视觉层级优化：新增 `DashboardLayer` 与对应样式，将项目状态、阶段检查、风险与签核分成带轨道线的纵向层级，改善连续 panel 堆叠的扫描体验。
+- 本轮顶层筛选下线与 Dashboard 视觉层级优化后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
+- 用户澄清返修：顶部导航固定展示 Auto Status 应用自身信息，不读取当前业务项目名称、编号、路径或状态；返修后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过。
+- 按 dev-environment-bootstrap 技能重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200；后端 `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
 
 ### 问题与风险
 
