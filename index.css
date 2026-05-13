@@ -107,6 +107,10 @@
     @apply border-outline bg-surface-strong text-ink-muted hover:bg-surface-soft hover:text-ink;
   }
 
+  .btn-secondary {
+    @apply border-primary/30 bg-primary/10 text-primary hover:bg-primary/20;
+  }
+
   .input {
     @apply min-h-11 w-full rounded-lg border border-outline bg-surface-strong px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20;
   }

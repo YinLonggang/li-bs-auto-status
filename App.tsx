@@ -2426,11 +2426,12 @@ function BaseConfigView({
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
+  const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
+  const [transferTargetPhaseId, setTransferTargetPhaseId] = useState('');
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
   const project = data.selectedProject;
   const sortedPhases = bySequence(data.phases);
-  const selectedPhaseId = checkFilters.phaseId;
   const visibleProjects = data.projects.filter(item => {
     if (scope.factoryId && idOf(item.factoryId) !== scope.factoryId) return false;
     if (scope.workshopId && idOf(item.workshopId) !== scope.workshopId) return false;
@@ -2447,10 +2448,21 @@ function BaseConfigView({
     if (!textMatches(phaseFilters.keyword, [phase.name, phase.code, phase.goal])) return false;
     return dateRangeMatches(phase.plannedStartDate, phase.plannedEndDate, phaseFilters.startDate, phaseFilters.endDate);
   });
+  const selectedPhaseId = visiblePhases.length
+    ? visiblePhases.some(phase => idOf(phase.id) === selectedPhaseConfigId)
+      ? selectedPhaseConfigId
+      : idOf(visiblePhases[0]?.id)
+    : '';
+  const selectedConfigPhase = sortedPhases.find(phase => idOf(phase.id) === selectedPhaseId);
+  const selectedPhaseDraft = selectedConfigPhase ? phaseDrafts[idOf(selectedConfigPhase.id)] : undefined;
+  const selectedPhaseAllCheckItems = selectedPhaseId
+    ? data.checkItems.filter(item => idOf(item.projectPhaseId) === selectedPhaseId)
+    : [];
+  const transferTargetPhase = sortedPhases.find(phase => idOf(phase.id) === transferTargetPhaseId);
   const visibleCheckItems = data.checkItems.filter(item => {
     const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
     const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
-    if (selectedPhaseId && idOf(item.projectPhaseId) !== selectedPhaseId) return false;
+    if (!selectedPhaseId || idOf(item.projectPhaseId) !== selectedPhaseId) return false;
     if (checkFilters.moduleId && idOf(item.moduleId) !== checkFilters.moduleId) return false;
     if (checkFilters.status && item.status !== checkFilters.status) return false;
     if (checkFilters.owner && !textMatches(checkFilters.owner, [item.ownerName, item.ownerIdaasId])) return false;
@@ -2468,7 +2480,7 @@ function BaseConfigView({
   const projectStatusOptions = statusOptionValues(data.projects.map(item => item.status));
   const phaseStatusOptions = statusOptionValues(data.phases.map(item => item.status));
   const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
-  const selectedPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
+  const selectedNewCheckPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
   const selectedModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
   const projectWorkbench = (
     <>
@@ -2509,34 +2521,74 @@ function BaseConfigView({
             </label>
           </FilterShell>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {visibleProjects.map(item => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelectProject(item.id)}
-              className={`rounded-lg border p-4 text-left transition hover:border-primary/60 ${
-                idOf(project?.id) === idOf(item.id) ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft'
-              }`}
-              aria-label={`选择项目 ${item.name}`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-base font-semibold text-ink">{item.name}</div>
-                  <div className="mt-1 text-xs text-ink-muted">{item.code}</div>
-                </div>
-                <StatusPill status={item.status} />
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-ink-muted">
-                <span>{item.plant || '未设置工厂'}</span>
-                <span>{item.workshopName || item.lineName || '未设置范围'}</span>
-                <span>负责人：{item.ownerName}</span>
-                <span>进度：{percent(item.progressPercent)}</span>
-              </div>
-            </button>
-          ))}
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1120px]">
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>项目</th>
+                <th>范围</th>
+                <th>负责人</th>
+                <th>计划窗口</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleProjects.map((item, index) => {
+                const active = idOf(project?.id) === idOf(item.id);
+                return (
+                  <tr
+                    key={item.id}
+                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    tabIndex={0}
+                    onClick={() => onSelectProject(item.id)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelectProject(item.id);
+                      }
+                    }}
+                    aria-selected={active}
+                  >
+                    <td>{index + 1}</td>
+                    <td className="min-w-[260px]">
+                      <div className="font-semibold text-ink">{item.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{item.code}</div>
+                    </td>
+                    <td className="min-w-[240px]">
+                      <div>{item.plant || item.factoryName || '未设置工厂'}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{item.workshopName || item.lineName || '未设置范围'}</div>
+                    </td>
+                    <td>{item.ownerName || '未设置'}</td>
+                    <td className="min-w-[190px]">{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
+                    <td><StatusPill status={item.status} /></td>
+                    <td>{percent(item.progressPercent)}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          onSelectProject(item.id);
+                        }}
+                        aria-label={`配置项目 ${item.name}`}
+                      >
+                        配置
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!visibleProjects.length ? (
+                <tr>
+                  <td colSpan={8} className="text-center text-ink-muted">当前范围与筛选下暂无项目，可调整筛选或按范围创建。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
-        {!visibleProjects.length ? <div className="mt-4"><EmptyState message="当前范围与筛选下暂无项目，可调整筛选或按范围创建。" /></div> : null}
       </section>
     </>
   );
@@ -2548,6 +2600,8 @@ function BaseConfigView({
       setPhaseDrafts({});
       setCheckItemDrafts({});
       setCheckFilters(EMPTY_FILTERS);
+      setSelectedPhaseConfigId('');
+      setTransferTargetPhaseId('');
       setNewCheckDraft(null);
       return;
     }
@@ -2600,7 +2654,11 @@ function BaseConfigView({
     );
     const firstPhaseId = idOf(sortedPhases[0]?.id);
     const firstModuleId = idOf(bySequence(data.inspectionModules)[0]?.id);
-    setCheckFilters(current => ({ ...current, phaseId: current.phaseId }));
+    setCheckFilters(current => ({ ...current, phaseId: '' }));
+    setSelectedPhaseConfigId(current =>
+      sortedPhases.some(phase => idOf(phase.id) === current) ? current : firstPhaseId
+    );
+    setTransferTargetPhaseId('');
     setNewCheckDraft({
       title: '',
       moduleId: firstModuleId,
@@ -2614,6 +2672,17 @@ function BaseConfigView({
       isActive: true
     });
   }, [project?.id, data.phases, data.checkItems]);
+
+  useEffect(() => {
+    if (!newCheckDraft || !selectedPhaseId || newCheckDraft.projectPhaseId === selectedPhaseId) return;
+    const phase = sortedPhases.find(item => idOf(item.id) === selectedPhaseId);
+    setNewCheckDraft({
+      ...newCheckDraft,
+      projectPhaseId: selectedPhaseId,
+      plannedStartDate: dateInputValue(phase?.plannedStartDate),
+      plannedEndDate: dateInputValue(phase?.plannedEndDate)
+    });
+  }, [selectedPhaseId]);
 
   const save = async (key: string, action: () => Promise<void>) => {
     if (!canWrite) {
@@ -2630,6 +2699,37 @@ function BaseConfigView({
     } finally {
       setSavingKey('');
     }
+  };
+
+  const selectPhaseForConfig = (phase: ProjectPhase) => {
+    const phaseId = idOf(phase.id);
+    setSelectedPhaseConfigId(phaseId);
+    setTransferTargetPhaseId('');
+    setNewCheckDraft(current =>
+      current
+        ? {
+            ...current,
+            projectPhaseId: phaseId,
+            plannedStartDate: dateInputValue(phase.plannedStartDate),
+            plannedEndDate: dateInputValue(phase.plannedEndDate)
+          }
+        : current
+    );
+  };
+
+  const moveSelectedPhaseCheckItems = async () => {
+    if (!selectedPhaseId || !transferTargetPhaseId || selectedPhaseId === transferTargetPhaseId) return;
+    for (const item of selectedPhaseAllCheckItems) {
+      const draft = checkItemDrafts[idOf(item.id)];
+      if (!draft) continue;
+      await onUpdateCheckItem(item, {
+        ...draft,
+        projectPhaseId: transferTargetPhaseId,
+        plannedStartDate: draft.plannedStartDate || dateInputValue(transferTargetPhase?.plannedStartDate),
+        plannedEndDate: draft.plannedEndDate || dateInputValue(transferTargetPhase?.plannedEndDate)
+      });
+    }
+    setTransferTargetPhaseId('');
   };
 
   if (!project || !projectDraft) {
@@ -2814,117 +2914,259 @@ function BaseConfigView({
             </label>
           </FilterShell>
         </div>
-        <div className="mt-4 grid gap-3 xl:grid-cols-2">
-          {visiblePhases.map(phase => {
-            const draft = phaseDrafts[idOf(phase.id)];
-            if (!draft) return null;
-            return (
-              <article key={phase.id} className="rounded-lg border border-outline bg-surface-soft p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-ink">Key: {phase.code}</div>
-                    <div className="text-xs text-ink-muted">关闭启用后，其它业务视图不再展示该阶段。</div>
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-ink-muted">
-                    <input
-                      type="checkbox"
-                      checked={draft.isActive}
-                      disabled={!canWrite}
-                      onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, isActive: event.target.checked } }))}
-                    />
-                    启用
-                  </label>
-                </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label>
-                    <span className="field-label">阶段名称</span>
-                    <input className="input" value={draft.name} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, name: event.target.value } }))} />
-                  </label>
-                  <label>
-                    <span className="field-label">排序</span>
-                    <input className="input" type="number" value={draft.sequence} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, sequence: event.target.value } }))} />
-                  </label>
-                  <label>
-                    <span className="field-label">计划开始</span>
-                    <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, plannedStartDate: event.target.value } }))} />
-                  </label>
-                  <label>
-                    <span className="field-label">计划结束</span>
-                    <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
-                  </label>
-                  <label>
-                    <span className="field-label">状态</span>
-                    <select className="select" value={draft.status} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, status: event.target.value } }))}>
-                      {['not_started', 'in_progress', 'blocked', 'completed'].map(status => (
-                        <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="sm:col-span-2">
-                    <span className="field-label">阶段目标</span>
-                    <textarea className="input min-h-20" value={draft.goal} disabled={!canWrite} onChange={event => setPhaseDrafts(current => ({ ...current, [idOf(phase.id)]: { ...draft, goal: event.target.value } }))} />
-                  </label>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    className="btn btn-primary btn--sm"
-                    type="button"
-                    disabled={!canWrite || savingKey === `phase-${phase.id}`}
-                    onClick={() => void save(`phase-${phase.id}`, () => onUpdatePhase(phase, draft))}
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1160px]">
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>阶段</th>
+                <th>阶段 Key</th>
+                <th>计划窗口</th>
+                <th>状态</th>
+                <th>启用</th>
+                <th>检查项</th>
+                <th>完成</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visiblePhases.map((phase, index) => {
+                const draft = phaseDrafts[idOf(phase.id)];
+                const phaseItems = data.checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+                const completedCount = phaseItems.filter(item => isComplete(item.status)).length;
+                const active = selectedPhaseId === idOf(phase.id);
+                return (
+                  <tr
+                    key={phase.id}
+                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    tabIndex={0}
+                    onClick={() => selectPhaseForConfig(phase)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectPhaseForConfig(phase);
+                      }
+                    }}
+                    aria-selected={active}
                   >
-                    <Save className="h-4 w-4" />
-                    保存阶段
-                  </button>
-                  {phase.canDelete === true ? (
-                    <button
-                      className="btn btn-ghost btn--sm"
-                      type="button"
-                      disabled={!canWrite || savingKey === `phase-delete-${phase.id}`}
-                      onClick={() => {
-                        if (window.confirm(`确认删除阶段「${phase.name}」？`)) {
-                          void save(`phase-delete-${phase.id}`, () => onDeletePhase(phase));
-                        }
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      删除阶段
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            );
-          })}
+                    <td>{index + 1}</td>
+                    <td className="min-w-[180px]">
+                      <div className="font-semibold text-ink">{phase.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{phase.goal || '未设置阶段目标'}</div>
+                    </td>
+                    <td>{phase.code}</td>
+                    <td className="min-w-[190px]">{formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</td>
+                    <td><StatusPill status={draft?.status ?? phase.status} /></td>
+                    <td>{draft?.isActive ? '启用' : '停用'}</td>
+                    <td>{phaseItems.length} 项</td>
+                    <td>{completedCount}/{phaseItems.length}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          selectPhaseForConfig(phase);
+                        }}
+                        aria-label={`配置阶段 ${phase.name}`}
+                      >
+                        配置
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!visiblePhases.length ? (
+                <tr>
+                  <td colSpan={9} className="text-center text-ink-muted">当前筛选下暂无阶段。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
-        {!visiblePhases.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无阶段。" /></div> : null}
+        {selectedConfigPhase && selectedPhaseDraft ? (
+          <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-ink">{selectedConfigPhase.name} 阶段维护</div>
+                <div className="text-xs text-ink-muted">Key: {selectedConfigPhase.code} · {selectedPhaseAllCheckItems.length} 项检查配置</div>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={selectedPhaseDraft.isActive}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, isActive: event.target.checked }
+                    }))
+                  }
+                />
+                启用
+              </label>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-5">
+              <label>
+                <span className="field-label">阶段名称</span>
+                <input
+                  className="input"
+                  value={selectedPhaseDraft.name}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, name: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span className="field-label">排序</span>
+                <input
+                  className="input"
+                  type="number"
+                  value={selectedPhaseDraft.sequence}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, sequence: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span className="field-label">计划开始</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={selectedPhaseDraft.plannedStartDate}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, plannedStartDate: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span className="field-label">计划结束</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={selectedPhaseDraft.plannedEndDate}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, plannedEndDate: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span className="field-label">状态</span>
+                <select
+                  className="select"
+                  value={selectedPhaseDraft.status}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, status: event.target.value }
+                    }))
+                  }
+                >
+                  {['not_started', 'in_progress', 'blocked', 'completed'].map(status => (
+                    <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="lg:col-span-5">
+                <span className="field-label">阶段目标</span>
+                <textarea
+                  className="input min-h-20"
+                  value={selectedPhaseDraft.goal}
+                  disabled={!canWrite}
+                  onChange={event =>
+                    setPhaseDrafts(current => ({
+                      ...current,
+                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, goal: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <button
+                className="btn btn-primary btn--sm"
+                type="button"
+                disabled={!canWrite || savingKey === `phase-${selectedConfigPhase.id}`}
+                onClick={() => void save(`phase-${selectedConfigPhase.id}`, () => onUpdatePhase(selectedConfigPhase, selectedPhaseDraft))}
+              >
+                <Save className="h-4 w-4" />
+                保存阶段
+              </button>
+              {selectedConfigPhase.canDelete === true ? (
+                <button
+                  className="btn btn-ghost btn--sm"
+                  type="button"
+                  disabled={!canWrite || savingKey === `phase-delete-${selectedConfigPhase.id}`}
+                  onClick={() => {
+                    if (window.confirm(`确认删除阶段「${selectedConfigPhase.name}」？`)) {
+                      void save(`phase-delete-${selectedConfigPhase.id}`, () => onDeletePhase(selectedConfigPhase));
+                    }
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除阶段
+                </button>
+              ) : null}
+              <label className="min-w-[220px]">
+                <span className="field-label">迁移到阶段</span>
+                <select
+                  className="select"
+                  value={transferTargetPhaseId}
+                  disabled={!canWrite || !selectedPhaseAllCheckItems.length}
+                  onChange={event => setTransferTargetPhaseId(event.target.value)}
+                >
+                  <option value="">选择目标阶段</option>
+                  {sortedPhases
+                    .filter(phase => idOf(phase.id) !== selectedPhaseId)
+                    .map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+                </select>
+              </label>
+              <button
+                className="btn btn-ghost btn--sm"
+                type="button"
+                disabled={!canWrite || !transferTargetPhaseId || !selectedPhaseAllCheckItems.length || savingKey === 'phase-check-transfer'}
+                onClick={() => void save('phase-check-transfer', moveSelectedPhaseCheckItems)}
+                title={transferTargetPhase ? `迁移到 ${transferTargetPhase.name}` : undefined}
+              >
+                <Workflow className="h-4 w-4" />
+                {savingKey === 'phase-check-transfer' ? '迁移中' : '迁移本阶段检查项'}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="panel">
         <div className="panel-header">
           <div>
             <p className="kicker">Checklist</p>
-            <h2 className="text-xl font-semibold">阶段检查项配置</h2>
-            <p className="text-sm text-ink-muted">可按当前项目阶段维护检查项名称、阶段、模块、标签、计划、负责人、启用和完成状态。</p>
+            <h2 className="text-xl font-semibold">所选阶段检查项配置</h2>
+            <p className="text-sm text-ink-muted">{selectedConfigPhase ? `${selectedConfigPhase.name} · ${selectedConfigPhase.code}` : '先在上方阶段表选择阶段'}</p>
           </div>
-          <span className="chip">{visibleCheckItems.length}/{data.checkItems.length} 项</span>
+          <span className="chip">{visibleCheckItems.length}/{selectedPhaseAllCheckItems.length} 项</span>
         </div>
         <div className="mt-4">
           <FilterShell>
             <label className="xl:col-span-2">
               <span className="field-label">检查项搜索</span>
               <input className="input" value={checkFilters.keyword} onChange={event => setCheckFilters({ ...checkFilters, keyword: event.target.value })} placeholder="标题、标签、负责人" aria-label="配置中心检查项搜索" />
-            </label>
-            <label>
-              <span className="field-label">阶段</span>
-              <select
-                className="select"
-                value={selectedPhaseId}
-                onChange={event => setCheckFilters({ ...checkFilters, phaseId: event.target.value })}
-              >
-                <option value="">全部阶段</option>
-                {sortedPhases.map(phase => (
-                  <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>
-                ))}
-              </select>
             </label>
             <label>
               <span className="field-label">模块</span>
@@ -2967,7 +3209,7 @@ function BaseConfigView({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-ink">新增检查项</div>
-                <div className="text-xs text-ink-muted">默认归属 {selectedPhase?.name ?? '当前阶段'} / {selectedModule?.name ?? '当前模块'}。</div>
+                <div className="text-xs text-ink-muted">默认归属 {selectedNewCheckPhase?.name ?? '当前阶段'} / {selectedModule?.name ?? '当前模块'}。</div>
               </div>
               <ReadOnlyNotice canWrite={canWrite} />
             </div>
@@ -2984,6 +3226,7 @@ function BaseConfigView({
                   disabled={!canWrite}
                   onChange={event => {
                     const phase = sortedPhases.find(item => idOf(item.id) === event.target.value);
+                    setSelectedPhaseConfigId(event.target.value);
                     setNewCheckDraft({
                       ...newCheckDraft,
                       projectPhaseId: event.target.value,
@@ -2992,7 +3235,7 @@ function BaseConfigView({
                     });
                   }}
                 >
-                  {sortedPhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+                  {(visiblePhases.length ? visiblePhases : sortedPhases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
                 </select>
               </label>
               <label>
@@ -3030,7 +3273,7 @@ function BaseConfigView({
               <button
                 className="btn btn-primary btn--sm"
                 type="button"
-                disabled={!canWrite || savingKey === 'check-create' || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId}
+                disabled={!canWrite || savingKey === 'check-create' || !selectedPhaseId || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId}
                 onClick={() => void save('check-create', () => onCreateCheckItem(newCheckDraft))}
                 aria-label="新增检查项"
               >
@@ -3362,7 +3605,7 @@ export default function App() {
     void loadData(undefined, nextScope);
   };
 
-  const handleCreateProject = async (nextView: AppTab = currentView) => {
+  const handleCreateProject = async (nextView: AppTab = 'baseConfig') => {
     if (!canWrite) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === scope.factoryId);
     const workshop = workspace.hierarchy.workshops.find(item => idOf(item.id) === scope.workshopId);
@@ -3586,7 +3829,7 @@ export default function App() {
           onScopeChange={handleScopeChange}
           onSelectProject={projectId => void loadData(projectId)}
           onSelectCell={setSelectedDashboardCell}
-          onCreateProject={() => void handleCreateProject('dashboard')}
+          onCreateProject={() => void handleCreateProject('baseConfig')}
           onCreateExport={() => void handleCreateProjectExport()}
         />
       );

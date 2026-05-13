@@ -38,12 +38,12 @@ export type SidebarMenuItem<TView extends string = AppTab> = {
 
 export const MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', description: '项目状态驾驶舱', icon: LayoutDashboard },
-  { id: 'baseConfig', label: '配置中心', description: '项目、阶段与基础数据', icon: SlidersHorizontal },
   { id: 'timeline', label: '阶段进度', description: '时间线与打卡', icon: CalendarClock },
   { id: 'checks', label: '检查项', description: '甘特与表格', icon: ClipboardCheck },
   { id: 'issues', label: '重点问题', description: '风险闭环', icon: FileWarning },
   { id: 'collision', label: '碰撞一页纸', description: '制造评审材料', icon: BarChart3 },
-  { id: 'reports', label: '报告导出', description: '报表与任务', icon: Download }
+  { id: 'reports', label: '报告导出', description: '报表与任务', icon: Download },
+  { id: 'baseConfig', label: '配置中心', description: '项目、阶段与基础数据', icon: SlidersHorizontal }
 ];
 
 interface SidebarProps {
