@@ -828,6 +828,15 @@ export async function createProject(input: CreateProjectInput) {
   return normalizeProject(project);
 }
 
+export async function seedProjectTemplate(projectId: string | number) {
+  return unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/seed-template/`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    })
+  );
+}
+
 export async function updateProject(projectId: string | number, input: UpdateProjectInput) {
   const project = unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/`, {

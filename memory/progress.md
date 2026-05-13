@@ -24,7 +24,8 @@
 - service/types 新增项目统计与项目/阶段/检查项 PATCH adapter，兼容后端后续 dashboard 聚合字段。
 - 按后端最终契约收口：项目统计列表改为优先 `/dashboard/projects/`，单项目统计改为优先 `/dashboard/projects/{project_id}/`，时间甘特改为优先 `/projects/{id}/timeline/`。
 - `/dashboard/` adapter 兼容 `overdue_count` 与 `project_summaries`；阶段/检查项 PATCH 字段切为 `is_enabled`、`planned_start`、`planned_end`，并补齐 DELETE。
-- 最终 API 契约覆盖 dashboard 项目统计、单项目详情 timeline、项目 timeline、阶段/检查项 PATCH/DELETE。
+- 新建项目未传 `phase_template` 时默认使用后端 `bs-auto-status-six-phase`；配置中心新增“补齐默认六阶段”入口，调用 `POST /projects/{id}/seed-template/`。
+- 最终 API 契约覆盖 dashboard 项目统计、单项目详情 timeline、项目 timeline、`seed-template` 补齐入口、阶段/检查项 PATCH/DELETE。
 - 完全下线本地填充数据与浏览器请求拦截器，dev 验收只使用真实后端 seed 原型数据；后端无数据时页面展示空态。
 - 删除 MSW、`mocks/`、`mockServiceWorker.js`、`VITE_ENABLE_MOCKS`，mock 下线门禁扫描源码、public、env、package、node_modules 均为 0 命中。
 - Dashboard 项目统计补齐 `planned_start` / `planned_end`、阶段逾期和检查项逾期字段兼容；逾期总数缺失时由两类逾期相加。

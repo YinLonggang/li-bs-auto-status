@@ -36,6 +36,7 @@ import {
   deleteProjectPhase,
   fetchExportDownloadLink,
   fetchWorkspaceData,
+  seedProjectTemplate,
   updateCheckItem,
   updateCheckItemOwner,
   updateProject,
@@ -2305,6 +2306,7 @@ function BaseConfigView({
   onSelectProject,
   onCreateProject,
   onUpdateProject,
+  onSeedTemplate,
   onUpdatePhase,
   onDeletePhase,
   onCreateCheckItem,
@@ -2318,6 +2320,7 @@ function BaseConfigView({
   onSelectProject: (projectId: string | number) => void;
   onCreateProject: () => void;
   onUpdateProject: (draft: ProjectConfigDraft) => Promise<void>;
+  onSeedTemplate: () => Promise<void>;
   onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<void>;
   onDeletePhase: (phase: ProjectPhase) => Promise<void>;
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
@@ -2671,9 +2674,22 @@ function BaseConfigView({
           <div>
             <p className="kicker">Project Phases</p>
             <h2 className="text-xl font-semibold">六阶段配置</h2>
-            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留，名称、计划、目标、排序和启用状态可按项目调整。</p>
+            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留；新项目默认按六阶段模板生成，也可在此补齐缺失阶段和检查项。</p>
           </div>
-          <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              disabled={!canWrite || savingKey === 'seed-template'}
+              onClick={() => void save('seed-template', onSeedTemplate)}
+              aria-label="补齐默认六阶段和检查项"
+              title="按默认六阶段模板补齐当前项目缺失的阶段和检查项"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              {savingKey === 'seed-template' ? '补齐中' : '补齐默认六阶段'}
+            </button>
+          </div>
         </div>
         <div className="mt-4">
           <FilterShell>
@@ -3326,6 +3342,17 @@ export default function App() {
     }
   };
 
+  const handleSeedTemplate = async () => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await seedProjectTemplate(workspace.selectedProject.id);
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '默认六阶段补齐失败'));
+      throw err;
+    }
+  };
+
   const handleDeletePhase = async (phase: ProjectPhase) => {
     if (!canWrite) return;
     try {
@@ -3474,6 +3501,7 @@ export default function App() {
           onSelectProject={projectId => void loadData(projectId)}
           onCreateProject={() => void handleCreateProject('baseConfig')}
           onUpdateProject={handleUpdateProject}
+          onSeedTemplate={handleSeedTemplate}
           onUpdatePhase={handleUpdatePhase}
           onDeletePhase={handleDeletePhase}
           onCreateCheckItem={handleCreateCheckItemConfig}
