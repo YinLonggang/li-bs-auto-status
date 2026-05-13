@@ -62,6 +62,9 @@
 - 复核用户反馈“检查项页不能新增”：后端新增接口和权限均正常，浏览器日志没有发出新增 POST；原因是检查项页此前只有台账/负责人维护，没有创建表单。
 - 检查项页已补直接新增表单，复用真实 `/projects/{id}/check-items/`；缺标题、阶段、模块或只读态时在按钮旁给出原因。
 - 新增入口修复后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check` 通过；真实 HTTP 创建检查项 201 并删除回归项 204；3005 重启后返回 HTTP 200。
+- Dashboard 首页按项目列表行内渐进展开收口：新增 `ProjectDashboardExpansion` 承载 Project Context、单项目统计、阶段轨、范围统计、详情筛选、模块泳道、检查项详情、重点问题、碰撞一页纸和导出操作；顶层只保留范围工具、项目总览、项目筛选和项目统计列表。
+- 项目统计表行支持点击选择/展开，并补齐 Enter/Space 键盘触发；操作按钮保留且阻止事件冒泡，避免重复触发行点击。
+- 本轮 Dashboard 首页渐进展开改造后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0；按 dev-environment-bootstrap 技能重启 3005，`GET http://127.0.0.1:3005/` 返回 HTTP 200。
 
 ### 问题与风险
 

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -837,9 +837,26 @@ function ProjectStatisticsList({
           <tbody>
             {stats.map(stat => {
               const selected = idOf(stat.projectId) === idOf(selectedProjectId);
+              const handleSelect = () => onSelectProject(stat.projectId);
+              const handleRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleSelect();
+                }
+              };
               return (
                 <Fragment key={stat.projectId}>
-                  <tr className={selected ? 'bg-primary/10' : undefined}>
+                  <tr
+                    className={`cursor-pointer transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
+                      selected ? 'bg-primary/10' : 'hover:bg-surface-soft'
+                    }`}
+                    tabIndex={0}
+                    aria-selected={selected}
+                    aria-expanded={selected}
+                    onClick={handleSelect}
+                    onKeyDown={handleRowKeyDown}
+                  >
                     <td>
                       <div className="font-semibold text-ink">{stat.projectName}</div>
                       <div className="mt-1 text-xs text-ink-muted">{stat.projectCode} · {stat.ownerName}</div>
@@ -864,7 +881,16 @@ function ProjectStatisticsList({
                     <td>{stat.pendingCollisionReportCount}/{stat.collisionReportCount}</td>
                     <td>{stat.exportJobCount}{stat.failedExportJobCount ? ` · 失败 ${stat.failedExportJobCount}` : ''}</td>
                     <td>
-                      <button className="btn btn-ghost btn--sm" type="button" onClick={() => onSelectProject(stat.projectId)} aria-label={`展开项目 ${stat.projectName} 状态`}>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleSelect();
+                        }}
+                        aria-label={`展开项目 ${stat.projectName} 状态`}
+                        aria-expanded={selected}
+                      >
                         <ArrowUpRight className="h-4 w-4" />
                         {selected ? '已展开' : '展开'}
                       </button>
@@ -884,6 +910,120 @@ function ProjectStatisticsList({
         </table>
       </div>
     </section>
+  );
+}
+
+function ProjectDashboardExpansion({
+  data,
+  visibleProjects,
+  selectedProjectStat,
+  fallbackStat,
+  phases,
+  modules,
+  checkItems,
+  activeCell,
+  canWrite,
+  detailFilters,
+  checkStatusOptions,
+  onDetailFiltersChange,
+  onSelectCell,
+  onCreateExport
+}: {
+  data: WorkspaceData;
+  visibleProjects: Project[];
+  selectedProjectStat?: ProjectStatistics;
+  fallbackStat: ProjectStatistics;
+  phases: ProjectPhase[];
+  modules: InspectionModule[];
+  checkItems: CheckItem[];
+  activeCell: DashboardCell | null;
+  canWrite: boolean;
+  detailFilters: SearchFilterState;
+  checkStatusOptions: string[];
+  onDetailFiltersChange: (filters: SearchFilterState) => void;
+  onSelectCell: (cell: DashboardCell) => void;
+  onCreateExport: () => void;
+}) {
+  return (
+    <div className="grid gap-5">
+      <section className="rounded-lg border border-outline bg-surface p-4">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Project Context</p>
+            <h2 className="text-xl font-semibold">{data.selectedProject?.name ?? fallbackStat.projectName}</h2>
+            <p className="text-sm text-ink-muted">
+              {[data.selectedProject?.plant, data.selectedProject?.workshopName, data.selectedProject?.lineName].filter(Boolean).join(' / ') || '通过工厂、车间和可选产线过滤项目'}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="chip"><FactoryIcon className="h-3.5 w-3.5" />匹配项目 {visibleProjects.length}</span>
+            {data.selectedProject ? <StatusPill status={data.selectedProject.status} /> : <StatusPill status={fallbackStat.projectStatus} />}
+          </div>
+        </div>
+      </section>
+      <SingleProjectStatistics
+        project={data.selectedProject}
+        stat={selectedProjectStat ?? fallbackStat}
+        phases={phases}
+        checkItems={checkItems}
+        embedded
+      />
+      <PhaseRail phases={phases} />
+      <DashboardStats
+        project={data.selectedProject}
+        summary={data.dashboardSummary}
+        phases={phases}
+        checkItems={filterCheckItemsByPhases(data.checkItems, phases)}
+        keyIssues={data.keyIssues}
+        exportTasks={data.exportTasks}
+      />
+      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
+        <div className="xl:col-span-2">
+          <DashboardDetailFilters
+            filters={detailFilters}
+            onChange={onDetailFiltersChange}
+            phases={phases}
+            modules={modules}
+            statusOptions={checkStatusOptions}
+          />
+        </div>
+        <ModuleSwimlane
+          phases={phases}
+          modules={modules}
+          checkItems={checkItems}
+          selectedCell={activeCell}
+          onSelectCell={onSelectCell}
+        />
+        <ChecklistDetailPanel
+          phases={phases}
+          modules={modules}
+          checkItems={checkItems}
+          selectedCell={activeCell}
+          canWrite={canWrite}
+        />
+      </div>
+      <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
+        <KeyIssueTable issues={data.keyIssues} />
+        <CollisionOnePager reports={data.collisionReports} />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-ink-muted">
+          <Flag className="h-4 w-4 text-accent" />
+          <span>默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
+          {!canWrite ? <span className="text-warning">当前账号只读，不能生成导出任务。</span> : null}
+        </div>
+        <button
+          className="btn btn-ghost btn--sm"
+          type="button"
+          disabled={!canWrite || !data.selectedProject}
+          onClick={onCreateExport}
+          title={!canWrite ? '当前账号无导出权限' : undefined}
+        >
+          <ArrowUpRight className="h-4 w-4" />
+          生成总览导出
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1322,30 +1462,6 @@ function DashboardView({
     <div className="grid gap-5">
       <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
       <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="kicker">Project Context</p>
-            <h2 className="text-xl font-semibold">{data.selectedProject?.name ?? '未选择项目'}</h2>
-            <p className="text-sm text-ink-muted">
-              {[data.selectedProject?.plant, data.selectedProject?.workshopName, data.selectedProject?.lineName].filter(Boolean).join(' / ') || '通过工厂、车间和可选产线过滤项目'}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <span className="chip"><FactoryIcon className="h-3.5 w-3.5" />匹配项目 {visibleProjects.length}</span>
-            {data.selectedProject ? <StatusPill status={data.selectedProject.status} /> : null}
-          </div>
-        </div>
-      </section>
-      <PhaseRail phases={sortedPhases} />
-      <DashboardStats
-        project={data.selectedProject}
-        summary={data.dashboardSummary}
-        phases={sortedPhases}
-        checkItems={filterCheckItemsByPhases(data.checkItems, sortedPhases)}
-        keyIssues={data.keyIssues}
-        exportTasks={data.exportTasks}
-      />
       <DashboardProjectFilters
         filters={dashboardFilters}
         onChange={setDashboardFilters}
@@ -1356,61 +1472,24 @@ function DashboardView({
         selectedProjectId={data.selectedProject?.id}
         onSelectProject={onSelectProject}
         renderExpandedProject={(stat) => (
-          <SingleProjectStatistics
-            project={data.selectedProject}
-            stat={selectedProjectStat ?? stat}
+          <ProjectDashboardExpansion
+            data={data}
+            visibleProjects={visibleProjects}
+            selectedProjectStat={selectedProjectStat}
+            fallbackStat={stat}
             phases={sortedPhases}
+            modules={sortedModules}
             checkItems={detailCheckItems}
-            embedded
+            activeCell={activeCell}
+            canWrite={canWrite}
+            detailFilters={detailFilters}
+            checkStatusOptions={checkStatusOptions}
+            onDetailFiltersChange={setDetailFilters}
+            onSelectCell={onSelectCell}
+            onCreateExport={onCreateExport}
           />
         )}
       />
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
-        <div className="xl:col-span-2">
-          <DashboardDetailFilters
-            filters={detailFilters}
-            onChange={setDetailFilters}
-            phases={sortedPhases}
-            modules={data.inspectionModules}
-            statusOptions={checkStatusOptions}
-          />
-        </div>
-        <ModuleSwimlane
-          phases={sortedPhases}
-          modules={data.inspectionModules}
-          checkItems={detailCheckItems}
-          selectedCell={activeCell}
-          onSelectCell={onSelectCell}
-        />
-        <ChecklistDetailPanel
-          phases={sortedPhases}
-          modules={data.inspectionModules}
-          checkItems={detailCheckItems}
-          selectedCell={activeCell}
-          canWrite={canWrite}
-        />
-      </div>
-      <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
-        <KeyIssueTable issues={data.keyIssues} />
-        <CollisionOnePager reports={data.collisionReports} />
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-4 py-3">
-        <div className="flex items-center gap-2 text-sm text-ink-muted">
-          <Flag className="h-4 w-4 text-accent" />
-          <span>默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
-          {!canWrite ? <span className="text-warning">当前账号只读，不能生成导出任务。</span> : null}
-        </div>
-        <button
-          className="btn btn-ghost btn--sm"
-          type="button"
-          disabled={!canWrite || !data.selectedProject}
-          onClick={onCreateExport}
-          title={!canWrite ? '当前账号无导出权限' : undefined}
-        >
-          <ArrowUpRight className="h-4 w-4" />
-          生成总览导出
-        </button>
-      </div>
     </div>
   );
 }
