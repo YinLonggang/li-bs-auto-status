@@ -979,16 +979,14 @@ function ProjectDashboardExpansion({
         keyIssues={data.keyIssues}
         exportTasks={data.exportTasks}
       />
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
-        <div className="xl:col-span-2">
-          <DashboardDetailFilters
-            filters={detailFilters}
-            onChange={onDetailFiltersChange}
-            phases={phases}
-            modules={modules}
-            statusOptions={checkStatusOptions}
-          />
-        </div>
+      <div className="grid gap-5">
+        <DashboardDetailFilters
+          filters={detailFilters}
+          onChange={onDetailFiltersChange}
+          phases={phases}
+          modules={modules}
+          statusOptions={checkStatusOptions}
+        />
         <ModuleSwimlane
           phases={phases}
           modules={modules}
@@ -1004,10 +1002,8 @@ function ProjectDashboardExpansion({
           canWrite={canWrite}
         />
       </div>
-      <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
-        <KeyIssueTable issues={data.keyIssues} />
-        <CollisionOnePager reports={data.collisionReports} />
-      </div>
+      <KeyIssueTable issues={data.keyIssues} />
+      <CollisionOnePager reports={data.collisionReports} />
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-4 py-3">
         <div className="flex items-center gap-2 text-sm text-ink-muted">
           <Flag className="h-4 w-4 text-accent" />
@@ -1260,6 +1256,15 @@ function ChecklistDetailPanel({
 }
 
 function KeyIssueTable({ issues }: { issues: KeyIssue[] }) {
+  const [selectedIssueId, setSelectedIssueId] = useState('');
+
+  useEffect(() => {
+    setSelectedIssueId(idOf(issues[0]?.id));
+  }, [issues]);
+
+  const selectedIssue = issues.find(issue => idOf(issue.id) === selectedIssueId) ?? issues[0];
+  const selectIssue = (issue: KeyIssue) => setSelectedIssueId(idOf(issue.id));
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -1269,48 +1274,139 @@ function KeyIssueTable({ issues }: { issues: KeyIssue[] }) {
         </div>
         <span className="chip">{issues.length} 条</span>
       </div>
-      <div className="table-shell mt-4">
-        <table className="data-table min-w-[1180px]">
-          <thead>
-            <tr>
-              <th>序号</th>
-              <th>问题描述</th>
-              <th>问题照片</th>
-              <th>对策</th>
-              <th>整改完成时间</th>
-              <th>供应商</th>
-              <th>责任人</th>
-              <th>确认人</th>
-              <th>目前进度</th>
-              <th>备注</th>
-            </tr>
-          </thead>
-          <tbody>
-            {issues.map((issue, index) => (
-              <tr key={issue.id}>
-                <td>{index + 1}</td>
-                <td className="max-w-[260px]">{issue.description || issue.title}</td>
-                <td>
-                  {issue.problemPhotoObjectKey || issue.problemPhoto ? (
-                    <span className="chip max-w-[220px] truncate" title={[issue.problemPhotoBucketName, issue.problemPhotoObjectKey || issue.problemPhoto].filter(Boolean).join('/')}>
-                      <FileText className="h-3.5 w-3.5" />
-                      {issue.problemPhotoObjectKey || issue.problemPhoto}
-                    </span>
-                  ) : '-'}
-                </td>
-                <td className="max-w-[240px]">{issue.countermeasure || issue.resolution || '-'}</td>
-                <td>{formatDate(issue.dueDate)}</td>
-                <td>{issue.supplier || '-'}</td>
-                <td>{issue.ownerName}</td>
-                <td>{issue.confirmer || '-'}</td>
-                <td><StatusPill status={issue.currentProgress || issue.status} /></td>
-                <td className="max-w-[180px]">{issue.remark || '-'}</td>
+      {!issues.length ? <div className="mt-4"><EmptyState message="暂无重点问题。" /></div> : null}
+      {issues.length ? (
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1180px]">
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>问题描述</th>
+                <th>问题照片</th>
+                <th>对策</th>
+                <th>整改完成时间</th>
+                <th>供应商</th>
+                <th>责任人</th>
+                <th>确认人</th>
+                <th>目前进度</th>
+                <th>备注</th>
+                <th>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {issues.map((issue, index) => {
+                const selected = idOf(issue.id) === idOf(selectedIssue?.id);
+                const handleSelect = () => selectIssue(issue);
+                const handleRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleSelect();
+                  }
+                };
+                return (
+                  <tr
+                    key={issue.id}
+                    className={`cursor-pointer transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
+                      selected ? 'bg-primary/10' : 'hover:bg-surface-soft'
+                    }`}
+                    tabIndex={0}
+                    aria-selected={selected}
+                    onClick={handleSelect}
+                    onKeyDown={handleRowKeyDown}
+                  >
+                    <td>{index + 1}</td>
+                    <td className="max-w-[260px]">{issue.description || issue.title}</td>
+                    <td>
+                      {issue.problemPhotoObjectKey || issue.problemPhoto ? (
+                        <span className="chip max-w-[220px] truncate" title={[issue.problemPhotoBucketName, issue.problemPhotoObjectKey || issue.problemPhoto].filter(Boolean).join('/')}>
+                          <FileText className="h-3.5 w-3.5" />
+                          {issue.problemPhotoObjectKey || issue.problemPhoto}
+                        </span>
+                      ) : '-'}
+                    </td>
+                    <td className="max-w-[240px]">{issue.countermeasure || issue.resolution || '-'}</td>
+                    <td>{formatDate(issue.dueDate)}</td>
+                    <td>{issue.supplier || '-'}</td>
+                    <td>{issue.ownerName}</td>
+                    <td>{issue.confirmer || '-'}</td>
+                    <td><StatusPill status={issue.currentProgress || issue.status} /></td>
+                    <td className="max-w-[180px]">{issue.remark || '-'}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleSelect();
+                        }}
+                        aria-label={`查看重点问题 ${issue.title || issue.description} 详情`}
+                        aria-pressed={selected}
+                      >
+                        <ArrowUpRight className="h-4 w-4" />
+                        {selected ? '当前详情' : '查看详情'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {selectedIssue ? <KeyIssueDetail issue={selectedIssue} /> : null}
     </section>
+  );
+}
+
+function DetailField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-outline bg-surface p-3">
+      <div className="text-xs font-semibold text-ink-muted">{label}</div>
+      <div className={`mt-2 break-words text-sm text-ink ${mono ? 'font-mono text-xs' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
+function KeyIssueDetail({ issue }: { issue: KeyIssue }) {
+  const photoObjectKey = issue.problemPhotoObjectKey || issue.problemPhoto;
+  return (
+    <article className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="kicker">Issue Detail</p>
+          <h3 className="text-base font-semibold text-ink">{issue.title || issue.description || '未命名问题'}</h3>
+          <p className="mt-2 text-sm text-ink-muted">{issue.description || '-'}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusPill status={issue.severity} />
+          <StatusPill status={issue.status} />
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
+        <DetailField label="问题照片 bucket" value={issue.problemPhotoBucketName || '-'} />
+        <DetailField label="问题照片 object key" value={photoObjectKey || '-'} mono />
+        <DetailField label="整改完成时间" value={formatDate(issue.dueDate)} />
+        <DetailField label="供应商" value={issue.supplier || '-'} />
+        <DetailField label="责任人" value={issue.ownerName || '未设置'} />
+        <DetailField label="确认人" value={issue.confirmer || '-'} />
+        <DetailField label="目前进度" value={issue.currentProgress || issue.status} />
+        <DetailField label="关闭时间" value={formatDate(issue.closedAt)} />
+        <DetailField label="备注" value={issue.remark || '-'} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-outline bg-surface p-3">
+          <div className="text-xs font-semibold text-ink-muted">整改对策</div>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{issue.countermeasure || issue.resolution || '-'}</p>
+        </div>
+        <div className="rounded-lg border border-outline bg-surface p-3">
+          <div className="text-xs font-semibold text-ink-muted">附件列表</div>
+          <div className="mt-2">
+            <AttachmentList attachments={issue.attachments} />
+          </div>
+        </div>
+      </div>
+    </article>
   );
 }
 

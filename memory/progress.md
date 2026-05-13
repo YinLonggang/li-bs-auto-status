@@ -64,10 +64,14 @@
 - 新增入口修复后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check` 通过；真实 HTTP 创建检查项 201 并删除回归项 204；3005 重启后返回 HTTP 200。
 - Dashboard 首页撤回项目统计表行内详情 `<tr>`：`ProjectStatisticsList` 只负责横向统计表、选中态、行点击和 Enter/Space 键盘选择；所选项目详情改由列表下方的 `ProjectDashboardExpansion` 连续区域承载。
 - 列表下方详情区承载 Project Context、单项目统计、阶段轨、范围统计、详情筛选、模块泳道、检查项详情、重点问题、碰撞一页纸和导出操作；顶层保留范围工具、项目总览和项目统计列表，项目筛选归入项目统计列表栏。
+- Dashboard 检查详情区继续收口为“上选下详”：详情筛选、检查模块泳道、检查清单详情顺序堆叠，不再使用 xl 侧边详情。
+- Dashboard 重点问题表改为“表格选择在上、问题详情在下”：`KeyIssueTable` 内部选中第一条问题，支持行点击、按钮点击和 Enter/Space 选择；详情展示问题标题/描述、照片 bucket/object key、整改对策、整改完成时间、供应商、责任人、确认人、进度、备注、附件、关闭时间、状态和严重度，不新增 API 或 mock。
+- 本轮泳道与重点问题“上选下详”返修后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
 - 本轮 Dashboard 列表下方详情改造后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
 - 审核返修：Dashboard 列表下方详情改为只跟随当前可见项目统计列表，若项目筛选隐藏当前选中项目，则不再继续展示该隐藏项目详情。
 - 用户澄清返修：Dashboard 项目筛选归入项目列表栏，`ProjectStatisticsList` 在同一 panel 内承载筛选区和横向项目统计表，顶层顺序保持 ScopeToolbar -> PortfolioOverview -> ProjectStatisticsList -> ProjectDashboardExpansion。
 - 本轮最终重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200；后端 `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
+- 本轮泳道/重点问题返修后再次重启 3005，`GET http://127.0.0.1:3005/` 返回 HTTP 200。
 
 ### 问题与风险
 

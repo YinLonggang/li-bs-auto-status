@@ -57,6 +57,8 @@
 - Dashboard 首页采用“列表在上、详情在下”的项目下钻口径：上方保持横向项目统计表，点击项目行或操作按钮后保留选中态，并在列表下方自然渲染所选项目详情区。
 - 项目筛选归入项目统计列表栏，作为 `ProjectStatisticsList` panel 内 header 与横向表格之间的筛选区；Dashboard 顶层不再单独渲染项目筛选 panel。
 - Project Context、单项目统计、阶段轨、范围统计、详情筛选、模块泳道、检查项详情、重点问题、碰撞一页纸和导出入口统一由列表下方的 `ProjectDashboardExpansion` 承载；项目统计表不再插入选中行后的详情 `<tr>`。
+- `ProjectDashboardExpansion` 内检查详情区统一为“上方筛选/矩阵选择，下方自然展示详情”：`DashboardDetailFilters -> ModuleSwimlane -> ChecklistDetailPanel` 顺序堆叠，不再使用侧边详情列。
+- Dashboard 重点问题表同样采用“表格选择在上、问题详情在下”的连续布局；`KeyIssueTable` 内部维护选中问题，默认选择第一条，行点击、详情按钮和 Enter/Space 键盘选择都会更新下方详情，且不再插入表格行内展开内容。
 - 检查模块泳道横轴阶段列展示阶段名称、计划开始/结束日期和阶段进度，避免只看到阶段名无法判断排期。
 - 非配置页的阶段来源统一过滤 `isActive !== false`：Dashboard 阶段轨、泳道、检查项表和时间甘特只展示启用阶段；配置中心仍展示全部阶段用于停用/恢复。
 - 配置中心检查项维护补齐已有项阶段切换；新增检查项不再被空日期提前禁用，未显式填计划日期时由后端按所属阶段计划继承。
