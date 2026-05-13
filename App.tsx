@@ -1809,6 +1809,8 @@ function ChecksView({
   modules,
   ownerCandidates,
   canWrite,
+  defaultOwnerName,
+  onCreateCheckItem,
   onUpdateOwner
 }: {
   checkItems: CheckItem[];
@@ -1816,11 +1818,21 @@ function ChecksView({
   modules: InspectionModule[];
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
+  defaultOwnerName: string;
+  onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
   onUpdateOwner: (item: CheckItem, ownerName: string, ownerIdaasId?: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [newDraft, setNewDraft] = useState<CheckItemConfigDraft | null>(null);
+  const [createMessage, setCreateMessage] = useState('');
+  const [savingCreate, setSavingCreate] = useState(false);
   const visiblePhases = activePhasesOf(phases);
+  const orderedModules = bySequence(modules);
+  const visiblePhaseKey = visiblePhases.map(phase => idOf(phase.id)).join('|');
+  const moduleKey = orderedModules.map(module => idOf(module.id)).join('|');
+  const defaultPhase = visiblePhases[0];
+  const defaultModule = orderedModules[0];
   const phaseById = new Map(visiblePhases.map(phase => [`${phase.id}`, phase]));
   const moduleById = new Map(modules.map(module => [`${module.id}`, module]));
   const filteredCheckItems = checkItems.filter(item => {
@@ -1837,16 +1849,161 @@ function ChecksView({
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
   });
   const statusOptions = statusOptionValues(checkItems.map(item => item.status));
+  const selectedNewPhase = visiblePhases.find(phase => idOf(phase.id) === newDraft?.projectPhaseId) ?? defaultPhase;
+  const selectedNewModule = orderedModules.find(module => idOf(module.id) === newDraft?.moduleId) ?? defaultModule;
+  const createDisabledReason = !canWrite
+    ? '当前账号只读，写操作已禁用。'
+    : !newDraft?.title.trim()
+      ? '请先输入检查项标题。'
+      : !newDraft?.projectPhaseId
+        ? '请先选择阶段。'
+        : !newDraft?.moduleId
+          ? '请先选择模块。'
+          : '';
+
+  useEffect(() => {
+    if (!defaultPhase || !defaultModule) {
+      setNewDraft(null);
+      return;
+    }
+    setNewDraft(current => {
+      const currentPhaseExists = current && visiblePhases.some(phase => idOf(phase.id) === current.projectPhaseId);
+      const currentModuleExists = current && orderedModules.some(module => idOf(module.id) === current.moduleId);
+      if (currentPhaseExists && currentModuleExists) return current;
+      return {
+        title: '',
+        moduleId: idOf(defaultModule.id),
+        projectPhaseId: idOf(defaultPhase.id),
+        tags: '',
+        plannedStartDate: dateInputValue(defaultPhase.plannedStartDate),
+        plannedEndDate: dateInputValue(defaultPhase.plannedEndDate),
+        ownerName: defaultOwnerName,
+        ownerIdaasId: undefined,
+        status: 'pending',
+        isActive: true
+      };
+    });
+  }, [defaultPhase?.id, defaultModule?.id, defaultOwnerName, visiblePhaseKey, moduleKey]);
+
+  const handleCreate = async () => {
+    if (!newDraft) return;
+    if (createDisabledReason) {
+      setCreateMessage(createDisabledReason);
+      return;
+    }
+    setSavingCreate(true);
+    setCreateMessage('');
+    try {
+      await onCreateCheckItem(newDraft);
+      setNewDraft({
+        ...newDraft,
+        title: '',
+        tags: '',
+        plannedStartDate: dateInputValue(selectedNewPhase?.plannedStartDate),
+        plannedEndDate: dateInputValue(selectedNewPhase?.plannedEndDate),
+        ownerName: newDraft.ownerName || defaultOwnerName,
+        status: 'pending',
+        isActive: true
+      });
+      setCreateMessage('已新增检查项。');
+    } catch (err) {
+      setCreateMessage(mutationErrorMessage(err, '检查项新增失败。'));
+    } finally {
+      setSavingCreate(false);
+    }
+  };
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div>
           <h2 className="text-xl font-semibold">检查项表格</h2>
-          <p className="text-sm text-ink-muted">负责人可选择 IDaaS 候选人，也可直接输入姓名。</p>
+          <p className="text-sm text-ink-muted">支持新增检查项、筛选台账和维护负责人。</p>
         </div>
         <ReadOnlyNotice canWrite={canWrite} />
       </div>
+      {newDraft ? (
+        <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-ink">新增检查项</div>
+              <div className="text-xs text-ink-muted">默认归属 {selectedNewPhase?.name ?? '当前阶段'} / {selectedNewModule?.name ?? '当前模块'}。</div>
+            </div>
+            {createMessage ? <span className="text-sm text-ink-muted">{createMessage}</span> : null}
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-4">
+            <label className="lg:col-span-2">
+              <span className="field-label">检查项标题</span>
+              <input
+                className="input"
+                value={newDraft.title}
+                disabled={!canWrite}
+                onChange={event => setNewDraft({ ...newDraft, title: event.target.value })}
+                placeholder="输入检查项标题"
+                aria-label="检查项页面新增标题"
+              />
+            </label>
+            <label>
+              <span className="field-label">阶段</span>
+              <select
+                className="select"
+                value={newDraft.projectPhaseId}
+                disabled={!canWrite}
+                onChange={event => {
+                  const phase = visiblePhases.find(item => idOf(item.id) === event.target.value);
+                  setNewDraft({
+                    ...newDraft,
+                    projectPhaseId: event.target.value,
+                    plannedStartDate: dateInputValue(phase?.plannedStartDate),
+                    plannedEndDate: dateInputValue(phase?.plannedEndDate)
+                  });
+                }}
+              >
+                {visiblePhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">模块</span>
+              <select className="select" value={newDraft.moduleId} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, moduleId: event.target.value })}>
+                {orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">标签</span>
+              <input className="input" value={newDraft.tags} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, tags: event.target.value })} placeholder="逗号分隔" />
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={newDraft.plannedStartDate} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, plannedStartDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={newDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, plannedEndDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input className="input" list="checks-owner-candidates" value={newDraft.ownerName} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, ownerName: event.target.value })} />
+              <datalist id="checks-owner-candidates">
+                {ownerCandidates.map(owner => <option key={owner.idaasId} value={owner.displayName} />)}
+              </datalist>
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={savingCreate}
+              onClick={() => void handleCreate()}
+              aria-label="在检查项页面新增检查项"
+              title={createDisabledReason || undefined}
+            >
+              <Plus className="h-4 w-4" />
+              {savingCreate ? '新增中' : '新增检查项'}
+            </button>
+            {createDisabledReason ? <span className="text-xs text-ink-muted">{createDisabledReason}</span> : null}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-4">
         <FilterShell>
           <label className="xl:col-span-2">
@@ -1864,7 +2021,7 @@ function ChecksView({
             <span className="field-label">模块</span>
             <select className="select" value={filters.moduleId} onChange={event => setFilters({ ...filters, moduleId: event.target.value })}>
               <option value="">全部模块</option>
-              {bySequence(modules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+              {orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
             </select>
           </label>
           <label>
@@ -3886,6 +4043,8 @@ export default function App() {
           modules={workspace.inspectionModules}
           ownerCandidates={workspace.ownerCandidates}
           canWrite={canWrite}
+          defaultOwnerName={workspace.selectedProject?.ownerName ?? profile?.displayName ?? ''}
+          onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateOwner={handleUpdateOwner}
         />
       );

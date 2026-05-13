@@ -59,6 +59,9 @@
 - 从 Dashboard 创建项目后默认进入配置中心，让用户在新项目创建后立即确认阶段与检查项配置；侧边栏配置中心移动到目录末尾。
 - 本轮配置中心 UI 收口后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check` 均通过。
 - 按 dev-environment-bootstrap 技能重启 3005，`GET http://127.0.0.1:3005/` 返回 HTTP 200。
+- 复核用户反馈“检查项页不能新增”：后端新增接口和权限均正常，浏览器日志没有发出新增 POST；原因是检查项页此前只有台账/负责人维护，没有创建表单。
+- 检查项页已补直接新增表单，复用真实 `/projects/{id}/check-items/`；缺标题、阶段、模块或只读态时在按钮旁给出原因。
+- 新增入口修复后重新执行 `npm run type-check`、`npm run build`、`git -C li-bs-auto-status diff --check` 通过；真实 HTTP 创建检查项 201 并删除回归项 204；3005 重启后返回 HTTP 200。
 
 ### 问题与风险
 
