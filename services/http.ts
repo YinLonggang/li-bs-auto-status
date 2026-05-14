@@ -34,11 +34,11 @@ const getCsrfToken = () => {
 const mutates = (method?: string) =>
   !!method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase());
 
-const buildHeaders = (headers?: HeadersInit, method?: string): HeadersInit => {
+const buildHeaders = (headers?: HeadersInit, method?: string, body?: BodyInit | null): HeadersInit => {
   const explicit = toHeaderRecord(headers);
   const next: Record<string, string> = { Accept: 'application/json' };
 
-  if (method && !['GET', 'HEAD'].includes(method.toUpperCase())) {
+  if (method && !['GET', 'HEAD'].includes(method.toUpperCase()) && !(body instanceof FormData)) {
     next['Content-Type'] = 'application/json';
   }
 
@@ -79,11 +79,12 @@ export async function requestWithPrefix<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const { headers, method = 'GET', ...rest } = init;
+  const { headers, method = 'GET', body, ...rest } = init;
   const response = await fetch(`${API_BASE_URL}${prefix}${path}`, {
     credentials: 'include',
     method,
-    headers: buildHeaders(headers, method),
+    headers: buildHeaders(headers, method, body),
+    body,
     ...rest
   });
   const payload = await parseBody(response);

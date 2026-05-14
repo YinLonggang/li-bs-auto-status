@@ -1137,6 +1137,35 @@ export async function fetchCheckItemAuditLogs(checkItemId: string | number) {
   return asArray(unwrap(payload)).map(normalizeAuditLog);
 }
 
+export async function uploadAttachment(input: {
+  file: File;
+  projectId?: string | number | null;
+  objectType: string;
+  objectId: string | number;
+}) {
+  const formData = new FormData();
+  formData.append('file', input.file);
+  if (input.projectId !== undefined && input.projectId !== null) {
+    formData.append('project', String(input.projectId));
+  }
+  formData.append('object_type', input.objectType);
+  formData.append('object_id', String(input.objectId));
+  return normalizeAttachment(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>('/attachments/upload/', {
+      method: 'POST',
+      body: formData
+    })
+  ));
+}
+
+export async function fetchAttachmentDownloadLink(attachmentId: string | number) {
+  const payload = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/attachments/${attachmentId}/download-link/`)
+  );
+  const raw = asRecord(payload);
+  return firstString(raw, ['download_url', 'downloadUrl', 'url']);
+}
+
 export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {
   return normalizeProjectPhase(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {

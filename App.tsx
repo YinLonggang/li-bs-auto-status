@@ -38,6 +38,7 @@ import {
   createProject,
   deleteCheckItem,
   deleteProjectPhase,
+  fetchAttachmentDownloadLink,
   fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
   fetchWorkspaceData,
@@ -46,11 +47,13 @@ import {
   updateCheckItemOwner,
   updateCheckItemStatus,
   updateProject,
-  updateProjectPhase
+  updateProjectPhase,
+  uploadAttachment
 } from './services/bsAutoStatusApi';
 import { ApiError } from './services/http';
 import type {
   AuditLog,
+  Attachment,
   CheckItem,
   CheckItemOwner,
   CheckItemStatus,
@@ -170,6 +173,13 @@ const formatDateTime = (value?: string | null) => {
   if (!Number.isFinite(date.getTime())) return value.replace('T', ' ').slice(0, 16);
   const pad = (input: number) => String(input).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const formatFileSize = (value?: number) => {
+  if (!value || value <= 0) return '-';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 };
 
 const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
@@ -442,6 +452,124 @@ function AuditHistoryPanel({
           </table>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CheckItemAttachmentPanel({
+  item,
+  canWrite,
+  onUploadAttachment,
+  onDownloadAttachment
+}: {
+  item: CheckItem;
+  canWrite: boolean;
+  onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
+  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+}) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setSelectedFile(null);
+    setMessage('');
+    setDownloadingId(null);
+  }, [item.id]);
+
+  const handleUpload = async () => {
+    if (!canWrite) {
+      setMessage('当前账号没有附件上传权限。');
+      return;
+    }
+    if (!selectedFile) {
+      setMessage('请先选择附件。');
+      return;
+    }
+    setUploading(true);
+    setMessage('');
+    try {
+      await onUploadAttachment(item, selectedFile);
+      setSelectedFile(null);
+      setMessage('附件已上传。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '附件上传失败。'));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDownload = async (attachment: Attachment) => {
+    if (!canWrite) {
+      setMessage('当前账号没有附件下载权限。');
+      return;
+    }
+    setDownloadingId(attachment.id);
+    setMessage('');
+    try {
+      await onDownloadAttachment(attachment);
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-outline bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-ink">附件</h4>
+          <p className="text-xs text-ink-muted">附件归档到当前检查项，上传和下载由后端 OiS3 接口控制。</p>
+        </div>
+        <Paperclip className="h-4 w-4 text-ink-muted" />
+      </div>
+      <div className="mt-3 grid gap-2">
+        <label>
+          <span className="field-label">选择附件</span>
+          <input
+            className="input"
+            type="file"
+            disabled={!canWrite || uploading}
+            onChange={event => setSelectedFile(event.target.files?.[0] ?? null)}
+            aria-label={`为检查项 ${item.title} 选择附件`}
+          />
+        </label>
+        <button
+          className="btn btn-primary btn--sm w-fit"
+          type="button"
+          disabled={!canWrite || uploading || !selectedFile}
+          onClick={() => void handleUpload()}
+        >
+          <Paperclip className="h-4 w-4" />
+          {uploading ? '上传中' : '上传附件'}
+        </button>
+      </div>
+      {message ? <div className="mt-2 text-xs text-ink-muted">{message}</div> : null}
+      <div className="mt-4 space-y-2">
+        {item.attachments.length ? item.attachments.map(attachment => (
+          <div key={attachment.id} className="rounded-lg border border-outline bg-surface-soft p-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-ink" title={attachment.fileName}>{attachment.fileName}</div>
+                <div className="mt-1 text-xs text-ink-muted">{formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}</div>
+              </div>
+              <button
+                className="btn btn-ghost btn--sm shrink-0"
+                type="button"
+                disabled={!canWrite || downloadingId === attachment.id}
+                onClick={() => void handleDownload(attachment)}
+                title={!canWrite ? '当前账号没有附件下载权限。' : undefined}
+              >
+                <Download className="h-4 w-4" />
+                {downloadingId === attachment.id ? '获取中' : '下载'}
+              </button>
+            </div>
+            <div className="mt-1 break-all font-mono text-[11px] text-ink-muted">{attachment.objectKey}</div>
+          </div>
+        )) : <div className="rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">当前检查项暂无附件。</div>}
+      </div>
     </div>
   );
 }
@@ -2492,7 +2620,9 @@ function TimelineView({
   checkItems,
   modules,
   canWrite,
-  onUpdateStatus
+  onUpdateStatus,
+  onUploadAttachment,
+  onDownloadAttachment
 }: {
   project: Project | null;
   phases: ProjectPhase[];
@@ -2500,6 +2630,8 @@ function TimelineView({
   modules: InspectionModule[];
   canWrite: boolean;
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
+  onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
+  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [selectedCheckItemId, setSelectedCheckItemId] = useState('');
@@ -2788,7 +2920,7 @@ function TimelineView({
               )}
             </div>
           </div>
-          <div className="mt-4 grid gap-4 xl:grid-cols-[320px_1fr]">
+          <div className="mt-4 grid gap-4 xl:grid-cols-[300px_360px_1fr]">
             <div className="rounded-lg border border-outline bg-surface p-3">
               <div className="mb-3 text-sm font-semibold text-ink">直接更新状态</div>
               <CheckItemStatusControl
@@ -2801,6 +2933,12 @@ function TimelineView({
                 点击甘特条切换检查项；保存后后端会记录状态审计和 IDaaS 操作者。
               </div>
             </div>
+            <CheckItemAttachmentPanel
+              item={selectedCheckItem}
+              canWrite={canWrite}
+              onUploadAttachment={onUploadAttachment}
+              onDownloadAttachment={onDownloadAttachment}
+            />
             <AuditHistoryPanel
               logs={auditLogs}
               loading={auditLoading}
@@ -5024,6 +5162,40 @@ export default function App() {
     }
   };
 
+  const handleUploadCheckItemAttachment = async (item: CheckItem, file: File) => {
+    if (!canWrite) return;
+    try {
+      await uploadAttachment({
+        file,
+        projectId: item.projectId,
+        objectType: 'check_item',
+        objectId: item.id
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '附件上传失败'));
+      throw err;
+    }
+  };
+
+  const handleDownloadAttachment = async (attachment: Attachment) => {
+    if (!canWrite) return;
+    try {
+      const url = await fetchAttachmentDownloadLink(attachment.id);
+      if (!url) throw new Error('后端未返回附件下载链接');
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '附件下载链接获取失败'));
+      throw err;
+    }
+  };
+
   const handleUpdateProject = async (draft: ProjectConfigDraft) => {
     if (!canWrite || !workspace.selectedProject) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === draft.factoryId);
@@ -5247,6 +5419,8 @@ export default function App() {
           modules={workspace.inspectionModules}
           canWrite={canWrite}
           onUpdateStatus={handleUpdateCheckItemStatus}
+          onUploadAttachment={handleUploadCheckItemAttachment}
+          onDownloadAttachment={handleDownloadAttachment}
         />
       );
     }

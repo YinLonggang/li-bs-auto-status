@@ -152,3 +152,6 @@
 - 甘特检查项条改为可点击选中；下方面板显示所选检查项、当前状态、最近状态更新人/时间，并可直接保存新状态。
 - 新增 `AuditHistoryPanel`，通过真实 `/audit-logs/` 查询该检查项审计历史，表格展示动作、状态变化、操作者、来源、请求 ID。
 - 本轮前端补强验证通过：`npm run type-check`、`npm run build`。
+- 所选检查项面板新增附件上传/下载：上传复用后端 `/attachments/upload/`，下载复用 `/attachments/{id}/download-link/`，只读态禁用上传和下载按钮。
+- HTTP 请求层支持 multipart `FormData`，上传时不再自动设置 JSON `Content-Type`。
+- 附件入口补强后重新执行 `npm run type-check`、`npm run build` 通过。

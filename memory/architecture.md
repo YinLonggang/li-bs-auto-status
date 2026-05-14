@@ -106,3 +106,5 @@
 - 后端 `PATCH /check-items/{id}/` 若状态发生变化，也补写 `check_item.status_change` 审计，确保配置中心保存状态和执行页快捷改状态都可追溯。
 - 阶段甘特中的检查项条改为可点击按钮；点击后在甘特下方打开所选检查项面板，可直接更新状态并查看 `AuditHistoryPanel` 审计历史。
 - `AuditHistoryPanel` 通过 `/audit-logs/?object_type=CheckItem&object_id=<id>` 拉取真实审计日志，展示时间、动作、状态变化、操作者、来源和 request id，不在前端伪造审计信息。
+- 所选检查项面板新增附件区，上传走 `/attachments/upload/`，固定传 `object_type=check_item` 与当前检查项 `object_id`；下载走 `/attachments/{id}/download-link/` 获取受控预签名链接。
+- 前端请求层对 `FormData` 跳过 JSON `Content-Type`，避免 multipart 上传被错误声明为 `application/json`。
