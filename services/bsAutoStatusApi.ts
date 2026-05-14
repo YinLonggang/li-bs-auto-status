@@ -4,6 +4,7 @@ import type {
   ApiEnvelope,
   Attachment,
   CheckItem,
+  CheckItemOwner,
   ChecklistTemplate,
   CollisionReport,
   DashboardProgressRow,
@@ -68,6 +69,64 @@ const asStringArray = (value: unknown): string[] => {
   }
   return [];
 };
+
+const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
+  if (typeof input === 'string') {
+    return { displayName: input.trim() };
+  }
+  const raw = asRecord(input);
+  const manualName = firstString(raw, ['manualName', 'manual_name']);
+  const sortOrder = firstNumber(raw, ['sortOrder', 'sort_order'], Number.NaN);
+  const isPrimary = asBoolean(raw.isPrimary, asBoolean(raw.is_primary, false));
+  return {
+    displayName: firstString(raw, ['displayName', 'display_name', 'name', 'ownerName', 'owner_name']),
+    idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']),
+    email: firstString(raw, ['email']),
+    department: firstString(raw, ['department', 'department_name', 'org_name']),
+    manualName,
+    manual_name: manualName,
+    role: firstString(raw, ['role']),
+    sortOrder: Number.isFinite(sortOrder) ? sortOrder : undefined,
+    sort_order: Number.isFinite(sortOrder) ? sortOrder : undefined,
+    isPrimary,
+    is_primary: isPrimary,
+    metadata: asRecord(raw.metadata)
+  };
+};
+
+const normalizeCheckItemOwners = (input: unknown, fallbackName = '', fallbackIdaasId = '') => {
+  const seen = new Set<string>();
+  const owners = asArray(input)
+    .map(normalizeCheckItemOwner)
+    .filter(owner => owner.displayName || owner.idaasId || owner.manualName || owner.manual_name)
+    .filter(owner => {
+      const key = `${owner.idaasId || ''}|${owner.displayName || owner.manualName || owner.manual_name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (owners.length) return owners;
+  return fallbackName || fallbackIdaasId
+    ? [{ displayName: fallbackName || fallbackIdaasId, idaasId: fallbackIdaasId || undefined }]
+    : [];
+};
+
+const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
+  (owners ?? [])
+    .map((owner, index) => ({
+      display_name: (owner.displayName || '').trim(),
+      idaas_id: owner.idaasId || undefined,
+      email: owner.email || undefined,
+      manual_name: owner.manualName || owner.manual_name || undefined,
+      role: owner.role || undefined,
+      sort_order: index,
+      is_primary: owner.isPrimary ?? owner.is_primary ?? undefined,
+      metadata: {
+        ...(owner.metadata ?? {}),
+        ...(owner.department ? { department: owner.department } : {})
+      }
+    }))
+    .filter(owner => owner.display_name || owner.idaas_id || owner.manual_name);
 
 const firstString = (record: RawRecord, keys: string[], fallback = '') => {
   for (const key of keys) {
@@ -342,6 +401,9 @@ const normalizeChecklistTemplate = (input: unknown): ChecklistTemplate => {
 const normalizeCheckItem = (input: unknown): CheckItem => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
+  const ownerName = firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置');
+  const ownerIdaasId = firstString(raw, ['ownerIdaasId', 'owner_idaas_id']);
+  const owners = normalizeCheckItemOwners(raw.owners, ownerName === '未设置' ? '' : ownerName, ownerIdaasId);
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
@@ -351,8 +413,11 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
     description: firstString(raw, ['description']),
     acceptanceCriteria: firstString(raw, ['acceptanceCriteria', 'acceptance_criteria']) || firstString(metadata, ['acceptanceCriteria', 'acceptance_criteria']),
     tags: asStringArray(raw.tags).length ? asStringArray(raw.tags) : asStringArray(metadata.tags),
-    ownerName: firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置'),
-    ownerIdaasId: firstString(raw, ['ownerIdaasId', 'owner_idaas_id']),
+    ownerName: ownerName === '未设置'
+      ? owners[0]?.displayName || owners[0]?.manualName || owners[0]?.manual_name || '未设置'
+      : ownerName || owners[0]?.displayName || owners[0]?.manualName || owners[0]?.manual_name || '未设置',
+    ownerIdaasId: ownerIdaasId || owners[0]?.idaasId,
+    owners,
     plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start', 'planned_start_date']) || firstString(metadata, ['plannedStartDate', 'planned_start_date']),
     plannedEndDate: firstString(raw, ['plannedEndDate', 'planned_end', 'planned_end_date', 'due_date']) || firstString(metadata, ['plannedEndDate', 'planned_end_date']),
     actualStartAt: firstString(raw, ['actualStartAt', 'actual_start_at']) || null,
@@ -716,6 +781,7 @@ export type UpdateCheckItemInput = {
   plannedEndDate?: string | null;
   ownerName?: string;
   ownerIdaasId?: string;
+  owners?: CheckItemOwner[];
   status?: string;
   isActive?: boolean;
   progressPercent?: number;
@@ -1020,7 +1086,7 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
 
 export async function updateCheckItemOwner(
   checkItemId: string | number,
-  payload: { ownerName: string; ownerIdaasId?: string; metadata?: Record<string, unknown> }
+  payload: { ownerName?: string; ownerIdaasId?: string; owners?: CheckItemOwner[]; metadata?: Record<string, unknown> }
 ) {
   return updateCheckItem(checkItemId, payload);
 }
@@ -1048,6 +1114,8 @@ export async function updateProjectPhase(phaseId: string | number, payload: Upda
 }
 
 export async function updateCheckItem(checkItemId: string | number, payload: UpdateCheckItemInput) {
+  const owners = serializeCheckItemOwners(payload.owners);
+  const primaryOwner = owners[0];
   return normalizeCheckItem(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-items/${checkItemId}/`, {
       method: 'PATCH',
@@ -1060,8 +1128,9 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         planned_start: optionalDate(payload.plannedStartDate),
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
-        owner_name: payload.ownerName,
-        owner_idaas_id: payload.ownerIdaasId,
+        owners: payload.owners === undefined ? undefined : owners,
+        owner_name: primaryOwner?.display_name ?? payload.ownerName,
+        owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId,
         status: payload.status,
         is_enabled: payload.isActive,
         progress_percent: payload.progressPercent,
@@ -1069,7 +1138,9 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
           ...(payload.metadata ?? {}),
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
-          planned_end_date: optionalDate(payload.plannedEndDate)
+          planned_end_date: optionalDate(payload.plannedEndDate),
+          owner_name: primaryOwner?.display_name ?? payload.ownerName,
+          owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId
         }
       })
     })
@@ -1077,6 +1148,8 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
 }
 
 export async function createCheckItem(projectId: string | number, payload: CreateCheckItemInput) {
+  const owners = serializeCheckItemOwners(payload.owners);
+  const primaryOwner = owners[0];
   return normalizeCheckItem(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/check-items/`, {
       method: 'POST',
@@ -1089,8 +1162,9 @@ export async function createCheckItem(projectId: string | number, payload: Creat
         planned_start: optionalDate(payload.plannedStartDate),
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
-        owner_name: payload.ownerName,
-        owner_idaas_id: payload.ownerIdaasId,
+        owners,
+        owner_name: primaryOwner?.display_name ?? payload.ownerName,
+        owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId,
         status: payload.status ?? 'pending',
         is_enabled: payload.isActive ?? true,
         progress_percent: payload.progressPercent,
@@ -1098,7 +1172,9 @@ export async function createCheckItem(projectId: string | number, payload: Creat
           ...(payload.metadata ?? {}),
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
-          planned_end_date: optionalDate(payload.plannedEndDate)
+          planned_end_date: optionalDate(payload.plannedEndDate),
+          owner_name: primaryOwner?.display_name ?? payload.ownerName,
+          owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId
         }
       })
     })

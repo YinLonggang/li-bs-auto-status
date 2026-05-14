@@ -6,7 +6,7 @@
 - 数据接入优先走 `/api/li-bs-auto-status/v1/dashboard/` 聚合接口，项目列表与 dashboard 查询统一透传 `project`、`factory`、`workshop`、`production_line`、`status` 筛选参数。
 - 项目创建遵循后端最终口径：`factory` / `workshop` 必选，`production_line` 可选；产线为空表示车间级项目。
 - 基础数据级联读取 `/api/v1/base/factories/`、`/api/v1/base/workshops/`、`/api/v1/base/lines/`，后端不可用时用项目快照兜底，避免界面空白。
-- 原型体验数据由真实后端 seed 提供，覆盖六阶段、7 模块、检查项标签、重点问题字段和碰撞一页纸字段；后端 seed 数据源收口为 `prototype_seed.py`，由 `seed_bs_auto_status_dev` 管理命令复用。KeyIssue 原型重点问题表字段在后端已是正式列，前端类型直接兼容这些字段。
+- dev 展示数据直接来自真实后端项目 API；后端默认配置只保留阶段模板、检查模块和检查项模板，不再创建原型样例项目。KeyIssue 重点问题表字段在后端已是正式列，前端类型直接兼容这些字段。
 - 导出任务列表只展示状态、文件名、文件大小、内容类型和时间等安全元信息；下载统一通过管理员动作 `/api/li-bs-auto-status/v1/export-jobs/{id}/download-link/` 获取短链，禁止直接把 `content_url`、bucket/object key 或本地产物地址渲染为链接。
 - 负责人候选接口保持 `/api/li-bs-auto-status/v1/idaas-candidates/`，前端 adapter 接受 snake_case 候选字段和候选数组包装；候选不可用时回退为空列表，负责人字段仍可手工输入。
 
@@ -30,7 +30,7 @@
 
 ## 2026-05-13 真实后端数据收口
 
-- 前端运行时完全依赖真实后端 API 与 seed 原型数据，不再注册浏览器请求拦截器，也不保留本地填充数据文件。
+- 前端运行时完全依赖真实后端 API 数据，不再注册浏览器请求拦截器，也不保留本地填充数据文件。
 - MSW、`mocks/`、`mockServiceWorker.js`、`VITE_ENABLE_MOCKS` 与本地填充数据已删除；dev、build、type-check 逻辑不再包含本地数据兜底，后端无数据时页面展示空态。
 - Dashboard 项目统计兼容 `planned_start` / `planned_end`、`overdue_phase_count` / `overdue_check_item_count`；未返回总逾期数时前端以阶段逾期 + 检查项逾期计算。
 - 默认六阶段和默认检查项不展示删除入口，基础配置页以 `is_enabled=false` 作为停用路径；删除入口仅在后端显式返回 `can_delete=true` 时出现。
@@ -83,3 +83,17 @@
 - 阶段进度页 `timeline` 的时间甘特横轴按周刻度展示，阶段/检查项条仍按计划开始/结束日期计算位置，兼顾周视图扫描和日期级定位。
 - 首页项目卡提供到阶段进度、检查项、重点问题、碰撞一页纸和配置中心的入口；点击时先设置全局当前项目，再切换目标模块。
 - 阶段进度、检查项、重点问题、碰撞一页纸和报告导出模块顶部新增当前项目筛选条；用户在任一模块切换项目后，后续模块默认沿用该全局当前项目。
+
+## 2026-05-14 检查项多责任人前端契约
+
+- `CheckItem` 新增 `owners: CheckItemOwner[]`，继续保留 `ownerName` / `ownerIdaasId` 作为主责任人快照兼容字段。
+- 检查项 API adapter 接收后端 `owners` 数组，缺省时从旧快照字段降级生成单责任人；创建和更新检查项时提交 `owners` 数组，并把数组第一位同步到 `owner_name` / `owner_idaas_id` 与 `metadata` 快照。
+- `CheckItemOwner` 前端模型和 adapter 保留后端多责任人扩展字段：`manualName/manual_name`、`role`、`sortOrder/sort_order`、`isPrimary/is_primary`、`metadata`；保存时按当前列表顺序重写 `sort_order`，避免增删责任人丢失后端字段。
+- 检查项台账页与配置中心检查项表保持横向表格形态，责任人单元格内用 chip 展示多人，并提供候选人添加、手工输入添加和移除；只读态沿用 `canWrite` 禁用所有写控件。
+- 候选人添加默认写入 `role=owner`；手工输入仍作为 `displayName` 进入责任人列表；移除按钮使用 lucide `X` 图标。
+- 检查项台账、配置中心检查项和时间甘特的负责人筛选/关键字搜索均命中所有 `owners` 的姓名、IDaaS ID、邮箱和部门，而不是只看旧单一 `ownerName`。
+
+## 2026-05-14 后端数据口径
+
+- `li-bs-auto-status` 前端不再以 `BS-AUTO-PROTOTYPE` 或原型 seed 项目作为展示基线；页面展示、筛选和回归均直接读取后端正式项目数据。
+- 后端默认数据只作为可复用配置存在：5/6 阶段模板、默认检查模块和检查项模板；项目样例需要通过后端项目 API 创建或导入。

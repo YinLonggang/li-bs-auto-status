@@ -173,6 +173,21 @@ export type ChecklistTemplate = {
   severity: Severity;
 };
 
+export type CheckItemOwner = {
+  displayName: string;
+  idaasId?: string;
+  email?: string;
+  department?: string;
+  manualName?: string;
+  manual_name?: string;
+  role?: string;
+  sortOrder?: number;
+  sort_order?: number;
+  isPrimary?: boolean;
+  is_primary?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
 export type CheckItem = {
   id: string | number;
   projectId: string | number;
@@ -184,6 +199,7 @@ export type CheckItem = {
   tags?: string[];
   ownerName: string;
   ownerIdaasId?: string;
+  owners: CheckItemOwner[];
   plannedStartDate: string;
   plannedEndDate: string;
   actualStartAt?: string | null;

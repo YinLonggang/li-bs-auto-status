@@ -26,7 +26,7 @@
 - `/dashboard/` adapter 兼容 `overdue_count` 与 `project_summaries`；阶段/检查项 PATCH 字段切为 `is_enabled`、`planned_start`、`planned_end`，并补齐 DELETE。
 - 新建项目未传 `phase_template` 时默认使用后端 `bs-auto-status-six-phase`；配置中心新增“补齐默认六阶段”入口，调用 `POST /projects/{id}/seed-template/`。
 - 最终 API 契约覆盖 dashboard 项目统计、单项目详情 timeline、项目 timeline、`seed-template` 补齐入口、阶段/检查项 PATCH/DELETE。
-- 完全下线本地填充数据与浏览器请求拦截器，dev 验收只使用真实后端 seed 原型数据；后端无数据时页面展示空态。
+- 完全下线本地填充数据与浏览器请求拦截器，dev 验收只使用真实后端 API 数据；后端无数据时页面展示空态。
 - 删除 MSW、`mocks/`、`mockServiceWorker.js`、`VITE_ENABLE_MOCKS`，mock 下线门禁扫描源码、public、env、package、node_modules 均为 0 命中。
 - Dashboard 项目统计补齐 `planned_start` / `planned_end`、阶段逾期和检查项逾期字段兼容；逾期总数缺失时由两类逾期相加。
 - 基础配置默认阶段/检查项删除入口下线，只有后端返回 `can_delete=true` 的自定义项才展示删除；默认项通过启用/停用维护。
@@ -111,7 +111,7 @@
 - `npm run permission-regression` 通过，三态 cookie 缺失场景按脚本规则 SKIP，失败数 0。
 - `GET http://127.0.0.1:3005/` 返回 HTTP 200。
 - `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
-- 真实 `/api/li-bs-auto-status/v1/dashboard/projects/` 返回 3 个 dev 项目，覆盖 X04C 5 阶段、X11/X13 6 阶段和原型样例 6 阶段；每个 `phase_progress` 均包含 `completed_check_item_count/check_item_count`。
+- 真实 `/api/li-bs-auto-status/v1/dashboard/projects/` 返回 dev 后端项目数据，每个 `phase_progress` 均包含 `completed_check_item_count/check_item_count`。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-full-136.png` 确认首页项目卡日期不截断，且每阶段显示检查项完成简报。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-no-phase-scroll.png` 确认首页项目卡 5/6 阶段均不再出现横向拖动条。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-week-progress.png` 与 `/tmp/li-bs-auto-status-timeline-week-progress.png` 确认首页阶段轨和阶段进度甘特均按周展示。
@@ -119,3 +119,25 @@
 ### 问题与风险
 
 - 旧响应缺少 `phase_progress` 时仍走摘要字段暂缺降级展示；dev 正式数据已由真实后端返回阶段日期和检查项计数。
+
+### 检查项多责任人完成事项
+
+- 前端类型新增 `CheckItemOwner`，`CheckItem` 增加 `owners` 数组，同时保留旧 `ownerName` / `ownerIdaasId` 快照字段。
+- API adapter 已兼容后端 `owners` 数组；创建/更新检查项时提交 `owners`，并将第一位责任人同步写入 `owner_name` / `owner_idaas_id` 及 metadata 快照。
+- 集成硬化：前端 owner normalize/serialize 保留 `manual_name`、`role`、`sort_order`、`is_primary`、`metadata` 等后端字段；增删责任人保存时按当前列表顺序生成 `sort_order`，候选人新增默认 `role=owner`，手工输入继续写入 `displayName`。
+- OwnerListEditor 移除按钮改用 lucide `X` 图标，避免裸文本 `x`。
+- 后端 `normalize_check_item_owner_payloads` 对非法 `sort_order` 按输入顺序兜底；未显式主责任人时按最终排序后的第一条设为主责任人，并同步 API README 契约说明。
+- 检查项台账页和配置中心检查项表/新增表单支持候选人添加、手工输入添加和移除责任人，只读态禁用添加、移除、保存和新增。
+- 检查项台账、配置中心检查项和时间甘特筛选已改为命中所有责任人的姓名、IDaaS ID、邮箱和部门。
+
+### 检查项多责任人验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过。
+- `cd li_sicar && source scripts/backend-dev-env.sh && .venv/bin/python manage.py test li_bs_auto_status` 通过，26 tests OK。
+
+### 后端数据口径收口
+
+- 前端继续完全下线 mock，本轮同步取消对 `BS-AUTO-PROTOTYPE` 原型样例项目的展示假设。
+- 后端迁移保留默认阶段模板、检查模块和检查项模板作为可复用配置，dev 展示与回归直接读取正式项目 API 数据。
+- dev 数据库迁移后确认 `BS-AUTO-PROTOTYPE=0`、默认模板 `bs-auto-status-five-phase/bs-auto-status-six-phase` 存在、默认模块 7 个、检查模板 18 组。

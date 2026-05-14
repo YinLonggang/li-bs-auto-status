@@ -23,7 +23,8 @@ import {
   Target,
   Trash2,
   UserRound,
-  Workflow
+  Workflow,
+  X
 } from 'lucide-react';
 import AuthPromptCard from './components/AuthPromptCard';
 import Sidebar, { AppTab, MobileMenuButton } from './components/Sidebar';
@@ -48,6 +49,7 @@ import {
 import { ApiError } from './services/http';
 import type {
   CheckItem,
+  CheckItemOwner,
   CollisionReport,
   DashboardSummary,
   ExportTask,
@@ -326,6 +328,53 @@ const textMatches = (keyword: string, values: Array<string | number | null | und
   if (!normalizedKeyword) return true;
   return values.some(value => normalizeText(value).includes(normalizedKeyword));
 };
+
+const ownerKeyOf = (owner: CheckItemOwner) =>
+  `${normalizeText(owner.idaasId)}|${normalizeText(owner.displayName || owner.manualName || owner.manual_name)}`;
+
+const normalizeOwners = (owners: CheckItemOwner[]) => {
+  const seen = new Set<string>();
+  return owners
+    .map((owner, index) => ({
+      ...owner,
+      displayName: owner.displayName.trim(),
+      idaasId: owner.idaasId?.trim() || undefined,
+      manualName: owner.manualName?.trim() || owner.manual_name?.trim() || undefined,
+      manual_name: owner.manualName?.trim() || owner.manual_name?.trim() || undefined,
+      role: owner.role?.trim() || undefined,
+      sortOrder: index,
+      sort_order: index
+    }))
+    .filter(owner => owner.displayName || owner.idaasId || owner.manualName || owner.manual_name)
+    .filter(owner => {
+      const key = ownerKeyOf(owner);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const ownersOfItem = (item: CheckItem) =>
+  normalizeOwners(
+    item.owners?.length
+      ? item.owners
+      : item.ownerName && item.ownerName !== '未设置'
+        ? [{ displayName: item.ownerName, idaasId: item.ownerIdaasId }]
+        : []
+  );
+
+const ownersForSearch = (owners?: CheckItemOwner[]) =>
+  (owners ?? []).flatMap(owner => [
+    owner.displayName,
+    owner.manualName,
+    owner.manual_name,
+    owner.idaasId,
+    owner.email,
+    owner.department
+  ]);
+
+const ownerDisplayName = (owner: CheckItemOwner) =>
+  owner.displayName || owner.manualName || owner.manual_name || owner.idaasId || '';
 
 const dateRangeMatches = (itemStart?: string | null, itemEnd?: string | null, filterStart?: string, filterEnd?: string) => {
   const startLimit = dateMs(filterStart);
@@ -1522,7 +1571,7 @@ function ProjectDashboardExpansion({
       <div className="dashboard-actionbar">
         <div className="flex items-center gap-2 text-sm text-ink-muted">
           <Flag className="h-4 w-4 text-accent" />
-          <span>默认 dashboard 已覆盖原型的阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
+          <span>默认 dashboard 已覆盖阶段、模块、重点问题、碰撞一页纸、签核和附件入口。</span>
           {!canWrite ? <span className="text-warning">当前账号只读，不能生成导出任务。</span> : null}
         </div>
         <button
@@ -1751,7 +1800,7 @@ function ChecklistDetailPanel({
                 <StatusPill status={item.status} />
               </div>
               <div className="mt-3 grid gap-2 text-xs text-ink-muted sm:grid-cols-3">
-                <span>负责人：{item.ownerName || '未设置'}</span>
+                <span>负责人：{ownersOfItem(item).map(ownerDisplayName).join('、') || '未设置'}</span>
                 <span>计划：{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</span>
                 <span>进度：{percent(item.progressPercent)}</span>
               </div>
@@ -2283,12 +2332,13 @@ function TimelineView({
   const phaseById = new Map(sorted.map(phase => [idOf(phase.id), phase]));
   const filteredCheckItems = checkItems.filter(item => {
     const phase = phaseById.get(idOf(item.projectPhaseId));
+    const itemOwners = ownersOfItem(item);
     if (!phase) return false;
     if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
     if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
     if (filters.status && item.status !== filters.status) return false;
-    if (filters.owner && !textMatches(filters.owner, [item.ownerName, item.ownerIdaasId])) return false;
-    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name])) return false;
+    if (filters.owner && !textMatches(filters.owner, ownersForSearch(itemOwners))) return false;
+    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, ...ownersForSearch(itemOwners)])) return false;
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
   });
   const filteredItemPhaseIds = new Set(filteredCheckItems.map(item => idOf(item.projectPhaseId)));
@@ -2489,6 +2539,105 @@ function TimelineView({
   );
 }
 
+function OwnerListEditor({
+  owners,
+  ownerName,
+  ownerIdaasId,
+  ownerCandidates,
+  canWrite,
+  candidateLabel,
+  manualLabel,
+  onChange
+}: {
+  owners: CheckItemOwner[];
+  ownerName: string;
+  ownerIdaasId?: string;
+  ownerCandidates: OwnerCandidate[];
+  canWrite: boolean;
+  candidateLabel: string;
+  manualLabel: string;
+  onChange: (next: { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }) => void;
+}) {
+  const addOwner = (owner: CheckItemOwner) => {
+    onChange({
+      owners: normalizeOwners([...owners, owner]),
+      ownerName: '',
+      ownerIdaasId: undefined
+    });
+  };
+  const removeOwner = (owner: CheckItemOwner) => {
+    onChange({
+      owners: normalizeOwners(owners.filter(current => ownerKeyOf(current) !== ownerKeyOf(owner))),
+      ownerName,
+      ownerIdaasId
+    });
+  };
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap gap-1.5">
+        {owners.length ? owners.map(owner => (
+          <span key={ownerKeyOf(owner)} className="chip">
+            {ownerDisplayName(owner)}
+            <button
+              className="ml-1 text-ink-muted hover:text-danger disabled:hover:text-ink-muted"
+              type="button"
+              disabled={!canWrite}
+              onClick={() => removeOwner(owner)}
+              aria-label={`移除责任人 ${ownerDisplayName(owner)}`}
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </span>
+        )) : <span className="text-xs text-ink-muted">未设置</span>}
+      </div>
+      <select
+        className="select"
+        value=""
+        disabled={!canWrite}
+        onChange={event => {
+          const candidate = ownerCandidates.find(owner => owner.idaasId === event.target.value);
+          if (candidate) {
+            addOwner({
+              displayName: candidate.displayName,
+              idaasId: candidate.idaasId,
+              email: candidate.email,
+              department: candidate.department,
+              role: 'owner'
+            });
+          }
+        }}
+        aria-label={candidateLabel}
+      >
+        <option value="">候选人添加</option>
+        {ownerCandidates.map(owner => (
+          <option key={owner.idaasId} value={owner.idaasId}>
+            {owner.displayName} / {owner.department ?? owner.email ?? owner.idaasId}
+          </option>
+        ))}
+      </select>
+      <div className="flex gap-2">
+        <input
+          className="input"
+          value={ownerName}
+          disabled={!canWrite}
+          onChange={event => onChange({ owners, ownerName: event.target.value, ownerIdaasId: undefined })}
+          placeholder="手工输入责任人"
+          aria-label={manualLabel}
+        />
+        <button
+          className="btn btn-ghost btn--sm shrink-0"
+          type="button"
+          disabled={!canWrite || !ownerName.trim()}
+          onClick={() => addOwner({ displayName: ownerName, idaasId: ownerIdaasId })}
+        >
+          <Plus className="h-4 w-4" />
+          添加
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChecksView({
   checkItems,
   phases,
@@ -2506,9 +2655,9 @@ function ChecksView({
   canWrite: boolean;
   defaultOwnerName: string;
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
-  onUpdateOwner: (item: CheckItem, ownerName: string, ownerIdaasId?: string) => void;
+  onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => void;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, { ownerName: string; ownerIdaasId?: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newDraft, setNewDraft] = useState<CheckItemConfigDraft | null>(null);
   const [createMessage, setCreateMessage] = useState('');
@@ -2528,10 +2677,11 @@ function ChecksView({
     if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
     if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
     if (filters.status && item.status !== filters.status) return false;
-    if (filters.owner && !textMatches(filters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    const itemOwners = ownersOfItem(item);
+    if (filters.owner && !textMatches(filters.owner, ownersForSearch(itemOwners))) return false;
     if (filters.activeState === 'enabled' && item.isActive === false) return false;
     if (filters.activeState === 'disabled' && item.isActive !== false) return false;
-    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name])) return false;
+    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, ...ownersForSearch(itemOwners)])) return false;
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
   });
   const statusOptions = statusOptionValues(checkItems.map(item => item.status));
@@ -2565,6 +2715,7 @@ function ChecksView({
         plannedEndDate: dateInputValue(defaultPhase.plannedEndDate),
         ownerName: defaultOwnerName,
         ownerIdaasId: undefined,
+        owners: defaultOwnerName ? [{ displayName: defaultOwnerName }] : [],
         status: 'pending',
         isActive: true
       };
@@ -2588,6 +2739,8 @@ function ChecksView({
         plannedStartDate: dateInputValue(selectedNewPhase?.plannedStartDate),
         plannedEndDate: dateInputValue(selectedNewPhase?.plannedEndDate),
         ownerName: newDraft.ownerName || defaultOwnerName,
+        ownerIdaasId: undefined,
+        owners: ownersFromDraft(newDraft),
         status: 'pending',
         isActive: true
       });
@@ -2666,13 +2819,19 @@ function ChecksView({
               <span className="field-label">计划结束</span>
               <input className="input" type="date" value={newDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, plannedEndDate: event.target.value })} />
             </label>
-            <label>
-              <span className="field-label">负责人</span>
-              <input className="input" list="checks-owner-candidates" value={newDraft.ownerName} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, ownerName: event.target.value })} />
-              <datalist id="checks-owner-candidates">
-                {ownerCandidates.map(owner => <option key={owner.idaasId} value={owner.displayName} />)}
-              </datalist>
-            </label>
+            <div>
+              <span className="field-label">责任人</span>
+              <OwnerListEditor
+                owners={newDraft.owners}
+                ownerName={newDraft.ownerName}
+                ownerIdaasId={newDraft.ownerIdaasId}
+                ownerCandidates={ownerCandidates}
+                canWrite={canWrite}
+                candidateLabel="检查项页面新增候选责任人"
+                manualLabel="检查项页面新增手工责任人"
+                onChange={next => setNewDraft({ ...newDraft, ...next })}
+              />
+            </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -2757,8 +2916,9 @@ function ChecksView({
           <tbody>
             {filteredCheckItems.map(item => {
               const draft = drafts[`${item.id}`] ?? {
-                ownerName: item.ownerName,
-                ownerIdaasId: item.ownerIdaasId
+                owners: ownersOfItem(item),
+                ownerName: '',
+                ownerIdaasId: undefined
               };
               return (
                 <tr key={item.id}>
@@ -2768,36 +2928,19 @@ function ChecksView({
                   </td>
                   <td>{phaseById.get(`${item.projectPhaseId}`)?.name ?? '-'}</td>
                   <td>{moduleById.get(`${item.moduleId}`)?.name ?? '-'}</td>
-                  <td className="min-w-[220px]">
-                    <select
-                      className="select mb-2"
-                      value={draft.ownerIdaasId ?? 'free'}
-                      disabled={!canWrite}
-                      onChange={event => {
-                        const candidate = ownerCandidates.find(owner => owner.idaasId === event.target.value);
+                  <td className="min-w-[280px]">
+                    <OwnerListEditor
+                      owners={draft.owners}
+                      ownerName={draft.ownerName}
+                      ownerIdaasId={draft.ownerIdaasId}
+                      ownerCandidates={ownerCandidates}
+                      canWrite={canWrite}
+                      candidateLabel={`检查项 ${item.title} 候选责任人`}
+                      manualLabel={`检查项 ${item.title} 手工责任人`}
+                      onChange={next =>
                         setDrafts(current => ({
                           ...current,
-                          [`${item.id}`]: candidate
-                            ? { ownerName: candidate.displayName, ownerIdaasId: candidate.idaasId }
-                            : { ownerName: draft.ownerName, ownerIdaasId: undefined }
-                        }));
-                      }}
-                    >
-                      <option value="free">自由输入</option>
-                      {ownerCandidates.map(owner => (
-                        <option key={owner.idaasId} value={owner.idaasId}>
-                          {owner.displayName} / {owner.department ?? owner.email ?? owner.idaasId}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      className="input"
-                      value={draft.ownerName}
-                      disabled={!canWrite}
-                      onChange={event =>
-                        setDrafts(current => ({
-                          ...current,
-                          [`${item.id}`]: { ownerName: event.target.value, ownerIdaasId: draft.ownerIdaasId }
+                          [`${item.id}`]: next
                         }))
                       }
                     />
@@ -2810,7 +2953,7 @@ function ChecksView({
                       className="btn btn-primary btn--sm"
                       type="button"
                       disabled={!canWrite}
-                      onClick={() => onUpdateOwner(item, draft.ownerName, draft.ownerIdaasId)}
+                      onClick={() => onUpdateOwner(item, ownersFromDraft(draft))}
                     >
                       <Save className="h-4 w-4" />
                       保存
@@ -3229,9 +3372,18 @@ type CheckItemConfigDraft = {
   plannedEndDate: string;
   ownerName: string;
   ownerIdaasId?: string;
+  owners: CheckItemOwner[];
   status: string;
   isActive: boolean;
 };
+
+const ownersFromDraft = (draft: Pick<CheckItemConfigDraft, 'owners' | 'ownerName' | 'ownerIdaasId'>) =>
+  normalizeOwners([
+    ...draft.owners,
+    ...(draft.ownerName.trim()
+      ? [{ displayName: draft.ownerName, idaasId: draft.ownerIdaasId }]
+      : [])
+  ]);
 
 function BaseConfigView({
   data,
@@ -3305,13 +3457,14 @@ function BaseConfigView({
   const visibleCheckItems = data.checkItems.filter(item => {
     const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
     const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
+    const itemOwners = ownersOfItem(item);
     if (!selectedPhaseId || idOf(item.projectPhaseId) !== selectedPhaseId) return false;
     if (checkFilters.moduleId && idOf(item.moduleId) !== checkFilters.moduleId) return false;
     if (checkFilters.status && item.status !== checkFilters.status) return false;
-    if (checkFilters.owner && !textMatches(checkFilters.owner, [item.ownerName, item.ownerIdaasId])) return false;
+    if (checkFilters.owner && !textMatches(checkFilters.owner, ownersForSearch(itemOwners))) return false;
     if (checkFilters.activeState === 'enabled' && item.isActive === false) return false;
     if (checkFilters.activeState === 'disabled' && item.isActive !== false) return false;
-    if (!textMatches(checkFilters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name, item.tags?.join(' ')])) return false;
+    if (!textMatches(checkFilters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, item.tags?.join(' '), ...ownersForSearch(itemOwners)])) return false;
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, checkFilters.startDate, checkFilters.endDate);
   });
   const workshops = data.hierarchy.workshops.filter(
@@ -3489,6 +3642,7 @@ function BaseConfigView({
             plannedEndDate: dateInputValue(item.plannedEndDate),
             ownerName: item.ownerName,
             ownerIdaasId: item.ownerIdaasId,
+            owners: ownersOfItem(item),
             status: item.status,
             isActive: item.isActive !== false
           }
@@ -3511,6 +3665,7 @@ function BaseConfigView({
       plannedEndDate: dateInputValue(sortedPhases[0]?.plannedEndDate),
       ownerName: project.ownerName,
       ownerIdaasId: undefined,
+      owners: project.ownerName ? [{ displayName: project.ownerName }] : [],
       status: 'pending',
       isActive: true
     });
@@ -4099,10 +4254,19 @@ function BaseConfigView({
                 <span className="field-label">计划结束</span>
                 <input className="input" type="date" value={newCheckDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, plannedEndDate: event.target.value })} />
               </label>
-              <label>
-                <span className="field-label">负责人</span>
-                <input className="input" list="base-config-owner-candidates" value={newCheckDraft.ownerName} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, ownerName: event.target.value })} />
-              </label>
+              <div>
+                <span className="field-label">责任人</span>
+                <OwnerListEditor
+                  owners={newCheckDraft.owners}
+                  ownerName={newCheckDraft.ownerName}
+                  ownerIdaasId={newCheckDraft.ownerIdaasId}
+                  ownerCandidates={data.ownerCandidates}
+                  canWrite={canWrite}
+                  candidateLabel="配置中心新增候选责任人"
+                  manualLabel="配置中心新增手工责任人"
+                  onChange={next => setNewCheckDraft({ ...newCheckDraft, ...next })}
+                />
+              </div>
               <label>
                 <span className="field-label">状态</span>
                 <select className="select" value={newCheckDraft.status} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, status: event.target.value })}>
@@ -4188,13 +4352,21 @@ function BaseConfigView({
                     <td className="min-w-[150px]">
                       <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
                     </td>
-                    <td className="min-w-[190px]">
-                      <input
-                        className="input"
-                        list="base-config-owner-candidates"
-                        value={draft.ownerName}
-                        disabled={!canWrite}
-                        onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, ownerName: event.target.value } }))}
+                    <td className="min-w-[280px]">
+                      <OwnerListEditor
+                        owners={draft.owners}
+                        ownerName={draft.ownerName}
+                        ownerIdaasId={draft.ownerIdaasId}
+                        ownerCandidates={data.ownerCandidates}
+                        canWrite={canWrite}
+                        candidateLabel={`配置中心 ${item.title} 候选责任人`}
+                        manualLabel={`配置中心 ${item.title} 手工责任人`}
+                        onChange={next =>
+                          setCheckItemDrafts(current => ({
+                            ...current,
+                            [idOf(item.id)]: { ...draft, ...next }
+                          }))
+                        }
                       />
                     </td>
                     <td className="min-w-[160px]">
@@ -4479,10 +4651,10 @@ export default function App() {
     }
   };
 
-  const handleUpdateOwner = async (item: CheckItem, ownerName: string, ownerIdaasId?: string) => {
+  const handleUpdateOwner = async (item: CheckItem, owners: CheckItemOwner[]) => {
     if (!canWrite) return;
     try {
-      await updateCheckItemOwner(item.id, { ownerName, ownerIdaasId, metadata: item.metadata });
+      await updateCheckItemOwner(item.id, { owners, metadata: item.metadata });
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '负责人更新失败'));
@@ -4574,6 +4746,7 @@ export default function App() {
         plannedEndDate: draft.plannedEndDate,
         ownerName: draft.ownerName,
         ownerIdaasId: draft.ownerIdaasId,
+        owners: ownersFromDraft(draft),
         status: draft.status,
         isActive: draft.isActive,
         progressPercent: isComplete(draft.status) ? 100 : 0
@@ -4597,6 +4770,7 @@ export default function App() {
         plannedEndDate: draft.plannedEndDate,
         ownerName: draft.ownerName,
         ownerIdaasId: draft.ownerIdaasId,
+        owners: ownersFromDraft(draft),
         status: draft.status,
         isActive: draft.isActive,
         progressPercent: isComplete(draft.status) ? 100 : item.progressPercent,
