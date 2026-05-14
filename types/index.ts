@@ -310,6 +310,17 @@ export type ProjectStatistics = {
   exportJobCount: number;
   failedExportJobCount: number;
   currentPhaseName?: string;
+  phaseProgress?: ProjectPhaseProgress[];
+};
+
+export type ProjectPhaseProgress = {
+  key: string;
+  name: string;
+  sequence: number;
+  plannedStartDate?: string;
+  plannedEndDate?: string;
+  status: PhaseStatus;
+  progressPercent: number;
 };
 
 export type ProjectTimeline = {

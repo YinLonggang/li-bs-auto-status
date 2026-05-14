@@ -17,6 +17,7 @@ import type {
   PhaseTemplate,
   ProductionLineOption,
   Project,
+  ProjectPhaseProgress,
   ProjectPhase,
   ProjectStatistics,
   ProjectTimeline,
@@ -551,6 +552,21 @@ const normalizeDashboardProgressRow = (input: unknown): DashboardProgressRow => 
   };
 };
 
+const normalizeProjectPhaseProgress = (input: unknown): ProjectPhaseProgress => {
+  const raw = asRecord(input);
+  const metadata = metadataOf(raw);
+  const key = firstId(raw, ['phase_key', 'key', 'code', 'id']);
+  return {
+    key: `${key}`,
+    name: firstString(raw, ['phase_name', 'name'], `${key}`),
+    sequence: firstNumber(raw, ['sequence', 'sort_order']),
+    plannedStartDate: firstString(raw, ['planned_start', 'planned_start_date', 'plannedStartDate']),
+    plannedEndDate: firstString(raw, ['planned_end', 'planned_end_date', 'plannedEndDate']),
+    status: firstString(raw, ['status'], 'not_started'),
+    progressPercent: firstNumber(raw, ['progress_percent', 'completion_rate', 'progressPercent']) || firstNumber(metadata, ['progressPercent', 'progress_percent'])
+  };
+};
+
 const normalizeProjectStatistics = (input: unknown): ProjectStatistics => {
   const raw = asRecord(input);
   const overduePhaseCount = firstNumber(raw, ['overdue_phase_count', 'overduePhaseCount']);
@@ -582,7 +598,8 @@ const normalizeProjectStatistics = (input: unknown): ProjectStatistics => {
     pendingCollisionReportCount: firstNumber(raw, ['pending_collision_report_count', 'pendingCollisionReportCount']),
     exportJobCount: firstNumber(raw, ['export_job_count', 'exportJobCount']),
     failedExportJobCount: firstNumber(raw, ['failed_export_job_count', 'failedExportJobCount']),
-    currentPhaseName: firstString(raw, ['current_phase_name', 'currentPhaseName', 'current_phase'])
+    currentPhaseName: firstString(raw, ['current_phase_name', 'currentPhaseName', 'current_phase']),
+    phaseProgress: asArray(raw.phase_progress ?? raw.phaseProgress).map(normalizeProjectPhaseProgress)
   };
 };
 

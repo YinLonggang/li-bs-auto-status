@@ -38,8 +38,9 @@
 
 ### 验证
 
-- `npm run type-check` 通过。
-- `npm run build` 通过。
+- `npm run type-check` 通过；清理未使用旧首页计算后重新执行仍通过。
+- `npm run build` 通过；清理未使用旧首页计算后重新执行仍通过。
+- 3005 已有服务监听且 `GET http://127.0.0.1:3005/` 返回 200；本轮另起 Vite `3006`，`GET http://127.0.0.1:3006/` 返回 200。
 - `git -C li-bs-auto-status diff --check` 通过。
 - 3005 真实后端 DOM smoke 通过，38 个 `/api/...` 请求，`mock_resources: []`。
 - `npm run permission-regression` 通过，失败数 0；当前缺少只读/可写 cookie，三态场景按脚本规则 SKIP。
@@ -83,3 +84,28 @@
 
 - `package.json` 当前没有 `lint` 脚本，无法执行前端 lint。
 - 真实附件上传入口仍依赖后端上传/下载联调；当前 dashboard 展示附件入口和已有附件下载信息。
+
+## 2026-05-14
+
+### 今日目标
+
+- 按用户反馈把 Dashboard/Home 改为项目汇总入口，不在首页展开单项目复杂详情。
+- 首页项目卡展示阶段导航与进度，并提供跨模块跳转入口。
+
+### 完成事项
+
+- Dashboard 保留项目总览和精简图表，项目区域改为入口卡片，不再渲染单项目统计、泳道、检查项详情、重点问题详情和碰撞一页纸正文。
+- 项目卡新增圆点 + 连线 + 阶段名称 + 日期 + 进度条的横向阶段轨，优先读取 `/dashboard/projects/` additive `phase_progress` / `stat.phaseProgress`。
+- `phase_progress` 暂缺时用 `currentPhaseName`、`phaseCount` 和项目完成率做降级，不新增 mock，不发起逐项目 detail/timeline N+1。
+- 项目卡新增跳转到阶段进度、检查项、重点问题、碰撞一页纸和配置中心的按钮，跳转前设置全局当前项目。
+- 阶段进度、检查项、重点问题、碰撞一页纸和报告导出模块新增当前项目筛选条，模块切换默认沿用全局当前项目。
+- 保持现有只读权限逻辑：只读用户仍可查看模块，写操作仍由原有 `canWrite` 控制。
+
+### 验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过。
+
+### 问题与风险
+
+- 当前只做前端适配；`phase_progress` 字段需要后端按 additive 契约补齐后才能显示完整阶段名称/日期。

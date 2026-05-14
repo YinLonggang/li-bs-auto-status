@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -55,6 +55,7 @@ import type {
   KeyIssue,
   OwnerCandidate,
   Project,
+  ProjectPhaseProgress,
   ProjectPhase,
   ProjectStatistics,
   ReportDefinition,
@@ -294,6 +295,20 @@ type DashboardCell = {
   phaseId: string;
 };
 
+type DashboardJumpTarget = Extract<AppTab, 'timeline' | 'checks' | 'issues' | 'collision' | 'baseConfig'>;
+
+const DASHBOARD_PROJECT_ACTIONS: Array<{
+  view: DashboardJumpTarget;
+  label: string;
+  icon: typeof Target;
+}> = [
+  { view: 'timeline', label: '阶段进度', icon: Target },
+  { view: 'checks', label: '检查项', icon: CheckCircle2 },
+  { view: 'issues', label: '重点问题', icon: AlertTriangle },
+  { view: 'collision', label: '碰撞一页纸', icon: FileText },
+  { view: 'baseConfig', label: '配置中心', icon: Workflow }
+];
+
 type ChartDatum = {
   key: string;
   label: string;
@@ -312,9 +327,6 @@ const CHART_COLORS = [
 ];
 
 const chartColor = (index: number) => CHART_COLORS[index % CHART_COLORS.length];
-
-const sumStatuses = (record: Record<string, number> | undefined, statuses: string[]) =>
-  statuses.reduce((total, status) => total + (record?.[status] ?? 0), 0);
 
 const chartDataFromRecord = (
   record: Record<string, number>,
@@ -881,7 +893,8 @@ const buildProjectStatistics = (data: WorkspaceData): ProjectStatistics[] => {
         : summary?.pendingCollisionReportCount ?? 0,
       exportJobCount: selected ? selectedExports.length : summary?.exportJobCount ?? 0,
       failedExportJobCount: selected ? selectedExports.filter(task => task.status === 'failed').length : summary?.failedExportJobCount ?? 0,
-      currentPhaseName: currentPhase?.name ?? summary?.currentPhaseName
+      currentPhaseName: currentPhase?.name ?? summary?.currentPhaseName,
+      phaseProgress: summary?.phaseProgress ?? []
     };
   });
 };
@@ -926,7 +939,6 @@ function PortfolioOverview({
         <div>
           <p className="kicker">Portfolio Overview</p>
           <h2 className="text-xl font-semibold">项目状态总览</h2>
-          <p className="text-sm text-ink-muted">先看全部项目健康度，再从项目列表选择项目并在下方查看详情。</p>
         </div>
         <span className="chip">{projectCount} 个项目</span>
       </div>
@@ -969,47 +981,6 @@ function DashboardCharts({
     projectStatusCounts,
     ['active', 'planning', 'paused', 'completed', 'archived']
   );
-  const totalCheckItems = summary?.checkItemCount ?? stats.reduce((total, stat) => total + stat.checkItemCount, 0);
-  const completedCheckItems = summary?.completedCheckItemCount ?? stats.reduce((total, stat) => total + stat.completedCheckItemCount, 0);
-  const summaryCheckItemStatusCounts = summary?.byCheckItemStatus ?? {};
-  const blockedCheckItems = Object.keys(summaryCheckItemStatusCounts).length
-    ? sumStatuses(summaryCheckItemStatusCounts, ['blocked', 'fail', 'failed', 'critical'])
-    : stats.reduce((total, stat) => total + stat.blockedCheckItemCount, 0);
-  const openCheckItems = Math.max(0, totalCheckItems - completedCheckItems - blockedCheckItems);
-  const checkClosureData = [
-    {
-      key: 'completed',
-      label: '已完成',
-      value: completedCheckItems,
-      color: 'rgb(var(--chart-green))'
-    },
-    {
-      key: 'blocked',
-      label: '阻塞/失败',
-      value: blockedCheckItems,
-      color: 'rgb(var(--chart-red))'
-    },
-    {
-      key: 'open',
-      label: '待推进',
-      value: openCheckItems,
-      color: 'rgb(var(--chart-amber))'
-    }
-  ].filter(item => item.value > 0);
-  const completionBars = stats.map(stat => ({
-    key: idOf(stat.projectId),
-    label: stat.projectName,
-    value: Math.round(stat.completionRate),
-    detail: `${stat.completedCheckItemCount}/${stat.checkItemCount} 检查项 · ${stat.currentPhaseName ?? '未进入阶段'}`,
-    color:
-      stat.completionRate >= 85
-        ? 'rgb(var(--chart-green))'
-        : stat.completionRate >= 60
-          ? 'rgb(var(--chart-teal))'
-          : stat.completionRate >= 35
-            ? 'rgb(var(--chart-amber))'
-            : 'rgb(var(--chart-red))'
-  }));
   const riskBars = [...stats]
     .sort((left, right) => {
       const leftRisk = left.overdueCount + left.openKeyIssueCount + left.pendingCollisionReportCount;
@@ -1032,35 +1003,20 @@ function DashboardCharts({
       <div className="dashboard-chart-header">
         <div>
           <p className="kicker">Dashboard Charts</p>
-          <h2 className="text-xl font-semibold">全量统计与子项目图表</h2>
-          <p className="text-sm text-ink-muted">用全量分布判断整体健康度，用子项目柱状图定位需要优先处理的项目。</p>
+          <h2 className="text-xl font-semibold">整体状态图表</h2>
         </div>
-        <span className="chip">不参与页面筛选</span>
+        <span className="chip">{stats.length} 个项目</span>
       </div>
-      <div className="dashboard-chart-grid">
+      <div className="dashboard-chart-grid dashboard-chart-grid--focused">
         <DonutChart
-          title="所有项目状态"
-          description="按项目当前状态统计。"
+          title="项目状态分布"
+          description="按项目当前状态汇总。"
           data={projectStatusData}
           centerLabel="项目"
         />
-        <DonutChart
-          title="所有检查项闭环"
-          description="已完成、阻塞和待推进检查项分布。"
-          data={checkClosureData}
-          centerLabel="检查项"
-        />
         <HorizontalBarChart
-          title="子项目完成率"
-          description="每个项目的检查项完成情况。"
-          data={completionBars}
-          maxValue={100}
-          valueFormatter={value => `${Math.round(value)}%`}
-          wide
-        />
-        <HorizontalBarChart
-          title="子项目风险压力"
-          description="按逾期、未关闭重点问题和待签核一页纸汇总。"
+          title="项目风险压力"
+          description="逾期、未关闭重点问题和待签核一页纸汇总。"
           data={riskBars}
           wide
         />
@@ -1181,6 +1137,213 @@ function ProjectStatisticsList({
             })}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+function ProjectPhaseProgressRail({
+  phases,
+  stat
+}: {
+  phases: ProjectPhaseProgress[];
+  stat: ProjectStatistics;
+}) {
+  const sorted = [...phases].sort((left, right) => left.sequence - right.sequence);
+  const fallbackCount = Math.max(stat.phaseCount, 1);
+  const fallbackCurrentIndex = Math.min(
+    fallbackCount - 1,
+    Math.max(0, Math.floor((stat.completionRate / 100) * fallbackCount))
+  );
+  const railCount = sorted.length || fallbackCount;
+  const railStyle = {
+    minWidth: `${Math.max(railCount, 1) * 132}px`,
+    gridTemplateColumns: `repeat(${Math.max(railCount, 1)}, minmax(132px, 1fr))`
+  };
+
+  if (!sorted.length) {
+    return (
+      <div className="project-phase-rail-shell" aria-label={`${stat.projectName} 阶段进度`}>
+        <div className="project-phase-rail" style={railStyle}>
+          {Array.from({ length: fallbackCount }, (_, index) => {
+            const done = stat.completionRate >= ((index + 1) / fallbackCount) * 100;
+            const active = index === fallbackCurrentIndex && !done;
+            const label = active && stat.currentPhaseName ? stat.currentPhaseName : `阶段 ${index + 1}`;
+            return (
+              <div
+                key={label}
+                className={`project-phase-step ${done ? 'is-done' : active ? 'is-active' : ''}`}
+              >
+                {index < fallbackCount - 1 ? <span className={`project-phase-line ${done ? 'is-complete' : ''}`} /> : null}
+                <span className="project-phase-dot">{done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
+                <span className="project-phase-name">{label}</span>
+                <span className="project-phase-date">{stat.currentPhaseName && active ? '当前阶段' : '摘要字段暂缺'}</span>
+                <span className="project-phase-progress">
+                  <span style={{ width: done ? '100%' : active ? percent(stat.completionRate) : '0%' }} />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const activeIndex = sorted.findIndex(phase => ['in_progress', 'active', 'blocked'].includes(phase.status));
+  const fallbackIndex = sorted.reduce((lastIndex, phase, index) => (isComplete(phase.status) || phase.status === 'completed' ? index : lastIndex), -1);
+  const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, fallbackIndex);
+
+  return (
+    <div className="project-phase-rail-shell" aria-label={`${stat.projectName} 阶段进度`}>
+      <div className="project-phase-rail" style={railStyle}>
+        {sorted.map((phase, index) => {
+          const done = phase.progressPercent >= 100 || isComplete(phase.status) || phase.status === 'completed';
+          const blocked = isBlocked(phase.status);
+          const active = index === currentIndex && !done;
+          return (
+            <div
+              key={phase.key || `${phase.name}-${index}`}
+              className={`project-phase-step ${done ? 'is-done' : ''} ${active ? 'is-active' : ''} ${blocked ? 'is-blocked' : ''}`}
+            >
+              {index < sorted.length - 1 ? (
+                <span className={`project-phase-line ${done || index < currentIndex ? 'is-complete' : ''}`} />
+              ) : null}
+              <span className="project-phase-dot">{done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
+              <span className="project-phase-name" title={phase.name}>{phase.name}</span>
+              <span className="project-phase-date">{formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</span>
+              <span className="project-phase-progress">
+                <span style={{ width: percent(phase.progressPercent) }} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProjectSummaryCard({
+  stat,
+  project,
+  phases,
+  selected,
+  onOpenProject
+}: {
+  stat: ProjectStatistics;
+  project?: Project;
+  phases: ProjectPhaseProgress[];
+  selected: boolean;
+  onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
+}) {
+  const scopeText = [project?.plant, project?.workshopName, project?.lineName].filter(Boolean).join(' / ');
+  const dateText = `${formatDate(stat.plannedStartDate || project?.plannedStartDate)} 至 ${formatDate(stat.plannedEndDate || project?.plannedEndDate)}`;
+
+  return (
+    <article className={`project-summary-card ${selected ? 'is-selected' : ''}`}>
+      <div className="project-card-header">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-base font-semibold text-ink">{stat.projectName || project?.name || '未命名项目'}</h3>
+            {selected ? <span className="chip">当前项目</span> : null}
+          </div>
+          <div className="mt-1 truncate text-xs text-ink-muted">
+            {[stat.projectCode || project?.code, stat.ownerName || project?.ownerName].filter(Boolean).join(' · ')}
+          </div>
+          <div className="mt-1 truncate text-xs text-ink-subtle">{scopeText || dateText}</div>
+        </div>
+        <StatusPill status={stat.projectStatus || project?.status || 'active'} />
+      </div>
+
+      <div className="project-card-progress">
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="font-semibold text-ink-muted">完成率</span>
+          <span className="font-semibold text-accent">{percent(stat.completionRate)}</span>
+        </div>
+        <div className="mt-2 h-2 rounded-full bg-surface-strong">
+          <div className="h-2 rounded-full bg-accent" style={{ width: percent(stat.completionRate) }} />
+        </div>
+      </div>
+
+      <div className="project-card-metrics">
+        <span><strong>{stat.phaseCount}</strong> 阶段</span>
+        <span><strong>{stat.completedCheckItemCount}/{stat.checkItemCount}</strong> 检查项</span>
+        <span className={stat.overdueCount ? 'text-danger' : 'text-success'}><strong>{stat.overdueCount}</strong> 逾期</span>
+        <span><strong>{stat.openKeyIssueCount}</strong> 重点问题</span>
+      </div>
+
+      <ProjectPhaseProgressRail phases={phases} stat={stat} />
+
+      <div className="project-card-actions">
+        {DASHBOARD_PROJECT_ACTIONS.map(action => {
+          const Icon = action.icon;
+          return (
+            <button
+              key={action.view}
+              className="btn btn-ghost btn--sm project-card-action"
+              type="button"
+              onClick={() => onOpenProject(stat.projectId, action.view)}
+              aria-label={`${stat.projectName} 跳转到${action.label}`}
+            >
+              <Icon className="h-4 w-4" />
+              {action.label}
+            </button>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
+function ProjectSummaryBoard({
+  stats,
+  projects,
+  selectedProjectId,
+  filters,
+  onFiltersChange,
+  statusOptions,
+  onOpenProject
+}: {
+  stats: ProjectStatistics[];
+  projects: Project[];
+  selectedProjectId?: string | number;
+  filters: SearchFilterState;
+  onFiltersChange: (filters: SearchFilterState) => void;
+  statusOptions: string[];
+  onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
+}) {
+  const projectById = new Map(projects.map(project => [idOf(project.id), project]));
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Project Hub</p>
+          <h2 className="text-xl font-semibold">项目汇总入口</h2>
+        </div>
+        <span className="chip">{stats.length} 个项目</span>
+      </div>
+      <div className="mt-4">
+        <DashboardProjectFilters
+          filters={filters}
+          onChange={onFiltersChange}
+          statusOptions={statusOptions}
+        />
+      </div>
+      {!stats.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无项目。" /></div> : null}
+      <div className="project-summary-grid">
+        {stats.map(stat => {
+          const projectId = idOf(stat.projectId);
+          return (
+            <ProjectSummaryCard
+              key={projectId}
+              stat={stat}
+              project={projectById.get(projectId)}
+              phases={stat.phaseProgress ?? []}
+              selected={projectId === idOf(selectedProjectId)}
+              onOpenProject={onOpenProject}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -1776,85 +1939,29 @@ function CollisionOnePager({ reports }: { reports: CollisionReport[] }) {
 
 function DashboardView({
   data,
-  visibleProjects,
-  selectedCell,
-  canWrite,
-  onSelectProject,
-  onSelectCell,
-  onCreateExport
+  onOpenProject
 }: {
   data: WorkspaceData;
-  visibleProjects: Project[];
-  selectedCell: DashboardCell | null;
-  canWrite: boolean;
-  onSelectProject: (projectId: string | number) => void;
-  onSelectCell: (cell: DashboardCell) => void;
-  onCreateExport: () => void;
+  onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
 }) {
   const [dashboardFilters, setDashboardFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [detailFilters, setDetailFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const sortedModules = bySequence(data.inspectionModules);
-  const sortedPhases = activePhasesOf(data.phases);
-  const activePhaseIds = new Set(sortedPhases.map(phase => idOf(phase.id)));
-  const detailCheckItems = data.checkItems.filter(item => {
-    const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
-    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
-    if (!activePhaseIds.has(idOf(item.projectPhaseId))) return false;
-    if (detailFilters.phaseId && idOf(item.projectPhaseId) !== detailFilters.phaseId) return false;
-    if (detailFilters.moduleId && idOf(item.moduleId) !== detailFilters.moduleId) return false;
-    if (detailFilters.status && item.status !== detailFilters.status) return false;
-    if (detailFilters.owner && !textMatches(detailFilters.owner, [item.ownerName, item.ownerIdaasId])) return false;
-    if (!textMatches(detailFilters.keyword, [item.title, item.description, item.acceptanceCriteria, item.ownerName, phase?.name, module?.name])) return false;
-    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, detailFilters.startDate, detailFilters.endDate);
-  });
-  const firstPopulatedCell =
-    sortedModules.flatMap(module =>
-      sortedPhases.map(phase => ({
-        moduleId: idOf(module.id),
-        phaseId: idOf(phase.id),
-        count: detailCheckItems.filter(item => idOf(item.moduleId) === idOf(module.id) && idOf(item.projectPhaseId) === idOf(phase.id)).length
-      }))
-    ).find(cell => cell.count > 0) ?? null;
-  const filterCell = detailFilters.moduleId && detailFilters.phaseId
-    ? { moduleId: detailFilters.moduleId, phaseId: detailFilters.phaseId }
-    : null;
-  const activeCell = filterCell ?? selectedCell ?? (firstPopulatedCell ? { moduleId: firstPopulatedCell.moduleId, phaseId: firstPopulatedCell.phaseId } : null);
   const projectStats = buildProjectStatistics(data);
   const filteredProjectStats = projectStats.filter(stat => projectStatMatchesFilters(stat, dashboardFilters));
-  const selectedVisibleProjectStat = filteredProjectStats.find(stat => idOf(stat.projectId) === idOf(data.selectedProject?.id));
   const projectStatusOptions = statusOptionValues(projectStats.map(stat => stat.projectStatus));
-  const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
 
   return (
     <div className="grid gap-5">
       <PortfolioOverview summary={data.dashboardSummary} stats={projectStats} />
       <DashboardCharts summary={data.dashboardSummary} stats={projectStats} />
-      <ProjectStatisticsList
+      <ProjectSummaryBoard
         stats={filteredProjectStats}
+        projects={data.projects}
         selectedProjectId={data.selectedProject?.id}
         filters={dashboardFilters}
         onFiltersChange={setDashboardFilters}
         statusOptions={projectStatusOptions}
-        onSelectProject={onSelectProject}
+        onOpenProject={onOpenProject}
       />
-      {selectedVisibleProjectStat ? (
-        <ProjectDashboardExpansion
-          data={data}
-          visibleProjects={visibleProjects}
-          selectedProjectStat={selectedVisibleProjectStat}
-          fallbackStat={selectedVisibleProjectStat}
-          phases={sortedPhases}
-          modules={sortedModules}
-          checkItems={detailCheckItems}
-          activeCell={activeCell}
-          canWrite={canWrite}
-          detailFilters={detailFilters}
-          checkStatusOptions={checkStatusOptions}
-          onDetailFiltersChange={setDetailFilters}
-          onSelectCell={onSelectCell}
-          onCreateExport={onCreateExport}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1916,6 +2023,60 @@ function ProjectsView({
             </div>
           </button>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ProjectContextBar({
+  projects,
+  selectedProject,
+  onSelectProject
+}: {
+  projects: Project[];
+  selectedProject: Project | null;
+  onSelectProject: (projectId: string | number) => void;
+}) {
+  return (
+    <section className="project-context-bar">
+      <div className="min-w-0">
+        <p className="kicker">Current Project</p>
+        <h2 className="truncate text-lg font-semibold text-ink">{selectedProject?.name ?? '未选择项目'}</h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+          {selectedProject ? (
+            <>
+              <span>{selectedProject.code}</span>
+              <span>{[selectedProject.plant, selectedProject.workshopName, selectedProject.lineName].filter(Boolean).join(' / ')}</span>
+              <span>{formatDate(selectedProject.plannedStartDate)} 至 {formatDate(selectedProject.plannedEndDate)}</span>
+            </>
+          ) : (
+            <span>暂无项目数据</span>
+          )}
+        </div>
+      </div>
+      <div className="project-context-controls">
+        <label className="min-w-[260px] flex-1">
+          <span className="field-label">项目筛选</span>
+          <select
+            className="select"
+            value={idOf(selectedProject?.id)}
+            onChange={event => onSelectProject(event.target.value)}
+            disabled={!projects.length}
+          >
+            {!projects.length ? <option value="">暂无项目</option> : null}
+            {projects.map(project => (
+              <option key={project.id} value={idOf(project.id)}>
+                {project.name} / {project.code}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedProject ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill status={selectedProject.status} />
+            <span className="chip">{percent(selectedProject.progressPercent)}</span>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -4108,14 +4269,6 @@ function SettingsView({ data }: { data: WorkspaceData }) {
   );
 }
 
-const projectMatchesScope = (project: Project | null | undefined, scope: ScopeState) => {
-  if (!project) return false;
-  if (scope.factoryId && idOf(project.factoryId) !== scope.factoryId) return false;
-  if (scope.workshopId && idOf(project.workshopId) !== scope.workshopId) return false;
-  if (scope.productionLineId && idOf(project.productionLineId) !== scope.productionLineId) return false;
-  return true;
-};
-
 const mutationErrorMessage = (error: unknown, fallback: string) =>
   error instanceof ApiError && error.status === 403
     ? '当前账号没有写权限，已保留只读访问。'
@@ -4128,7 +4281,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | number | undefined>();
   const [scope, setScope] = useState<ScopeState>(EMPTY_SCOPE);
-  const [selectedDashboardCell, setSelectedDashboardCell] = useState<DashboardCell | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceData>(EMPTY_WORKSPACE);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authWarning, setAuthWarning] = useState<string | null>(null);
@@ -4161,6 +4313,9 @@ export default function App() {
   };
 
   const loadData = async (projectId = selectedProjectId, filters = scope) => {
+    if (projectId !== undefined) {
+      setSelectedProjectId(projectId);
+    }
     setLoading(true);
     setError(null);
     try {
@@ -4184,25 +4339,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!workspace.selectedProject) return;
-    setSelectedDashboardCell(null);
-  }, [workspace.selectedProject?.id]);
-
-  useEffect(() => {
     if (currentView !== 'dashboard') return;
     if (!scope.factoryId && !scope.workshopId && !scope.productionLineId) return;
     setScope(EMPTY_SCOPE);
     void loadData(selectedProjectId, EMPTY_SCOPE);
   }, [currentView]);
 
-  const visibleProjects = useMemo(
-    () => workspace.projects.filter(project => projectMatchesScope(project, scope)),
-    [workspace.projects, scope]
-  );
-
   const handleScopeChange = (nextScope: ScopeState) => {
     setScope(nextScope);
     void loadData(undefined, nextScope);
+  };
+
+  const handleSelectCurrentProject = (projectId: string | number) => {
+    if (!projectId) return;
+    setScope(EMPTY_SCOPE);
+    setSelectedProjectId(projectId);
+    void loadData(projectId, EMPTY_SCOPE);
+  };
+
+  const handleOpenProjectView = (projectId: string | number, view: DashboardJumpTarget) => {
+    if (!projectId) return;
+    setScope(EMPTY_SCOPE);
+    setSelectedProjectId(projectId);
+    setCurrentView(view);
+    void loadData(projectId, EMPTY_SCOPE);
   };
 
   const handleCreateProject = async (nextView: AppTab = 'baseConfig') => {
@@ -4393,19 +4553,6 @@ export default function App() {
     }
   };
 
-  const handleCreateProjectExport = async () => {
-    const report =
-      workspace.reports.find(item => `${item.id}` === 'project') ??
-      workspace.reports[0] ??
-      {
-        id: 'project',
-        name: '项目总览导出',
-        description: '阶段、检查项、重点问题与签核汇总。',
-        format: 'xlsx'
-      };
-    await handleCreateExport(report);
-  };
-
   const handleDownloadExport = async (task: ExportTask) => {
     const downloadUrl = await fetchExportDownloadLink(task.id);
     if (!downloadUrl) {
@@ -4417,17 +4564,23 @@ export default function App() {
     }
   };
 
+  const withProjectContext = (content: ReactNode) => (
+    <div className="grid gap-5">
+      <ProjectContextBar
+        projects={workspace.projects}
+        selectedProject={workspace.selectedProject}
+        onSelectProject={handleSelectCurrentProject}
+      />
+      {content}
+    </div>
+  );
+
   const renderView = () => {
     if (currentView === 'dashboard') {
       return (
         <DashboardView
           data={workspace}
-          visibleProjects={workspace.projects}
-          selectedCell={selectedDashboardCell}
-          canWrite={canWrite}
-          onSelectProject={projectId => void loadData(projectId, EMPTY_SCOPE)}
-          onSelectCell={setSelectedDashboardCell}
-          onCreateExport={() => void handleCreateProjectExport()}
+          onOpenProject={handleOpenProjectView}
         />
       );
     }
@@ -4438,7 +4591,7 @@ export default function App() {
           selectedProject={workspace.selectedProject}
           canWrite={canWrite}
           onSelectProject={projectId => {
-            void loadData(projectId);
+            handleSelectCurrentProject(projectId);
             setCurrentView('dashboard');
           }}
           onCreateProject={() => void handleCreateProject('baseConfig')}
@@ -4452,7 +4605,10 @@ export default function App() {
           scope={scope}
           canWrite={canWrite}
           onScopeChange={handleScopeChange}
-          onSelectProject={projectId => void loadData(projectId)}
+          onSelectProject={projectId => {
+            setSelectedProjectId(projectId);
+            void loadData(projectId);
+          }}
           onCreateProject={() => void handleCreateProject('baseConfig')}
           onUpdateProject={handleUpdateProject}
           onSeedTemplate={handleSeedTemplate}
@@ -4464,9 +4620,9 @@ export default function App() {
         />
       );
     }
-    if (currentView === 'phases') return <PhasesView data={workspace} />;
+    if (currentView === 'phases') return withProjectContext(<PhasesView data={workspace} />);
     if (currentView === 'timeline') {
-      return (
+      return withProjectContext(
         <TimelineView
           project={workspace.selectedProject}
           phases={workspace.timeline?.phases.length ? workspace.timeline.phases : workspace.phases}
@@ -4476,7 +4632,7 @@ export default function App() {
       );
     }
     if (currentView === 'checks') {
-      return (
+      return withProjectContext(
         <ChecksView
           checkItems={workspace.checkItems}
           phases={workspace.phases}
@@ -4489,10 +4645,10 @@ export default function App() {
         />
       );
     }
-    if (currentView === 'issues') return <IssuesView issues={workspace.keyIssues} phases={workspace.phases} />;
-    if (currentView === 'collision') return <CollisionView reports={workspace.collisionReports} phases={workspace.phases} />;
+    if (currentView === 'issues') return withProjectContext(<IssuesView issues={workspace.keyIssues} phases={workspace.phases} />);
+    if (currentView === 'collision') return withProjectContext(<CollisionView reports={workspace.collisionReports} phases={workspace.phases} />);
     if (currentView === 'reports') {
-      return (
+      return withProjectContext(
         <ReportsView
           reports={workspace.reports}
           tasks={workspace.exportTasks}
