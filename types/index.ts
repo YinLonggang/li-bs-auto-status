@@ -90,6 +90,20 @@ export type Attachment = {
   createdAt?: string;
 };
 
+export type AuditLog = {
+  id: string | number;
+  action: string;
+  objectType: string;
+  objectId: string;
+  projectId?: string | number | null;
+  projectCode?: string;
+  actorIdaasId?: string;
+  actorName?: string;
+  requestId?: string;
+  detail: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type Project = {
   id: string | number;
   code: string;

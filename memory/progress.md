@@ -149,3 +149,6 @@
 - 阶段进度页在甘特图下方增加按阶段分组的检查项状态维护表；检查项台账页状态列新增同源状态更新控件。
 - 前端统一通过真实后端 `POST /check-items/{id}/set-status/` 更新状态，操作者追溯由后端 IDaaS 审计字段完成，不从前端提交用户身份。
 - 验证通过：`npm run type-check`、`npm run build`、`cd li_sicar && .venv/bin/python manage.py test li_bs_auto_status`。
+- 甘特检查项条改为可点击选中；下方面板显示所选检查项、当前状态、最近状态更新人/时间，并可直接保存新状态。
+- 新增 `AuditHistoryPanel`，通过真实 `/audit-logs/` 查询该检查项审计历史，表格展示动作、状态变化、操作者、来源、请求 ID。
+- 本轮前端补强验证通过：`npm run type-check`、`npm run build`。

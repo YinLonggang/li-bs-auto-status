@@ -38,6 +38,7 @@ import {
   createProject,
   deleteCheckItem,
   deleteProjectPhase,
+  fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
   fetchWorkspaceData,
   seedProjectTemplate,
@@ -49,6 +50,7 @@ import {
 } from './services/bsAutoStatusApi';
 import { ApiError } from './services/http';
 import type {
+  AuditLog,
   CheckItem,
   CheckItemOwner,
   CheckItemStatus,
@@ -142,6 +144,13 @@ const CHECK_ITEM_STATUS_OPTIONS: CheckItemStatus[] = [
   'na'
 ];
 
+const AUDIT_ACTION_LABEL: Record<string, string> = {
+  'check_item.create': '创建检查项',
+  'check_item.update': '更新检查项',
+  'check_item.status_change': '状态变更',
+  CheckItem: '检查项'
+};
+
 const phaseTone = (status: string): StatusTone => {
   if (['completed', 'done', 'succeeded', 'closed', 'approved', 'signed', 'pass', 'na', 'waived', '已关闭', '完成', '已签核'].includes(status)) return 'success';
   if (['blocked', 'failed', 'critical', 'fail', 'rejected', 'returned', 'voided', '高风险', '严重'].includes(status)) return 'danger';
@@ -153,6 +162,14 @@ const phaseTone = (status: string): StatusTone => {
 const formatDate = (value?: string | null) => {
   if (!value) return '-';
   return value.slice(0, 10);
+};
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value.replace('T', ' ').slice(0, 16);
+  const pad = (input: number) => String(input).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
@@ -349,6 +366,82 @@ function CheckItemStatusControl({
         </button>
       </div>
       {message ? <div className="mt-1 text-xs text-ink-muted">{message}</div> : null}
+    </div>
+  );
+}
+
+const auditValue = (value: unknown) => (typeof value === 'string' || typeof value === 'number' ? String(value) : '');
+
+const statusLabelOrDash = (status: string) => (status ? STATUS_LABEL[status] ?? status : '-');
+
+const auditStatusTransition = (log: AuditLog) => {
+  const oldStatus = auditValue(log.detail.old_status);
+  const newStatus = auditValue(log.detail.new_status);
+  if (!oldStatus && !newStatus) return '';
+  return `${statusLabelOrDash(oldStatus)} -> ${statusLabelOrDash(newStatus)}`;
+};
+
+function AuditHistoryPanel({
+  logs,
+  loading,
+  error,
+  onRefresh
+}: {
+  logs: AuditLog[];
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-outline bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-ink">审计历史</h4>
+          <p className="text-xs text-ink-muted">按后端审计日志倒序展示，操作者来自 IDaaS 请求上下文。</p>
+        </div>
+        <button className="btn btn-ghost btn--sm" type="button" onClick={onRefresh} disabled={loading}>
+          <RefreshCcw className="h-4 w-4" />
+          {loading ? '刷新中' : '刷新'}
+        </button>
+      </div>
+      {error ? <div className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
+      {!loading && !logs.length && !error ? <div className="mt-3"><EmptyState message="当前检查项暂无审计记录。" /></div> : null}
+      {logs.length ? (
+        <div className="table-shell mt-3">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>动作</th>
+                <th>状态变化</th>
+                <th>操作者</th>
+                <th>来源</th>
+                <th>请求 ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map(log => {
+                const transition = auditStatusTransition(log);
+                const source = auditValue(log.detail.source);
+                const comment = auditValue(log.detail.comment);
+                return (
+                  <tr key={log.id}>
+                    <td className="whitespace-nowrap">{formatDateTime(log.createdAt)}</td>
+                    <td>{AUDIT_ACTION_LABEL[log.action] ?? log.action}</td>
+                    <td>
+                      <div className="font-medium text-ink">{transition || '-'}</div>
+                      {comment ? <div className="mt-1 text-xs text-ink-muted">{comment}</div> : null}
+                    </td>
+                    <td>{log.actorName || log.actorIdaasId || '-'}</td>
+                    <td>{source || '-'}</td>
+                    <td className="max-w-[180px] truncate" title={log.requestId || undefined}>{log.requestId || '-'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2409,6 +2502,10 @@ function TimelineView({
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [selectedCheckItemId, setSelectedCheckItemId] = useState('');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
   const sorted = activePhasesOf(phases);
   const today = formatLocalDate(new Date());
   const phaseById = new Map(sorted.map(phase => [idOf(phase.id), phase]));
@@ -2477,6 +2574,51 @@ function TimelineView({
   const phaseStatusOptions = statusOptionValues(sorted.map(phase => phase.status));
   const checkStatusOptions = statusOptionValues(checkItems.map(item => item.status));
   const timelineStatusOptions = statusOptionValues([...phaseStatusOptions, ...checkStatusOptions]);
+  const filteredCheckItemKey = filteredCheckItems.map(item => idOf(item.id)).join('|');
+  const selectedCheckItem = filteredCheckItems.find(item => idOf(item.id) === selectedCheckItemId) ?? null;
+  const selectedPhase = selectedCheckItem ? phaseById.get(idOf(selectedCheckItem.projectPhaseId)) : null;
+  const selectedModule = selectedCheckItem ? moduleById.get(idOf(selectedCheckItem.moduleId)) : null;
+  const latestStatusAudit = auditLogs.find(log => log.action === 'check_item.status_change');
+
+  const loadAuditLogs = async (checkItemId: string | number) => {
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const logs = await fetchCheckItemAuditLogs(checkItemId);
+      setAuditLogs(logs);
+    } catch (err) {
+      setAuditLogs([]);
+      setAuditError(err instanceof Error ? err.message : '审计历史加载失败');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!filteredCheckItems.length) {
+      setSelectedCheckItemId('');
+      return;
+    }
+    if (!filteredCheckItems.some(item => idOf(item.id) === selectedCheckItemId)) {
+      setSelectedCheckItemId(idOf(filteredCheckItems[0].id));
+    }
+  }, [filteredCheckItemKey, selectedCheckItemId]);
+
+  useEffect(() => {
+    if (!selectedCheckItemId) {
+      setAuditLogs([]);
+      setAuditError('');
+      return;
+    }
+    void loadAuditLogs(selectedCheckItemId);
+  }, [selectedCheckItemId]);
+
+  const handleUpdateTimelineStatus = async (item: CheckItem, status: CheckItemStatus, source: string) => {
+    await onUpdateStatus(item, status, source);
+    if (idOf(item.id) === selectedCheckItemId) {
+      await loadAuditLogs(item.id);
+    }
+  };
 
   return (
     <section className="panel">
@@ -2593,17 +2735,23 @@ function TimelineView({
                   {items.map((item, index) => {
                     const module = moduleById.get(idOf(item.moduleId));
                     const overdue = isOverdue(item.plannedEndDate, item.status, today);
+                    const selected = idOf(item.id) === selectedCheckItemId;
                     return (
-                      <div
+                      <button
                         key={item.id}
-                        className={`absolute h-4 overflow-hidden rounded-full px-2 text-[11px] font-semibold leading-4 shadow-sm ${itemClass(item)}`}
+                        className={`absolute h-5 min-w-[36px] cursor-pointer overflow-hidden rounded-full border-0 px-2 text-left text-[11px] font-semibold leading-5 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
+                          itemClass(item)
+                        } ${selected ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : 'hover:brightness-95'}`}
                         style={{ ...rangeStyle(item.plannedStartDate, item.plannedEndDate), top: 58 + index * 24 }}
                         title={`${item.title} · ${module?.name ?? '未设置模块'} · ${formatWeekRangeText(item.plannedStartDate, item.plannedEndDate)} · ${formatDate(item.plannedStartDate)} 至 ${formatDate(item.plannedEndDate)} · ${overdue ? '逾期' : STATUS_LABEL[item.status] ?? item.status}`}
+                        type="button"
+                        onClick={() => setSelectedCheckItemId(idOf(item.id))}
+                        aria-label={`选择检查项 ${item.title} 并查看状态审计`}
                       >
                         <span className="block truncate">
                           {overdue ? '逾期 · ' : ''}{module?.name ?? '模块'} / {item.title}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
                   {!items.length ? (
@@ -2617,6 +2765,51 @@ function TimelineView({
           })}
         </div>
       </div>
+      {selectedCheckItem ? (
+        <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="kicker">Selected Check Item</p>
+              <h3 className="text-base font-semibold text-ink">{selectedCheckItem.title}</h3>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-ink-muted">
+                <span>{selectedPhase?.name ?? '未设置阶段'}</span>
+                <span>{selectedModule?.name ?? '未设置模块'}</span>
+                <span>{formatDate(selectedCheckItem.plannedStartDate)} 至 {formatDate(selectedCheckItem.plannedEndDate)}</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusPill status={selectedCheckItem.status} />
+              {latestStatusAudit ? (
+                <span className="chip" title={auditStatusTransition(latestStatusAudit) || undefined}>
+                  最近更新：{latestStatusAudit.actorName || latestStatusAudit.actorIdaasId || '-'} · {formatDateTime(latestStatusAudit.createdAt)}
+                </span>
+              ) : (
+                <span className="chip">暂无状态审计</span>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 grid gap-4 xl:grid-cols-[320px_1fr]">
+            <div className="rounded-lg border border-outline bg-surface p-3">
+              <div className="mb-3 text-sm font-semibold text-ink">直接更新状态</div>
+              <CheckItemStatusControl
+                item={selectedCheckItem}
+                canWrite={canWrite}
+                source="timeline-gantt"
+                onUpdateStatus={handleUpdateTimelineStatus}
+              />
+              <div className="mt-3 text-xs text-ink-muted">
+                点击甘特条切换检查项；保存后后端会记录状态审计和 IDaaS 操作者。
+              </div>
+            </div>
+            <AuditHistoryPanel
+              logs={auditLogs}
+              loading={auditLoading}
+              error={auditError}
+              onRefresh={() => void loadAuditLogs(selectedCheckItem.id)}
+            />
+          </div>
+        </div>
+      ) : null}
       <div className="mt-5 grid gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -2665,7 +2858,7 @@ function TimelineView({
                             item={item}
                             canWrite={canWrite}
                             source="timeline"
-                            onUpdateStatus={onUpdateStatus}
+                            onUpdateStatus={handleUpdateTimelineStatus}
                           />
                         </td>
                       </tr>

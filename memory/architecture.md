@@ -104,3 +104,5 @@
 - 检查项台账页在状态列内新增同源状态更新控件，和阶段进度页共用 `CheckItemStatusControl`，避免两处状态操作口径分叉。
 - 前端状态更新统一调用 `POST /check-items/{id}/set-status/`，提交 `status/source/comment`，由后端从 IDaaS 请求上下文写审计操作者。
 - 后端 `PATCH /check-items/{id}/` 若状态发生变化，也补写 `check_item.status_change` 审计，确保配置中心保存状态和执行页快捷改状态都可追溯。
+- 阶段甘特中的检查项条改为可点击按钮；点击后在甘特下方打开所选检查项面板，可直接更新状态并查看 `AuditHistoryPanel` 审计历史。
+- `AuditHistoryPanel` 通过 `/audit-logs/?object_type=CheckItem&object_id=<id>` 拉取真实审计日志，展示时间、动作、状态变化、操作者、来源和 request id，不在前端伪造审计信息。

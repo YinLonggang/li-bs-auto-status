@@ -3,6 +3,7 @@ import { ApiError, apiRequest, requestWithPrefix } from './http';
 import type {
   ApiEnvelope,
   Attachment,
+  AuditLog,
   CheckItem,
   CheckItemOwner,
   CheckItemStatus,
@@ -277,6 +278,23 @@ const normalizeAttachment = (input: unknown): Attachment => {
     contentType: firstString(raw, ['contentType', 'content_type']),
     fileSize: firstNumber(raw, ['fileSize', 'file_size']),
     uploadedBy: firstString(raw, ['uploadedBy', 'uploaded_by_name']),
+    createdAt: firstString(raw, ['createdAt', 'created_at'])
+  };
+};
+
+const normalizeAuditLog = (input: unknown): AuditLog => {
+  const raw = asRecord(input);
+  return {
+    id: firstId(raw, ['id']),
+    action: firstString(raw, ['action']),
+    objectType: firstString(raw, ['objectType', 'object_type']),
+    objectId: String(firstId(raw, ['objectId', 'object_id'])),
+    projectId: firstOptionalId(raw, ['projectId', 'project']),
+    projectCode: firstString(raw, ['projectCode', 'project_code']),
+    actorIdaasId: firstString(raw, ['actorIdaasId', 'actor_idaas_id']),
+    actorName: firstString(raw, ['actorName', 'actor_name']),
+    requestId: firstString(raw, ['requestId', 'request_id']),
+    detail: asRecord(raw.detail),
     createdAt: firstString(raw, ['createdAt', 'created_at'])
   };
 };
@@ -1107,6 +1125,16 @@ export async function updateCheckItemStatus(
       })
     })
   ));
+}
+
+export async function fetchCheckItemAuditLogs(checkItemId: string | number) {
+  const query = new URLSearchParams({
+    object_type: 'CheckItem',
+    object_id: String(checkItemId),
+    page_size: '100'
+  });
+  const payload = await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/audit-logs/?${query.toString()}`);
+  return asArray(unwrap(payload)).map(normalizeAuditLog);
 }
 
 export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {
