@@ -141,3 +141,11 @@
 - 前端继续完全下线 mock，本轮同步取消对 `BS-AUTO-PROTOTYPE` 原型样例项目的展示假设。
 - 后端迁移保留默认阶段模板、检查模块和检查项模板作为可复用配置，dev 展示与回归直接读取正式项目 API 数据。
 - dev 数据库迁移后确认 `BS-AUTO-PROTOTYPE=0`、默认模板 `bs-auto-status-five-phase/bs-auto-status-six-phase` 存在、默认模块 7 个、检查模板 18 组。
+
+### 检查项状态更新与审计收口
+
+- 后端 `set-status` 接口补充 `source/comment` 入参，状态审计 detail 记录新旧状态、来源、是否变化、阶段、模块、完成时间和完成人。
+- 后端 `PATCH /check-items/{id}/` 保存检查项配置时若状态变化，也写入 `check_item.status_change`，避免配置中心状态变更缺少专用审计链路。
+- 阶段进度页在甘特图下方增加按阶段分组的检查项状态维护表；检查项台账页状态列新增同源状态更新控件。
+- 前端统一通过真实后端 `POST /check-items/{id}/set-status/` 更新状态，操作者追溯由后端 IDaaS 审计字段完成，不从前端提交用户身份。
+- 验证通过：`npm run type-check`、`npm run build`、`cd li_sicar && .venv/bin/python manage.py test li_bs_auto_status`。

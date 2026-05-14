@@ -5,6 +5,7 @@ import type {
   Attachment,
   CheckItem,
   CheckItemOwner,
+  CheckItemStatus,
   ChecklistTemplate,
   CollisionReport,
   DashboardProgressRow,
@@ -1089,6 +1090,23 @@ export async function updateCheckItemOwner(
   payload: { ownerName?: string; ownerIdaasId?: string; owners?: CheckItemOwner[]; metadata?: Record<string, unknown> }
 ) {
   return updateCheckItem(checkItemId, payload);
+}
+
+export async function updateCheckItemStatus(
+  checkItemId: string | number,
+  payload: { status: CheckItemStatus; resultNote?: string; source?: string; comment?: string }
+) {
+  return normalizeCheckItem(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-items/${checkItemId}/set-status/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        status: payload.status,
+        result_note: payload.resultNote,
+        source: payload.source,
+        comment: payload.comment
+      })
+    })
+  ));
 }
 
 export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {

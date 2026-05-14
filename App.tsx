@@ -43,6 +43,7 @@ import {
   seedProjectTemplate,
   updateCheckItem,
   updateCheckItemOwner,
+  updateCheckItemStatus,
   updateProject,
   updateProjectPhase
 } from './services/bsAutoStatusApi';
@@ -50,6 +51,7 @@ import { ApiError } from './services/http';
 import type {
   CheckItem,
   CheckItemOwner,
+  CheckItemStatus,
   CollisionReport,
   DashboardSummary,
   ExportTask,
@@ -128,6 +130,17 @@ const STATUS_LABEL: Record<string, string> = {
   rejected: '退回',
   draft: '草稿'
 };
+
+const CHECK_ITEM_STATUS_OPTIONS: CheckItemStatus[] = [
+  'pending',
+  'in_progress',
+  'blocked',
+  'done',
+  'pass',
+  'fail',
+  'waived',
+  'na'
+];
 
 const phaseTone = (status: string): StatusTone => {
   if (['completed', 'done', 'succeeded', 'closed', 'approved', 'signed', 'pass', 'na', 'waived', '已关闭', '完成', '已签核'].includes(status)) return 'success';
@@ -271,6 +284,71 @@ function ReadOnlyNotice({ canWrite }: { canWrite: boolean }) {
     <div className="flex items-center gap-2 rounded-lg border border-outline bg-surface-soft px-3 py-2 text-sm text-ink-muted">
       <Lock className="h-4 w-4" />
       当前账号只读，写操作已禁用。
+    </div>
+  );
+}
+
+function CheckItemStatusControl({
+  item,
+  canWrite,
+  source,
+  onUpdateStatus
+}: {
+  item: CheckItem;
+  canWrite: boolean;
+  source: string;
+  onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
+}) {
+  const [statusDraft, setStatusDraft] = useState<CheckItemStatus>(item.status as CheckItemStatus);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const hasChanged = statusDraft !== item.status;
+
+  useEffect(() => {
+    setStatusDraft(item.status as CheckItemStatus);
+    setMessage('');
+  }, [item.id, item.status]);
+
+  const handleSave = async () => {
+    if (!canWrite || !hasChanged) return;
+    setSaving(true);
+    setMessage('');
+    try {
+      await onUpdateStatus(item, statusDraft, source);
+      setMessage('已更新');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '状态更新失败'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="min-w-[220px]">
+      <div className="flex items-center gap-2">
+        <select
+          className="select h-9 min-w-[120px]"
+          value={statusDraft}
+          disabled={!canWrite || saving}
+          onChange={event => setStatusDraft(event.target.value as CheckItemStatus)}
+          aria-label={`更新检查项状态 ${item.title}`}
+        >
+          {CHECK_ITEM_STATUS_OPTIONS.map(status => (
+            <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+          ))}
+        </select>
+        <button
+          className="btn btn-primary btn--sm shrink-0"
+          type="button"
+          disabled={!canWrite || saving || !hasChanged}
+          onClick={() => void handleSave()}
+          title={!canWrite ? '当前账号只读，写操作已禁用。' : undefined}
+        >
+          <Save className="h-4 w-4" />
+          {saving ? '更新中' : '更新'}
+        </button>
+      </div>
+      {message ? <div className="mt-1 text-xs text-ink-muted">{message}</div> : null}
     </div>
   );
 }
@@ -2319,12 +2397,16 @@ function TimelineView({
   project,
   phases,
   checkItems,
-  modules
+  modules,
+  canWrite,
+  onUpdateStatus
 }: {
   project: Project | null;
   phases: ProjectPhase[];
   checkItems: CheckItem[];
   modules: InspectionModule[];
+  canWrite: boolean;
+  onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const sorted = activePhasesOf(phases);
@@ -2535,6 +2617,66 @@ function TimelineView({
           })}
         </div>
       </div>
+      <div className="mt-5 grid gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-ink">阶段检查项状态更新</h3>
+            <p className="text-xs text-ink-muted">按当前甘特筛选结果分阶段维护，状态变更会写入后端审计日志。</p>
+          </div>
+          <ReadOnlyNotice canWrite={canWrite} />
+        </div>
+        {visiblePhases.map(phase => {
+          const items = filteredCheckItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+          if (!items.length) return null;
+          return (
+            <div key={`${phase.id}-status-board`} className="rounded-lg border border-outline bg-surface-soft p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-ink">{phase.name}</div>
+                  <div className="text-xs text-ink-muted">
+                    {formatWeekRangeText(phase.plannedStartDate, phase.plannedEndDate)} · {items.filter(item => isComplete(item.status)).length}/{items.length} 项完成
+                  </div>
+                </div>
+                <StatusPill status={phase.status} />
+              </div>
+              <div className="table-shell mt-3">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>检查项</th>
+                      <th>模块</th>
+                      <th>计划</th>
+                      <th>当前状态</th>
+                      <th>状态更新</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(item => (
+                      <tr key={item.id}>
+                        <td className="max-w-[360px]">
+                          <div className="font-semibold">{item.title}</div>
+                          <div className="mt-1 text-xs text-ink-muted">{item.acceptanceCriteria || item.description}</div>
+                        </td>
+                        <td>{moduleById.get(idOf(item.moduleId))?.name ?? '-'}</td>
+                        <td>{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
+                        <td><StatusPill status={item.status} /></td>
+                        <td>
+                          <CheckItemStatusControl
+                            item={item}
+                            canWrite={canWrite}
+                            source="timeline"
+                            onUpdateStatus={onUpdateStatus}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -2646,7 +2788,8 @@ function ChecksView({
   canWrite,
   defaultOwnerName,
   onCreateCheckItem,
-  onUpdateOwner
+  onUpdateOwner,
+  onUpdateStatus
 }: {
   checkItems: CheckItem[];
   phases: ProjectPhase[];
@@ -2656,6 +2799,7 @@ function ChecksView({
   defaultOwnerName: string;
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
   onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => void;
+  onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -2946,7 +3090,17 @@ function ChecksView({
                     />
                   </td>
                   <td>{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
-                  <td><StatusPill status={item.status} /></td>
+                  <td className="min-w-[280px]">
+                    <div className="mb-2">
+                      <StatusPill status={item.status} />
+                    </div>
+                    <CheckItemStatusControl
+                      item={item}
+                      canWrite={canWrite}
+                      source="check-items"
+                      onUpdateStatus={onUpdateStatus}
+                    />
+                  </td>
                   <td className="min-w-[260px]"><AttachmentList attachments={item.attachments} /></td>
                   <td>
                     <button
@@ -4662,6 +4816,21 @@ export default function App() {
     }
   };
 
+  const handleUpdateCheckItemStatus = async (item: CheckItem, status: CheckItemStatus, source: string) => {
+    if (!canWrite) return;
+    try {
+      await updateCheckItemStatus(item.id, {
+        status,
+        source,
+        comment: `${STATUS_LABEL[item.status] ?? item.status} -> ${STATUS_LABEL[status] ?? status}`
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项状态更新失败'));
+      throw err;
+    }
+  };
+
   const handleUpdateProject = async (draft: ProjectConfigDraft) => {
     if (!canWrite || !workspace.selectedProject) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === draft.factoryId);
@@ -4883,6 +5052,8 @@ export default function App() {
           phases={workspace.timeline?.phases.length ? workspace.timeline.phases : workspace.phases}
           checkItems={workspace.timeline?.checkItems.length ? workspace.timeline.checkItems : workspace.checkItems}
           modules={workspace.inspectionModules}
+          canWrite={canWrite}
+          onUpdateStatus={handleUpdateCheckItemStatus}
         />
       );
     }
@@ -4897,6 +5068,7 @@ export default function App() {
           defaultOwnerName={workspace.selectedProject?.ownerName ?? profile?.displayName ?? ''}
           onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateOwner={handleUpdateOwner}
+          onUpdateStatus={handleUpdateCheckItemStatus}
         />
       );
     }
