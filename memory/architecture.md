@@ -79,6 +79,6 @@
 
 - Dashboard/Home 收口为项目汇总入口，只展示整体统计、精简图表和项目入口卡；不再在首页展开单项目统计、检查模块泳道、检查项详情、重点问题详情或碰撞一页纸正文。
 - 首页项目卡优先消费 `/dashboard/projects/` 项目摘要中的 additive `phase_progress` / `stat.phaseProgress` 字段渲染圆点连线阶段轨，支持 5/6/N 阶段；字段暂缺时仅用 `currentPhaseName`、`phaseCount` 和项目完成率降级，不发起逐项目 detail/timeline N+1 请求。
-- 首页项目卡阶段轨消费 `phase_progress.check_item_count` / `completed_check_item_count`，在总检查项摘要之外展示每个阶段的检查项完成简报；阶段计划开始/结束日期拆成两行展示，避免半宽卡片内日期被截断。
+- 首页项目卡阶段轨消费 `phase_progress.check_item_count` / `completed_check_item_count`，在总检查项摘要之外展示每个阶段的检查项完成简报；阶段计划开始/结束日期拆成两行展示，5/6 阶段在卡片内等分排布，不依赖横向拖动查看完整阶段。
 - 首页项目卡提供到阶段进度、检查项、重点问题、碰撞一页纸和配置中心的入口；点击时先设置全局当前项目，再切换目标模块。
 - 阶段进度、检查项、重点问题、碰撞一页纸和报告导出模块顶部新增当前项目筛选条；用户在任一模块切换项目后，后续模块默认沿用该全局当前项目。

@@ -1156,16 +1156,15 @@ function ProjectPhaseProgressRail({
     Math.max(0, Math.floor((stat.completionRate / 100) * fallbackCount))
   );
   const railCount = sorted.length || fallbackCount;
-  const phaseColumnWidth = 136;
   const railStyle = {
-    minWidth: `${Math.max(railCount, 1) * phaseColumnWidth}px`,
-    gridTemplateColumns: `repeat(${Math.max(railCount, 1)}, minmax(${phaseColumnWidth}px, 1fr))`
+    gridTemplateColumns: `repeat(${Math.max(railCount, 1)}, minmax(0, 1fr))`
   };
+  const railClassName = `project-phase-rail ${railCount >= 6 ? 'is-dense' : ''}`;
 
   if (!sorted.length) {
     return (
       <div className="project-phase-rail-shell" aria-label={`${stat.projectName} 阶段进度`}>
-        <div className="project-phase-rail" style={railStyle}>
+        <div className={railClassName} style={railStyle}>
           {Array.from({ length: fallbackCount }, (_, index) => {
             const done = stat.completionRate >= ((index + 1) / fallbackCount) * 100;
             const active = index === fallbackCurrentIndex && !done;
@@ -1197,7 +1196,7 @@ function ProjectPhaseProgressRail({
 
   return (
     <div className="project-phase-rail-shell" aria-label={`${stat.projectName} 阶段进度`}>
-      <div className="project-phase-rail" style={railStyle}>
+      <div className={railClassName} style={railStyle}>
         {sorted.map((phase, index) => {
           const done = phase.progressPercent >= 100 || isComplete(phase.status) || phase.status === 'completed';
           const blocked = isBlocked(phase.status);

@@ -319,15 +319,19 @@
   }
 
   .project-phase-rail-shell {
-    @apply overflow-x-auto border-t border-outline/70 pt-4;
+    @apply overflow-hidden border-t border-outline/70 pt-4;
   }
 
   .project-phase-rail {
-    @apply grid items-start pb-1;
+    @apply grid w-full items-start pb-1;
   }
 
   .project-phase-step {
-    @apply relative grid min-w-0 justify-items-center gap-1.5 px-3 text-center;
+    @apply relative grid min-w-0 justify-items-center gap-1.5 px-1.5 text-center;
+  }
+
+  .project-phase-rail.is-dense .project-phase-step {
+    @apply px-1;
   }
 
   .project-phase-line {
@@ -364,6 +368,11 @@
 
   .project-phase-checks {
     @apply text-[11px] font-semibold leading-tight text-ink-muted;
+  }
+
+  .project-phase-rail.is-dense .project-phase-date,
+  .project-phase-rail.is-dense .project-phase-checks {
+    @apply text-[10px];
   }
 
   .project-phase-step.is-overdue .project-phase-checks {

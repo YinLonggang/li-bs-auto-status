@@ -101,6 +101,7 @@
 - 阶段进度、检查项、重点问题、碰撞一页纸和报告导出模块新增当前项目筛选条，模块切换默认沿用全局当前项目。
 - 保持现有只读权限逻辑：只读用户仍可查看模块，写操作仍由原有 `canWrite` 控制。
 - 首页项目卡阶段轨补齐每阶段检查项完成摘要，展示 `完成数/总数 检查项`；阶段日期改为计划开始/结束双行展示，修复半宽卡片内日期被截断的问题。
+- 首页项目卡阶段轨下线横向滚动：5/6 阶段按卡片宽度等分，6 阶段自动进入紧凑模式，用户打开首页即可看到完整阶段清单。
 
 ### 验证
 
@@ -111,6 +112,7 @@
 - `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
 - 真实 `/api/li-bs-auto-status/v1/dashboard/projects/` 返回 3 个 dev 项目，覆盖 X04C 5 阶段、X11/X13 6 阶段和原型样例 6 阶段；每个 `phase_progress` 均包含 `completed_check_item_count/check_item_count`。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-full-136.png` 确认首页项目卡日期不截断，且每阶段显示检查项完成简报。
+- Playwright 截图 `/tmp/li-bs-auto-status-home-no-phase-scroll.png` 确认首页项目卡 5/6 阶段均不再出现横向拖动条。
 
 ### 问题与风险
 
