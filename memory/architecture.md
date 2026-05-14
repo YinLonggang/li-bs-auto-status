@@ -109,3 +109,11 @@
 - 所选检查项面板新增附件区，上传走 `/attachments/upload/`，固定传 `object_type=check_item` 与当前检查项 `object_id`；下载走 `/attachments/{id}/download-link/` 获取受控预签名链接。
 - 前端请求层对 `FormData` 跳过 JSON `Content-Type`，避免 multipart 上传被错误声明为 `application/json`。
 - 阶段甘特所选检查项面板与检查项台账页共用 `OwnerListEditor` 和 `UserAvatar`；责任人新增通过 `/idaas-candidates/?q=...` 动态搜索，附件上传/下载在阶段进度和检查项页保持同一组件能力。
+
+## 2026-05-14 重点问题与碰撞一页纸维护收口
+
+- 重点问题与碰撞一页纸业务页从只读卡片改为“横向表格选行 + 下方自然维护表单”布局；筛选栏保留关键字、阶段、状态、风险、负责人和日期范围。
+- 重点问题维护字段覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人、确认人、截止、整改对策、当前进展、备注、图片 bucket/key；保存时继续向后端 snake_case 字段提交。
+- 碰撞一页纸维护字段覆盖 phase、title、reportDate、status、riskLevel、summary、owner、dueDate 以及 content 常用正式字段，包括问题定义、零件、车型、故障频次、责任区域、问题描述、诊断维修、原因分析、措施、支持、影响、遏制、预防、验证和签核槽位。
+- 前端 API adapter 新增重点问题和碰撞一页纸 create/update/delete/import/export 方法：CRUD 走现有项目子资源与顶层资源路由；CSV import/export 优先调用后端专用端点，后端未提供时降级为前端 CSV 解析后逐条调用正式 CRUD 或从正式列表生成 CSV。
+- 权限口径不变：只读用户保留页面、筛选和列表查看能力，新增、编辑、删除、导入和导出 CSV 控件均按 `canWrite` 禁用。

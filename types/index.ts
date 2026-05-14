@@ -234,12 +234,18 @@ export type KeyIssue = {
   id: string | number;
   projectId: string | number;
   projectPhaseId?: string | number | null;
+  phaseName?: string;
+  moduleId?: string | number | null;
+  moduleName?: string;
   checkItemId?: string | number | null;
+  checkItemTitle?: string;
   title: string;
   description: string;
   severity: Severity;
   status: string;
   ownerName: string;
+  ownerIdaasId?: string;
+  ownerEmail?: string;
   dueDate: string;
   closedAt?: string | null;
   resolution?: string;
@@ -249,8 +255,11 @@ export type KeyIssue = {
   countermeasure?: string;
   supplier?: string;
   confirmer?: string;
+  confirmerIdaasId?: string;
+  confirmerEmail?: string;
   currentProgress?: string;
   remark?: string;
+  metadata?: Record<string, unknown>;
   attachments: Attachment[];
 };
 
@@ -258,9 +267,13 @@ export type CollisionReport = {
   id: string | number;
   projectId: string | number;
   projectPhaseId?: string | number | null;
+  phaseName?: string;
   title: string;
+  reportDate: string;
   status: string;
   riskLevel: Severity;
+  summary: string;
+  content?: Record<string, unknown>;
   problemDefinition: string;
   parts?: string;
   vehicleModel?: string;
@@ -280,6 +293,7 @@ export type CollisionReport = {
   owner: string;
   dueDate: string;
   approvalSignoff: string;
+  metadata?: Record<string, unknown>;
   attachments: Attachment[];
   updatedAt: string;
 };

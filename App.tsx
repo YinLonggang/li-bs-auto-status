@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -34,19 +34,29 @@ import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
 import {
   createCheckItem,
+  createCollisionReport,
   createExportTask,
+  createKeyIssue,
   createProject,
+  deleteCollisionReport,
   deleteCheckItem,
+  deleteKeyIssue,
   deleteProjectPhase,
+  exportCollisionReportsCsv,
+  exportKeyIssuesCsv,
   fetchAttachmentDownloadLink,
   fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
   fetchOwnerCandidates,
   fetchWorkspaceData,
+  importCollisionReportsCsv,
+  importKeyIssuesCsv,
   seedProjectTemplate,
+  updateCollisionReport,
   updateCheckItem,
   updateCheckItemOwner,
   updateCheckItemStatus,
+  updateKeyIssue,
   updateProject,
   updateProjectPhase,
   uploadAttachment
@@ -134,7 +144,10 @@ const STATUS_LABEL: Record<string, string> = {
   approved: '已批准',
   signed: '已签核',
   rejected: '退回',
-  draft: '草稿'
+  draft: '草稿',
+  open: '打开',
+  resolved: '已解决',
+  closed: '已关闭'
 };
 
 const CHECK_ITEM_STATUS_OPTIONS: CheckItemStatus[] = [
@@ -181,6 +194,18 @@ const formatFileSize = (value?: number) => {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+};
+
+const downloadTextFile = (fileName: string, content: string, type = 'text/csv;charset=utf-8') => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
@@ -3831,6 +3856,571 @@ function CollisionView({ reports, phases }: { reports: CollisionReport[]; phases
   );
 }
 
+type KeyIssueDraft = {
+  projectPhaseId: string;
+  moduleId: string;
+  checkItemId: string;
+  title: string;
+  description: string;
+  severity: string;
+  status: string;
+  supplier: string;
+  ownerName: string;
+  confirmer: string;
+  dueDate: string;
+  countermeasure: string;
+  currentProgress: string;
+  remark: string;
+  problemPhotoBucketName: string;
+  problemPhotoObjectKey: string;
+};
+
+type CollisionDraft = {
+  projectPhaseId: string;
+  title: string;
+  reportDate: string;
+  status: string;
+  riskLevel: string;
+  summary: string;
+  owner: string;
+  dueDate: string;
+  problemDefinition: string;
+  parts: string;
+  vehicleModel: string;
+  failureFrequency: string;
+  responsibilityArea: string;
+  progress: string;
+  remark: string;
+  problemDescription: string;
+  diagnosisRepair: string;
+  supportNeeded: string;
+  impact: string;
+  containment: string;
+  rootCause: string;
+  correctiveAction: string;
+  preventiveAction: string;
+  validation: string;
+  approvalSignoff: string;
+};
+
+const emptyKeyIssueDraft = (phases: ProjectPhase[]): KeyIssueDraft => ({
+  projectPhaseId: idOf(activePhasesOf(phases)[0]?.id),
+  moduleId: '',
+  checkItemId: '',
+  title: '',
+  description: '',
+  severity: 'medium',
+  status: 'open',
+  supplier: '',
+  ownerName: '',
+  confirmer: '',
+  dueDate: '',
+  countermeasure: '',
+  currentProgress: '',
+  remark: '',
+  problemPhotoBucketName: '',
+  problemPhotoObjectKey: ''
+});
+
+const keyIssueDraftFromIssue = (issue: KeyIssue | null, phases: ProjectPhase[]): KeyIssueDraft =>
+  issue
+    ? {
+        projectPhaseId: idOf(issue.projectPhaseId),
+        moduleId: idOf(issue.moduleId),
+        checkItemId: idOf(issue.checkItemId),
+        title: issue.title,
+        description: issue.description,
+        severity: issue.severity,
+        status: issue.status,
+        supplier: issue.supplier ?? '',
+        ownerName: issue.ownerName === '未设置' ? '' : issue.ownerName,
+        confirmer: issue.confirmer ?? '',
+        dueDate: dateInputValue(issue.dueDate),
+        countermeasure: issue.countermeasure ?? '',
+        currentProgress: issue.currentProgress ?? '',
+        remark: issue.remark ?? '',
+        problemPhotoBucketName: issue.problemPhotoBucketName ?? '',
+        problemPhotoObjectKey: issue.problemPhotoObjectKey ?? ''
+      }
+    : emptyKeyIssueDraft(phases);
+
+const emptyCollisionDraft = (phases: ProjectPhase[]): CollisionDraft => ({
+  projectPhaseId: idOf(activePhasesOf(phases)[0]?.id),
+  title: '',
+  reportDate: formatLocalDate(new Date()),
+  status: 'draft',
+  riskLevel: 'medium',
+  summary: '',
+  owner: '',
+  dueDate: '',
+  problemDefinition: '',
+  parts: '',
+  vehicleModel: '',
+  failureFrequency: '',
+  responsibilityArea: '',
+  progress: '',
+  remark: '',
+  problemDescription: '',
+  diagnosisRepair: '',
+  supportNeeded: '',
+  impact: '',
+  containment: '',
+  rootCause: '',
+  correctiveAction: '',
+  preventiveAction: '',
+  validation: '',
+  approvalSignoff: ''
+});
+
+const collisionDraftFromReport = (report: CollisionReport | null, phases: ProjectPhase[]): CollisionDraft =>
+  report
+    ? {
+        projectPhaseId: idOf(report.projectPhaseId),
+        title: report.title,
+        reportDate: dateInputValue(report.reportDate),
+        status: report.status,
+        riskLevel: report.riskLevel,
+        summary: report.summary,
+        owner: report.owner === '未设置' ? '' : report.owner,
+        dueDate: dateInputValue(report.dueDate),
+        problemDefinition: report.problemDefinition ?? '',
+        parts: report.parts ?? '',
+        vehicleModel: report.vehicleModel ?? '',
+        failureFrequency: report.failureFrequency ?? '',
+        responsibilityArea: report.responsibilityArea ?? '',
+        progress: report.progress ?? '',
+        remark: report.remark ?? '',
+        problemDescription: report.problemDescription ?? '',
+        diagnosisRepair: report.diagnosisRepair ?? '',
+        supportNeeded: report.supportNeeded ?? '',
+        impact: report.impact ?? '',
+        containment: report.containment ?? '',
+        rootCause: report.rootCause ?? '',
+        correctiveAction: report.correctiveAction ?? '',
+        preventiveAction: report.preventiveAction ?? '',
+        validation: report.validation ?? '',
+        approvalSignoff: report.approvalSignoff ?? ''
+      }
+    : emptyCollisionDraft(phases);
+
+function IssuesCrudView({
+  project,
+  issues,
+  phases,
+  modules,
+  checkItems,
+  canWrite,
+  onCreateIssue,
+  onUpdateIssue,
+  onDeleteIssue,
+  onImportCsv,
+  onExportCsv
+}: {
+  project: Project | null;
+  issues: KeyIssue[];
+  phases: ProjectPhase[];
+  modules: InspectionModule[];
+  checkItems: CheckItem[];
+  canWrite: boolean;
+  onCreateIssue: (draft: KeyIssueDraft) => Promise<void>;
+  onUpdateIssue: (issue: KeyIssue, draft: KeyIssueDraft) => Promise<void>;
+  onDeleteIssue: (issue: KeyIssue) => Promise<void>;
+  onImportCsv: (file: File) => Promise<void>;
+  onExportCsv: () => Promise<void>;
+}) {
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [selectedIssueId, setSelectedIssueId] = useState('new');
+  const [draft, setDraft] = useState<KeyIssueDraft>(() => emptyKeyIssueDraft(phases));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const selectedIssue = issues.find(issue => idOf(issue.id) === selectedIssueId) ?? null;
+  const selectedIsNew = selectedIssueId === 'new' || !selectedIssue;
+  const statusOptions = statusOptionValues(issues.flatMap(issue => [issue.status, issue.currentProgress ?? '']));
+  const severityOptions = statusOptionValues(issues.map(issue => issue.severity));
+  const filteredIssues = issues.filter(issue => {
+    if (filters.phaseId && idOf(issue.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.status && issue.status !== filters.status && issue.currentProgress !== filters.status) return false;
+    if (filters.severity && issue.severity !== filters.severity) return false;
+    if (filters.owner && !textMatches(filters.owner, [issue.ownerName, issue.confirmer])) return false;
+    if (!textMatches(filters.keyword, [issue.title, issue.description, issue.countermeasure, issue.supplier, issue.ownerName, issue.confirmer, issue.currentProgress, issue.remark, issue.moduleName, issue.checkItemTitle])) return false;
+    return dateRangeMatches(issue.dueDate, issue.dueDate, filters.startDate, filters.endDate);
+  });
+  const visibleCheckItems = checkItems.filter(item => !draft.projectPhaseId || idOf(item.projectPhaseId) === draft.projectPhaseId);
+
+  useEffect(() => {
+    if (selectedIssueId !== 'new' && !issues.some(issue => idOf(issue.id) === selectedIssueId)) {
+      setSelectedIssueId(issues[0] ? idOf(issues[0].id) : 'new');
+    }
+  }, [issues, selectedIssueId]);
+
+  useEffect(() => {
+    setDraft(keyIssueDraftFromIssue(selectedIssue, phases));
+  }, [selectedIssue, phases]);
+
+  const runMutation = async (action: () => Promise<void>, successMessage: string) => {
+    setSaving(true);
+    setMessage('');
+    try {
+      await action();
+      setMessage(successMessage);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !canWrite) return;
+    await runMutation(() => onImportCsv(file), '重点问题 CSV 已导入。');
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Key Issues</p>
+          <h2 className="text-xl font-semibold">重点问题</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="chip">{filteredIssues.length}/{issues.length} 条</span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => void runMutation(onExportCsv, '重点问题 CSV 已导出。')}>
+            <FileDown className="h-4 w-4" />
+            导出 CSV
+          </button>
+          <label className={`btn btn-ghost btn--sm ${!canWrite || !project || saving ? 'pointer-events-none opacity-60' : ''}`}>
+            <FileText className="h-4 w-4" />
+            导入 CSV
+            <input className="hidden" type="file" accept=".csv,text/csv" disabled={!canWrite || !project || saving} onChange={event => void handleImport(event)} />
+          </label>
+          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setSelectedIssueId('new'); setDraft(emptyKeyIssueDraft(phases)); }}>
+            <Plus className="h-4 w-4" />
+            新增
+          </button>
+        </div>
+      </div>
+      <ReadOnlyNotice canWrite={canWrite} />
+      {message ? <div className="mt-3 text-sm text-success">{message}</div> : null}
+      <div className="mt-4">
+        <FilterShell>
+          <label className="xl:col-span-2">
+            <span className="field-label">关键字</span>
+            <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="问题、对策、供应商" />
+          </label>
+          <label>
+            <span className="field-label">阶段</span>
+            <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
+              <option value="">全部阶段</option>
+              {bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+              <option value="">全部状态</option>
+              {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">风险等级</span>
+            <select className="select" value={filters.severity} onChange={event => setFilters({ ...filters, severity: event.target.value })}>
+              <option value="">全部等级</option>
+              {severityOptions.map(severity => <option key={severity} value={severity}>{STATUS_LABEL[severity] ?? severity}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">负责人/确认人</span>
+            <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" />
+          </label>
+          <label>
+            <span className="field-label">截止起</span>
+            <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">截止止</span>
+            <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+          </label>
+        </FilterShell>
+      </div>
+      {filteredIssues.length ? (
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1320px]">
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>模块</th>
+                <th>检查项</th>
+                <th>标题/描述</th>
+                <th>严重度</th>
+                <th>状态</th>
+                <th>供应商</th>
+                <th>负责人/确认人</th>
+                <th>截止</th>
+                <th>进展</th>
+                <th>图片 Key</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredIssues.map(issue => {
+                const phase = phases.find(item => idOf(item.id) === idOf(issue.projectPhaseId));
+                const module = modules.find(item => idOf(item.id) === idOf(issue.moduleId));
+                const checkItem = checkItems.find(item => idOf(item.id) === idOf(issue.checkItemId));
+                const selected = idOf(issue.id) === idOf(selectedIssue?.id);
+                return (
+                  <tr key={issue.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => setSelectedIssueId(idOf(issue.id))}>
+                    <td>{issue.phaseName || phase?.name || '-'}</td>
+                    <td>{issue.moduleName || module?.name || '-'}</td>
+                    <td className="max-w-[220px]">{issue.checkItemTitle || checkItem?.title || '-'}</td>
+                    <td className="max-w-[280px]">
+                      <div className="font-semibold">{issue.title}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{issue.description || '-'}</div>
+                    </td>
+                    <td><StatusPill status={issue.severity} /></td>
+                    <td><StatusPill status={issue.status} /></td>
+                    <td>{issue.supplier || '-'}</td>
+                    <td><div>{issue.ownerName || '-'}</div><div className="text-xs text-ink-muted">{issue.confirmer || '-'}</div></td>
+                    <td>{formatDate(issue.dueDate)}</td>
+                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
+                    <td className="max-w-[220px] font-mono text-xs">{issue.problemPhotoObjectKey || '-'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="mt-4"><EmptyState message="当前筛选下暂无重点问题。" /></div>}
+      <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="kicker">{selectedIsNew ? 'Create' : 'Edit'}</p>
+            <h3 className="text-lg font-semibold">{selectedIsNew ? '新增重点问题' : '编辑重点问题'}</h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || saving || !project || !draft.title.trim()} onClick={() => void runMutation(() => selectedIssue && !selectedIsNew ? onUpdateIssue(selectedIssue, draft) : onCreateIssue(draft), selectedIssue && !selectedIsNew ? '重点问题已保存。' : '重点问题已新增。')}>
+              <Save className="h-4 w-4" />
+              保存
+            </button>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving || selectedIsNew || !selectedIssue} onClick={() => {
+              if (selectedIssue && window.confirm(`确认删除重点问题「${selectedIssue.title}」？`)) {
+                void runMutation(async () => { await onDeleteIssue(selectedIssue); setSelectedIssueId('new'); }, '重点问题已删除。');
+              }
+            }}>
+              <Trash2 className="h-4 w-4" />
+              删除
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label><span className="field-label">阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value, checkItemId: '' })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+          <label><span className="field-label">模块</span><select className="select" value={draft.moduleId} disabled={!canWrite} onChange={event => setDraft({ ...draft, moduleId: event.target.value })}><option value="">未关联</option>{modules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}</select></label>
+          <label className="xl:col-span-2"><span className="field-label">检查项</span><select className="select" value={draft.checkItemId} disabled={!canWrite} onChange={event => setDraft({ ...draft, checkItemId: event.target.value })}><option value="">未关联</option>{visibleCheckItems.map(item => <option key={item.id} value={idOf(item.id)}>{item.title}</option>)}</select></label>
+          <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+          <label><span className="field-label">严重度</span><select className="select" value={draft.severity} disabled={!canWrite} onChange={event => setDraft({ ...draft, severity: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>{['open', 'in_progress', 'blocked', 'resolved', 'closed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label className="md:col-span-2 xl:col-span-4"><span className="field-label">描述</span><textarea className="input min-h-20" value={draft.description} disabled={!canWrite} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+          <label><span className="field-label">供应商</span><input className="input" value={draft.supplier} disabled={!canWrite} onChange={event => setDraft({ ...draft, supplier: event.target.value })} /></label>
+          <label><span className="field-label">负责人</span><input className="input" value={draft.ownerName} disabled={!canWrite} onChange={event => setDraft({ ...draft, ownerName: event.target.value })} /></label>
+          <label><span className="field-label">确认人</span><input className="input" value={draft.confirmer} disabled={!canWrite} onChange={event => setDraft({ ...draft, confirmer: event.target.value })} /></label>
+          <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">对策</span><textarea className="input min-h-20" value={draft.countermeasure} disabled={!canWrite} onChange={event => setDraft({ ...draft, countermeasure: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">进展</span><textarea className="input min-h-20" value={draft.currentProgress} disabled={!canWrite} onChange={event => setDraft({ ...draft, currentProgress: event.target.value })} /></label>
+          <label><span className="field-label">图片 Bucket</span><input className="input" value={draft.problemPhotoBucketName} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoBucketName: event.target.value })} /></label>
+          <label><span className="field-label">图片 Key</span><input className="input font-mono" value={draft.problemPhotoObjectKey} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoObjectKey: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CollisionCrudView({
+  project,
+  reports,
+  phases,
+  canWrite,
+  onCreateReport,
+  onUpdateReport,
+  onDeleteReport,
+  onImportCsv,
+  onExportCsv
+}: {
+  project: Project | null;
+  reports: CollisionReport[];
+  phases: ProjectPhase[];
+  canWrite: boolean;
+  onCreateReport: (draft: CollisionDraft) => Promise<void>;
+  onUpdateReport: (report: CollisionReport, draft: CollisionDraft) => Promise<void>;
+  onDeleteReport: (report: CollisionReport) => Promise<void>;
+  onImportCsv: (file: File) => Promise<void>;
+  onExportCsv: () => Promise<void>;
+}) {
+  const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [selectedReportId, setSelectedReportId] = useState('new');
+  const [draft, setDraft] = useState<CollisionDraft>(() => emptyCollisionDraft(phases));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const selectedReport = reports.find(report => idOf(report.id) === selectedReportId) ?? null;
+  const selectedIsNew = selectedReportId === 'new' || !selectedReport;
+  const statusOptions = statusOptionValues(reports.map(report => report.status));
+  const riskOptions = statusOptionValues(reports.map(report => report.riskLevel));
+  const filteredReports = reports.filter(report => {
+    if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
+    if (filters.status && report.status !== filters.status) return false;
+    if (filters.severity && report.riskLevel !== filters.severity) return false;
+    if (filters.owner && !textMatches(filters.owner, [report.owner])) return false;
+    if (!textMatches(filters.keyword, [report.title, report.summary, report.problemDefinition, report.parts, report.vehicleModel, report.responsibilityArea, report.progress, report.owner, report.rootCause, report.correctiveAction])) return false;
+    return dateRangeMatches(report.reportDate || report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
+  });
+
+  useEffect(() => {
+    if (selectedReportId !== 'new' && !reports.some(report => idOf(report.id) === selectedReportId)) {
+      setSelectedReportId(reports[0] ? idOf(reports[0].id) : 'new');
+    }
+  }, [reports, selectedReportId]);
+
+  useEffect(() => {
+    setDraft(collisionDraftFromReport(selectedReport, phases));
+  }, [selectedReport, phases]);
+
+  const runMutation = async (action: () => Promise<void>, successMessage: string) => {
+    setSaving(true);
+    setMessage('');
+    try {
+      await action();
+      setMessage(successMessage);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !canWrite) return;
+    await runMutation(() => onImportCsv(file), '碰撞一页纸 CSV 已导入。');
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Collision One Pager</p>
+          <h2 className="text-xl font-semibold">碰撞一页纸</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="chip">{filteredReports.length}/{reports.length} 份</span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => void runMutation(onExportCsv, '碰撞一页纸 CSV 已导出。')}>
+            <FileDown className="h-4 w-4" />
+            导出 CSV
+          </button>
+          <label className={`btn btn-ghost btn--sm ${!canWrite || !project || saving ? 'pointer-events-none opacity-60' : ''}`}>
+            <FileText className="h-4 w-4" />
+            导入 CSV
+            <input className="hidden" type="file" accept=".csv,text/csv" disabled={!canWrite || !project || saving} onChange={event => void handleImport(event)} />
+          </label>
+          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setSelectedReportId('new'); setDraft(emptyCollisionDraft(phases)); }}>
+            <Plus className="h-4 w-4" />
+            新增
+          </button>
+        </div>
+      </div>
+      <ReadOnlyNotice canWrite={canWrite} />
+      {message ? <div className="mt-3 text-sm text-success">{message}</div> : null}
+      <div className="mt-4">
+        <FilterShell>
+          <label className="xl:col-span-2"><span className="field-label">关键字</span><input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="问题、零件、车型、责任区域" /></label>
+          <label><span className="field-label">阶段</span><select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}><option value="">全部阶段</option>{bySequence(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+          <label><span className="field-label">状态</span><select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option>{statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}</select></label>
+          <label><span className="field-label">风险等级</span><select className="select" value={filters.severity} onChange={event => setFilters({ ...filters, severity: event.target.value })}><option value="">全部风险</option>{riskOptions.map(risk => <option key={risk} value={risk}>{STATUS_LABEL[risk] ?? risk}</option>)}</select></label>
+          <label><span className="field-label">负责人</span><input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" /></label>
+          <label><span className="field-label">日期起</span><input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} /></label>
+          <label><span className="field-label">日期止</span><input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} /></label>
+        </FilterShell>
+      </div>
+      {filteredReports.length ? (
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1280px]">
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>标题/摘要</th>
+                <th>报告日期</th>
+                <th>状态</th>
+                <th>风险</th>
+                <th>负责人/截止</th>
+                <th>问题定义</th>
+                <th>零件/车型</th>
+                <th>责任区域</th>
+                <th>进展</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredReports.map(report => {
+                const phase = phases.find(item => idOf(item.id) === idOf(report.projectPhaseId));
+                const selected = idOf(report.id) === idOf(selectedReport?.id);
+                return (
+                  <tr key={report.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => setSelectedReportId(idOf(report.id))}>
+                    <td>{report.phaseName || phase?.name || '-'}</td>
+                    <td className="max-w-[280px]"><div className="font-semibold">{report.title}</div><div className="mt-1 text-xs text-ink-muted">{report.summary || '-'}</div></td>
+                    <td>{formatDate(report.reportDate)}</td>
+                    <td><StatusPill status={report.status} /></td>
+                    <td><StatusPill status={report.riskLevel} /></td>
+                    <td><div>{report.owner || '-'}</div><div className="text-xs text-ink-muted">{formatDate(report.dueDate)}</div></td>
+                    <td className="max-w-[220px]">{report.problemDefinition || '-'}</td>
+                    <td>{[report.parts, report.vehicleModel].filter(Boolean).join(' / ') || '-'}</td>
+                    <td>{report.responsibilityArea || '-'}</td>
+                    <td className="max-w-[180px]">{report.progress || '-'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="mt-4"><EmptyState message="当前筛选下暂无碰撞一页纸。" /></div>}
+      <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div><p className="kicker">{selectedIsNew ? 'Create' : 'Edit'}</p><h3 className="text-lg font-semibold">{selectedIsNew ? '新增碰撞一页纸' : '编辑碰撞一页纸'}</h3></div>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || saving || !project || !draft.title.trim()} onClick={() => void runMutation(() => selectedReport && !selectedIsNew ? onUpdateReport(selectedReport, draft) : onCreateReport(draft), selectedReport && !selectedIsNew ? '碰撞一页纸已保存。' : '碰撞一页纸已新增。')}><Save className="h-4 w-4" />保存</button>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving || selectedIsNew || !selectedReport} onClick={() => {
+              if (selectedReport && window.confirm(`确认删除碰撞一页纸「${selectedReport.title}」？`)) {
+                void runMutation(async () => { await onDeleteReport(selectedReport); setSelectedReportId('new'); }, '碰撞一页纸已删除。');
+              }
+            }}><Trash2 className="h-4 w-4" />删除</button>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label><span className="field-label">阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+          <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+          <label><span className="field-label">报告日期</span><input className="input" type="date" value={draft.reportDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, reportDate: event.target.value })} /></label>
+          <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>{['draft', 'pending', 'approved', 'rejected', 'signed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label><span className="field-label">风险等级</span><select className="select" value={draft.riskLevel} disabled={!canWrite} onChange={event => setDraft({ ...draft, riskLevel: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label><span className="field-label">负责人</span><input className="input" value={draft.owner} disabled={!canWrite} onChange={event => setDraft({ ...draft, owner: event.target.value })} /></label>
+          <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
+          <label className="md:col-span-2 xl:col-span-4"><span className="field-label">摘要</span><textarea className="input min-h-20" value={draft.summary} disabled={!canWrite} onChange={event => setDraft({ ...draft, summary: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">问题定义</span><textarea className="input min-h-20" value={draft.problemDefinition} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemDefinition: event.target.value })} /></label>
+          <label><span className="field-label">涉及零件</span><input className="input" value={draft.parts} disabled={!canWrite} onChange={event => setDraft({ ...draft, parts: event.target.value })} /></label>
+          <label><span className="field-label">车型</span><input className="input" value={draft.vehicleModel} disabled={!canWrite} onChange={event => setDraft({ ...draft, vehicleModel: event.target.value })} /></label>
+          <label><span className="field-label">故障频次</span><input className="input" value={draft.failureFrequency} disabled={!canWrite} onChange={event => setDraft({ ...draft, failureFrequency: event.target.value })} /></label>
+          <label><span className="field-label">责任区域</span><input className="input" value={draft.responsibilityArea} disabled={!canWrite} onChange={event => setDraft({ ...draft, responsibilityArea: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">问题进展</span><textarea className="input min-h-20" value={draft.progress} disabled={!canWrite} onChange={event => setDraft({ ...draft, progress: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">1 问题描述</span><textarea className="input min-h-20" value={draft.problemDescription} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemDescription: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">2 诊断维修</span><textarea className="input min-h-20" value={draft.diagnosisRepair} disabled={!canWrite} onChange={event => setDraft({ ...draft, diagnosisRepair: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">3 原因分析</span><textarea className="input min-h-20" value={draft.rootCause} disabled={!canWrite} onChange={event => setDraft({ ...draft, rootCause: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">4 制定措施</span><textarea className="input min-h-20" value={draft.correctiveAction} disabled={!canWrite} onChange={event => setDraft({ ...draft, correctiveAction: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">5 所需支持</span><textarea className="input min-h-20" value={draft.supportNeeded} disabled={!canWrite} onChange={event => setDraft({ ...draft, supportNeeded: event.target.value })} /></label>
+          <label><span className="field-label">影响</span><input className="input" value={draft.impact} disabled={!canWrite} onChange={event => setDraft({ ...draft, impact: event.target.value })} /></label>
+          <label><span className="field-label">遏制</span><input className="input" value={draft.containment} disabled={!canWrite} onChange={event => setDraft({ ...draft, containment: event.target.value })} /></label>
+          <label><span className="field-label">预防措施</span><input className="input" value={draft.preventiveAction} disabled={!canWrite} onChange={event => setDraft({ ...draft, preventiveAction: event.target.value })} /></label>
+          <label><span className="field-label">验证</span><input className="input" value={draft.validation} disabled={!canWrite} onChange={event => setDraft({ ...draft, validation: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">签核槽位</span><input className="input" value={draft.approvalSignoff} disabled={!canWrite} onChange={event => setDraft({ ...draft, approvalSignoff: event.target.value })} /></label>
+          <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ReportsView({
   reports,
   tasks,
@@ -5503,6 +6093,156 @@ export default function App() {
     }
   };
 
+  const handleCreateKeyIssue = async (draft: KeyIssueDraft) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await createKeyIssue(workspace.selectedProject.id, {
+        projectPhaseId: draft.projectPhaseId || null,
+        moduleId: draft.moduleId || null,
+        checkItemId: draft.checkItemId || null,
+        title: draft.title,
+        description: draft.description,
+        severity: draft.severity,
+        status: draft.status,
+        supplier: draft.supplier,
+        ownerName: draft.ownerName,
+        confirmer: draft.confirmer,
+        dueDate: draft.dueDate,
+        countermeasure: draft.countermeasure,
+        currentProgress: draft.currentProgress,
+        remark: draft.remark,
+        problemPhotoBucketName: draft.problemPhotoBucketName,
+        problemPhotoObjectKey: draft.problemPhotoObjectKey
+      });
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题新增失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateKeyIssue = async (issue: KeyIssue, draft: KeyIssueDraft) => {
+    if (!canWrite) return;
+    try {
+      await updateKeyIssue(issue.id, {
+        projectPhaseId: draft.projectPhaseId || null,
+        moduleId: draft.moduleId || null,
+        checkItemId: draft.checkItemId || null,
+        title: draft.title,
+        description: draft.description,
+        severity: draft.severity,
+        status: draft.status,
+        supplier: draft.supplier,
+        ownerName: draft.ownerName,
+        confirmer: draft.confirmer,
+        dueDate: draft.dueDate,
+        countermeasure: draft.countermeasure,
+        currentProgress: draft.currentProgress,
+        remark: draft.remark,
+        problemPhotoBucketName: draft.problemPhotoBucketName,
+        problemPhotoObjectKey: draft.problemPhotoObjectKey,
+        metadata: issue.metadata
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeleteKeyIssue = async (issue: KeyIssue) => {
+    if (!canWrite) return;
+    try {
+      await deleteKeyIssue(issue.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题删除失败'));
+      throw err;
+    }
+  };
+
+  const handleImportKeyIssues = async (file: File) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await importKeyIssuesCsv(workspace.selectedProject.id, file);
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题 CSV 导入失败'));
+      throw err;
+    }
+  };
+
+  const handleExportKeyIssues = async () => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      const csv = await exportKeyIssuesCsv(workspace.selectedProject.id);
+      downloadTextFile(`${workspace.selectedProject.code || workspace.selectedProject.id}-key-issues.csv`, csv);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题 CSV 导出失败'));
+      throw err;
+    }
+  };
+
+  const handleCreateCollisionReport = async (draft: CollisionDraft) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await createCollisionReport(workspace.selectedProject.id, { ...draft, projectPhaseId: draft.projectPhaseId || null });
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸新增失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateCollisionReport = async (report: CollisionReport, draft: CollisionDraft) => {
+    if (!canWrite) return;
+    try {
+      await updateCollisionReport(report.id, {
+        ...draft,
+        projectPhaseId: draft.projectPhaseId || null,
+        content: report.content,
+        metadata: report.metadata
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeleteCollisionReport = async (report: CollisionReport) => {
+    if (!canWrite) return;
+    try {
+      await deleteCollisionReport(report.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸删除失败'));
+      throw err;
+    }
+  };
+
+  const handleImportCollisionReports = async (file: File) => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      await importCollisionReportsCsv(workspace.selectedProject.id, file);
+      await loadData(workspace.selectedProject.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸 CSV 导入失败'));
+      throw err;
+    }
+  };
+
+  const handleExportCollisionReports = async () => {
+    if (!canWrite || !workspace.selectedProject) return;
+    try {
+      const csv = await exportCollisionReportsCsv(workspace.selectedProject.id);
+      downloadTextFile(`${workspace.selectedProject.code || workspace.selectedProject.id}-collision-reports.csv`, csv);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸 CSV 导出失败'));
+      throw err;
+    }
+  };
+
   const handleCreateExport = async (report: ReportDefinition) => {
     if (!canWrite || !workspace.selectedProject) return;
     try {
@@ -5622,8 +6362,38 @@ export default function App() {
         />
       );
     }
-    if (currentView === 'issues') return withProjectContext(<IssuesView issues={workspace.keyIssues} phases={workspace.phases} />);
-    if (currentView === 'collision') return withProjectContext(<CollisionView reports={workspace.collisionReports} phases={workspace.phases} />);
+    if (currentView === 'issues') {
+      return withProjectContext(
+        <IssuesCrudView
+          project={workspace.selectedProject}
+          issues={workspace.keyIssues}
+          phases={workspace.phases}
+          modules={workspace.inspectionModules}
+          checkItems={workspace.checkItems}
+          canWrite={canWrite}
+          onCreateIssue={handleCreateKeyIssue}
+          onUpdateIssue={handleUpdateKeyIssue}
+          onDeleteIssue={handleDeleteKeyIssue}
+          onImportCsv={handleImportKeyIssues}
+          onExportCsv={handleExportKeyIssues}
+        />
+      );
+    }
+    if (currentView === 'collision') {
+      return withProjectContext(
+        <CollisionCrudView
+          project={workspace.selectedProject}
+          reports={workspace.collisionReports}
+          phases={workspace.phases}
+          canWrite={canWrite}
+          onCreateReport={handleCreateCollisionReport}
+          onUpdateReport={handleUpdateCollisionReport}
+          onDeleteReport={handleDeleteCollisionReport}
+          onImportCsv={handleImportCollisionReports}
+          onExportCsv={handleExportCollisionReports}
+        />
+      );
+    }
     if (currentView === 'reports') {
       return withProjectContext(
         <ReportsView

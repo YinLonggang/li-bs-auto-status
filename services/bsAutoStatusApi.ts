@@ -59,6 +59,12 @@ const asNumber = (value: unknown, fallback = 0) => {
 const asBoolean = (value: unknown, fallback = false) =>
   typeof value === 'boolean' ? value : fallback;
 
+const isLegacyCsvEndpointFallback = (error: unknown) =>
+  error instanceof ApiError && [404, 405].includes(error.status);
+
+const csvProjectQuery = (projectId: string | number) =>
+  `project=${encodeURIComponent(String(projectId))}`;
+
 const asStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) {
     return value.map(item => String(item).trim()).filter(Boolean);
@@ -462,13 +468,19 @@ const normalizeKeyIssue = (input: unknown): KeyIssue => {
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
-    projectPhaseId: firstId(raw, ['projectPhaseId', 'phase']) || null,
-    checkItemId: firstId(raw, ['checkItemId', 'check_item']) || null,
+    projectPhaseId: firstId(raw, ['projectPhaseId', 'phase', 'project_phase', 'project_phase_id']) || null,
+    phaseName: firstString(raw, ['phaseName', 'phase_name']),
+    moduleId: firstId(raw, ['moduleId', 'module', 'module_id']) || null,
+    moduleName: firstString(raw, ['moduleName', 'module_name']),
+    checkItemId: firstId(raw, ['checkItemId', 'check_item', 'check_item_id']) || null,
+    checkItemTitle: firstString(raw, ['checkItemTitle', 'check_item_title']),
     title: firstString(raw, ['title']),
     description: firstString(raw, ['description']),
     severity: firstString(raw, ['severity'], 'medium'),
     status: firstString(raw, ['status'], 'open'),
     ownerName: firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置'),
+    ownerIdaasId: firstString(raw, ['ownerIdaasId', 'owner_idaas_id']),
+    ownerEmail: firstString(raw, ['ownerEmail', 'owner_email']),
     dueDate: firstString(raw, ['dueDate', 'due_date']),
     closedAt: firstString(raw, ['closedAt', 'closed_at']) || null,
     resolution: firstString(raw, ['resolution']),
@@ -483,8 +495,11 @@ const normalizeKeyIssue = (input: unknown): KeyIssue => {
     confirmer:
       firstString(raw, ['confirmerName', 'confirmer_display_name', 'confirmer_name']) ||
       firstString(metadata, ['confirmer']),
+    confirmerIdaasId: firstString(raw, ['confirmerIdaasId', 'confirmer_idaas_id']),
+    confirmerEmail: firstString(raw, ['confirmerEmail', 'confirmer_email']),
     currentProgress: firstString(raw, ['currentProgress', 'progress_note']) || firstString(metadata, ['currentProgress', 'current_progress']),
     remark: firstString(raw, ['remark']) || firstString(metadata, ['remark']),
+    metadata,
     attachments: asArray(raw.attachments).map(normalizeAttachment)
   };
 };
@@ -510,10 +525,14 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),
-    projectPhaseId: firstId(raw, ['projectPhaseId', 'phase']) || null,
+    projectPhaseId: firstId(raw, ['projectPhaseId', 'phase', 'project_phase', 'project_phase_id']) || null,
+    phaseName: firstString(raw, ['phaseName', 'phase_name']),
     title: firstString(raw, ['title']),
+    reportDate: firstString(raw, ['reportDate', 'report_date']),
     status: firstString(raw, ['status'], 'draft'),
     riskLevel: firstString(raw, ['riskLevel', 'risk_level']) || firstString(metadata, ['riskLevel', 'risk_level', 'severity'], 'medium'),
+    summary: firstString(raw, ['summary']) || firstString(content, ['summary']),
+    content,
     problemDefinition: firstString(content, ['problemDefinition', 'problem_statement', 'problem']),
     parts: firstString(content, ['parts']),
     vehicleModel: firstString(content, ['vehicleModel', 'vehicle_model', 'model']),
@@ -535,6 +554,7 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
     approvalSignoff:
       approvals.map(item => `${firstString(item, ['step_name'], '签核')}: ${firstString(item, ['status'], 'pending')}`).join(' / ') ||
       firstString(content, ['approvalSignoff', 'approval_signoff']),
+    metadata,
     attachments: asArray(raw.attachments).map(normalizeAttachment),
     updatedAt: firstString(raw, ['updatedAt', 'updated_at'])
   };
@@ -823,6 +843,366 @@ export type CreateExportInput = {
   reportName: string;
   reportType?: string | number;
   format: string;
+};
+
+export type KeyIssueInput = {
+  projectPhaseId?: string | number | null;
+  moduleId?: string | number | null;
+  checkItemId?: string | number | null;
+  title: string;
+  description?: string;
+  severity?: string;
+  status?: string;
+  supplier?: string;
+  ownerName?: string;
+  ownerIdaasId?: string;
+  ownerEmail?: string;
+  confirmer?: string;
+  confirmerIdaasId?: string;
+  confirmerEmail?: string;
+  dueDate?: string | null;
+  countermeasure?: string;
+  currentProgress?: string;
+  remark?: string;
+  problemPhotoBucketName?: string;
+  problemPhotoObjectKey?: string;
+  resolution?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type CollisionReportInput = {
+  projectPhaseId?: string | number | null;
+  title: string;
+  reportDate?: string | null;
+  status?: string;
+  riskLevel?: string;
+  summary?: string;
+  owner?: string;
+  dueDate?: string | null;
+  problemDefinition?: string;
+  parts?: string;
+  vehicleModel?: string;
+  failureFrequency?: string;
+  responsibilityArea?: string;
+  progress?: string;
+  remark?: string;
+  problemDescription?: string;
+  diagnosisRepair?: string;
+  supportNeeded?: string;
+  impact?: string;
+  containment?: string;
+  rootCause?: string;
+  correctiveAction?: string;
+  preventiveAction?: string;
+  validation?: string;
+  approvalSignoff?: string;
+  content?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+};
+
+export type CsvImportResult<T> = {
+  created: number;
+  updated: number;
+  items: T[];
+};
+
+const optionalId = (value?: string | number | null) => {
+  if (value === undefined || value === null || `${value}` === '') return undefined;
+  return value;
+};
+
+const serializeKeyIssuePayload = (input: Partial<KeyIssueInput>) => ({
+  phase: optionalId(input.projectPhaseId),
+  project_phase: optionalId(input.projectPhaseId),
+  module: optionalId(input.moduleId),
+  check_item: optionalId(input.checkItemId),
+  title: input.title,
+  description: input.description,
+  problem_photo_bucket_name: input.problemPhotoBucketName,
+  problem_photo_object_key: input.problemPhotoObjectKey,
+  countermeasure: input.countermeasure,
+  severity: input.severity,
+  status: input.status,
+  supplier: input.supplier,
+  owner_display_name: input.ownerName,
+  owner_name: input.ownerName,
+  owner_idaas_id: input.ownerIdaasId,
+  owner_email: input.ownerEmail,
+  confirmer_display_name: input.confirmer,
+  confirmer_name: input.confirmer,
+  confirmer_idaas_id: input.confirmerIdaasId,
+  confirmer_email: input.confirmerEmail,
+  due_date: optionalDate(input.dueDate),
+  progress_note: input.currentProgress,
+  remark: input.remark,
+  resolution: input.resolution,
+  metadata: {
+    ...(input.metadata ?? {}),
+    countermeasure: input.countermeasure,
+    current_progress: input.currentProgress,
+    remark: input.remark
+  }
+});
+
+const serializeCollisionReportPayload = (input: Partial<CollisionReportInput>) => {
+  const content = {
+    ...(input.content ?? {}),
+    problemDefinition: input.problemDefinition,
+    parts: input.parts,
+    vehicleModel: input.vehicleModel,
+    failureFrequency: input.failureFrequency,
+    responsibilityArea: input.responsibilityArea,
+    progress: input.progress,
+    remark: input.remark,
+    problemDescription: input.problemDescription,
+    diagnosisRepair: input.diagnosisRepair,
+    supportNeeded: input.supportNeeded,
+    impact: input.impact,
+    containment: input.containment,
+    rootCause: input.rootCause,
+    correctiveAction: input.correctiveAction,
+    preventiveAction: input.preventiveAction,
+    validation: input.validation,
+    owner: input.owner,
+    due_date: optionalDate(input.dueDate),
+    approvalSignoff: input.approvalSignoff
+  };
+
+  return {
+    phase: optionalId(input.projectPhaseId),
+    project_phase: optionalId(input.projectPhaseId),
+    title: input.title,
+    report_date: optionalDate(input.reportDate),
+    summary: input.summary,
+    status: input.status,
+    content,
+    metadata: {
+      ...(input.metadata ?? {}),
+      risk_level: input.riskLevel,
+      owner: input.owner
+    }
+  };
+};
+
+const csvEscape = (value: unknown) => {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+const csvRows = (headers: string[], rows: unknown[][]) =>
+  [headers, ...rows].map(row => row.map(csvEscape).join(',')).join('\n');
+
+const parseCsv = (text: string): string[][] => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"') {
+      if (quoted && next === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (char === ',' && !quoted) {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell);
+      if (row.some(value => value.trim())) rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.some(value => value.trim())) rows.push(row);
+  return rows;
+};
+
+const csvRecords = (text: string) => {
+  const [headers = [], ...rows] = parseCsv(text);
+  return rows.map(row =>
+    Object.fromEntries(headers.map((header, index) => [header.trim().toLowerCase(), row[index]?.trim() ?? '']))
+  );
+};
+
+const csvField = (record: Record<string, string>, keys: string[]) => {
+  for (const key of keys) {
+    const value = record[key.toLowerCase()];
+    if (value) return value;
+  }
+  return '';
+};
+
+const keyIssueCsvHeaders = [
+  'id',
+  'phase',
+  'module',
+  'check_item',
+  'title',
+  'description',
+  'severity',
+  'status',
+  'supplier',
+  'owner_name',
+  'confirmer_name',
+  'due_date',
+  'countermeasure',
+  'progress_note',
+  'remark',
+  'problem_photo_bucket_name',
+  'problem_photo_object_key'
+];
+
+const collisionCsvHeaders = [
+  'id',
+  'phase',
+  'title',
+  'report_date',
+  'status',
+  'risk_level',
+  'summary',
+  'owner',
+  'due_date',
+  'problem_definition',
+  'parts',
+  'vehicle_model',
+  'failure_frequency',
+  'responsibility_area',
+  'progress',
+  'remark',
+  'problem_description',
+  'diagnosis_repair',
+  'support_needed',
+  'impact',
+  'containment',
+  'root_cause',
+  'corrective_action',
+  'preventive_action',
+  'validation',
+  'approval_signoff'
+];
+
+const keyIssuesToCsv = (issues: KeyIssue[]) =>
+  csvRows(
+    keyIssueCsvHeaders,
+    issues.map(issue => [
+      issue.id,
+      issue.projectPhaseId ?? '',
+      issue.moduleId ?? '',
+      issue.checkItemId ?? '',
+      issue.title,
+      issue.description,
+      issue.severity,
+      issue.status,
+      issue.supplier,
+      issue.ownerName,
+      issue.confirmer,
+      issue.dueDate,
+      issue.countermeasure,
+      issue.currentProgress,
+      issue.remark,
+      issue.problemPhotoBucketName,
+      issue.problemPhotoObjectKey
+    ])
+  );
+
+const collisionReportsToCsv = (reports: CollisionReport[]) =>
+  csvRows(
+    collisionCsvHeaders,
+    reports.map(report => [
+      report.id,
+      report.projectPhaseId ?? '',
+      report.title,
+      report.reportDate,
+      report.status,
+      report.riskLevel,
+      report.summary,
+      report.owner,
+      report.dueDate,
+      report.problemDefinition,
+      report.parts,
+      report.vehicleModel,
+      report.failureFrequency,
+      report.responsibilityArea,
+      report.progress,
+      report.remark,
+      report.problemDescription,
+      report.diagnosisRepair,
+      report.supportNeeded,
+      report.impact,
+      report.containment,
+      report.rootCause,
+      report.correctiveAction,
+      report.preventiveAction,
+      report.validation,
+      report.approvalSignoff
+    ])
+  );
+
+const keyIssueInputFromCsv = (record: Record<string, string>): KeyIssueInput => ({
+  projectPhaseId: csvField(record, ['phase', 'project_phase', '阶段']) || null,
+  moduleId: csvField(record, ['module', 'module_id', '模块']) || null,
+  checkItemId: csvField(record, ['check_item', 'check_item_id', '检查项']) || null,
+  title: csvField(record, ['title', '标题']),
+  description: csvField(record, ['description', '描述']),
+  severity: csvField(record, ['severity', '严重度']) || 'medium',
+  status: csvField(record, ['status', '状态']) || 'open',
+  supplier: csvField(record, ['supplier', '供应商']),
+  ownerName: csvField(record, ['owner_name', 'owner', '负责人']),
+  confirmer: csvField(record, ['confirmer_name', 'confirmer', '确认人']),
+  dueDate: csvField(record, ['due_date', 'dueDate', '截止']),
+  countermeasure: csvField(record, ['countermeasure', '对策']),
+  currentProgress: csvField(record, ['progress_note', 'current_progress', '进展']),
+  remark: csvField(record, ['remark', '备注']),
+  problemPhotoBucketName: csvField(record, ['problem_photo_bucket_name', 'bucket']),
+  problemPhotoObjectKey: csvField(record, ['problem_photo_object_key', 'key'])
+});
+
+const collisionInputFromCsv = (record: Record<string, string>): CollisionReportInput => ({
+  projectPhaseId: csvField(record, ['phase', 'project_phase', '阶段']) || null,
+  title: csvField(record, ['title', '标题']),
+  reportDate: csvField(record, ['report_date', 'reportDate', '日期']),
+  status: csvField(record, ['status', '状态']) || 'draft',
+  riskLevel: csvField(record, ['risk_level', 'riskLevel', '风险']) || 'medium',
+  summary: csvField(record, ['summary', '摘要']),
+  owner: csvField(record, ['owner', '负责人']),
+  dueDate: csvField(record, ['due_date', 'dueDate', '截止']),
+  problemDefinition: csvField(record, ['problem_definition', 'problemDefinition', '问题定义']),
+  parts: csvField(record, ['parts', '零件']),
+  vehicleModel: csvField(record, ['vehicle_model', 'vehicleModel', '车型']),
+  failureFrequency: csvField(record, ['failure_frequency', 'failureFrequency', '故障频次']),
+  responsibilityArea: csvField(record, ['responsibility_area', 'responsibilityArea', '责任区域']),
+  progress: csvField(record, ['progress', '进展']),
+  remark: csvField(record, ['remark', '备注']),
+  problemDescription: csvField(record, ['problem_description', 'problemDescription', '问题描述']),
+  diagnosisRepair: csvField(record, ['diagnosis_repair', 'diagnosisRepair', '诊断维修']),
+  supportNeeded: csvField(record, ['support_needed', 'supportNeeded', '所需支持']),
+  impact: csvField(record, ['impact', '影响']),
+  containment: csvField(record, ['containment', '遏制']),
+  rootCause: csvField(record, ['root_cause', 'rootCause', '原因分析']),
+  correctiveAction: csvField(record, ['corrective_action', 'correctiveAction', '制定措施']),
+  preventiveAction: csvField(record, ['preventive_action', 'preventiveAction', '预防措施']),
+  validation: csvField(record, ['validation', 'verification', '验证']),
+  approvalSignoff: csvField(record, ['approval_signoff', 'approvalSignoff', '签核'])
+});
+
+const csvPayloadText = (payload: unknown) => {
+  if (typeof payload === 'string') return payload;
+  const raw = asRecord(payload);
+  return firstString(raw, ['csv', 'content', 'data']);
 };
 
 export async function listProjects(filters?: ProjectScopeFilters) {
@@ -1273,6 +1653,216 @@ export async function deleteCheckItem(checkItemId: string | number) {
   await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-items/${checkItemId}/`, {
     method: 'DELETE'
   });
+}
+
+export async function createKeyIssue(projectId: string | number, payload: KeyIssueInput) {
+  const issue = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/key-issues/`, {
+      method: 'POST',
+      body: JSON.stringify(serializeKeyIssuePayload(payload))
+    })
+  );
+  return normalizeKeyIssue(issue);
+}
+
+export async function updateKeyIssue(issueId: string | number, payload: Partial<KeyIssueInput>) {
+  const issue = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/key-issues/${issueId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(serializeKeyIssuePayload(payload))
+    })
+  );
+  return normalizeKeyIssue(issue);
+}
+
+export async function deleteKeyIssue(issueId: string | number) {
+  await apiRequest<ApiEnvelope<unknown> | unknown>(`/key-issues/${issueId}/`, {
+    method: 'DELETE'
+  });
+}
+
+export async function importKeyIssuesCsv(projectId: string | number, file: File): Promise<CsvImportResult<KeyIssue>> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('project', String(projectId));
+  try {
+    let payload: unknown;
+    try {
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/key-issues/import/?${csvProjectQuery(projectId)}`, {
+          method: 'POST',
+          body: formData
+        })
+      );
+    } catch (error) {
+      if (!isLegacyCsvEndpointFallback(error)) throw error;
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/key-issues/import/`, {
+          method: 'POST',
+          body: formData
+        })
+      );
+    }
+    const raw = asRecord(payload);
+    const items = asArray(raw.items ?? raw.results ?? raw.created ?? raw.updated ?? payload).map(normalizeKeyIssue);
+    return {
+      created: firstNumber(raw, ['created_count', 'created'], items.length),
+      updated: firstNumber(raw, ['updated_count', 'updated']),
+      items
+    };
+  } catch (error) {
+    if (!isLegacyCsvEndpointFallback(error)) throw error;
+  }
+
+  const items: KeyIssue[] = [];
+  let created = 0;
+  let updated = 0;
+  for (const record of csvRecords(await file.text())) {
+    const issueId = csvField(record, ['id']);
+    const input = keyIssueInputFromCsv(record);
+    if (!input.title.trim()) continue;
+    if (issueId) {
+      items.push(await updateKeyIssue(issueId, input));
+      updated += 1;
+    } else {
+      items.push(await createKeyIssue(projectId, input));
+      created += 1;
+    }
+  }
+  return { created, updated, items };
+}
+
+export async function exportKeyIssuesCsv(projectId: string | number) {
+  try {
+    let payload: unknown;
+    try {
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/key-issues/export/?${csvProjectQuery(projectId)}`, {
+          headers: { Accept: 'text/csv, application/json' }
+        })
+      );
+    } catch (error) {
+      if (!isLegacyCsvEndpointFallback(error)) throw error;
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/key-issues/export/`, {
+          headers: { Accept: 'text/csv, application/json' }
+        })
+      );
+    }
+    const csv = csvPayloadText(payload);
+    if (csv) return csv;
+  } catch (error) {
+    if (!isLegacyCsvEndpointFallback(error)) throw error;
+  }
+  const issues = unwrap(
+    await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/key-issues/`)
+  ).map(normalizeKeyIssue);
+  return keyIssuesToCsv(issues);
+}
+
+export async function createCollisionReport(projectId: string | number, payload: CollisionReportInput) {
+  const report = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/collision-reports/`, {
+      method: 'POST',
+      body: JSON.stringify(serializeCollisionReportPayload(payload))
+    })
+  );
+  return normalizeCollisionReport(report);
+}
+
+export async function updateCollisionReport(reportId: string | number, payload: Partial<CollisionReportInput>) {
+  const report = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/collision-reports/${reportId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(serializeCollisionReportPayload(payload))
+    })
+  );
+  return normalizeCollisionReport(report);
+}
+
+export async function deleteCollisionReport(reportId: string | number) {
+  await apiRequest<ApiEnvelope<unknown> | unknown>(`/collision-reports/${reportId}/`, {
+    method: 'DELETE'
+  });
+}
+
+export async function importCollisionReportsCsv(projectId: string | number, file: File): Promise<CsvImportResult<CollisionReport>> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('project', String(projectId));
+  try {
+    let payload: unknown;
+    try {
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/collision-reports/import/?${csvProjectQuery(projectId)}`, {
+          method: 'POST',
+          body: formData
+        })
+      );
+    } catch (error) {
+      if (!isLegacyCsvEndpointFallback(error)) throw error;
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/collision-reports/import/`, {
+          method: 'POST',
+          body: formData
+        })
+      );
+    }
+    const raw = asRecord(payload);
+    const items = asArray(raw.items ?? raw.results ?? raw.created ?? raw.updated ?? payload).map(normalizeCollisionReport);
+    return {
+      created: firstNumber(raw, ['created_count', 'created'], items.length),
+      updated: firstNumber(raw, ['updated_count', 'updated']),
+      items
+    };
+  } catch (error) {
+    if (!isLegacyCsvEndpointFallback(error)) throw error;
+  }
+
+  const items: CollisionReport[] = [];
+  let created = 0;
+  let updated = 0;
+  for (const record of csvRecords(await file.text())) {
+    const reportId = csvField(record, ['id']);
+    const input = collisionInputFromCsv(record);
+    if (!input.title.trim()) continue;
+    if (reportId) {
+      items.push(await updateCollisionReport(reportId, input));
+      updated += 1;
+    } else {
+      items.push(await createCollisionReport(projectId, input));
+      created += 1;
+    }
+  }
+  return { created, updated, items };
+}
+
+export async function exportCollisionReportsCsv(projectId: string | number) {
+  try {
+    let payload: unknown;
+    try {
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/collision-reports/export/?${csvProjectQuery(projectId)}`, {
+          headers: { Accept: 'text/csv, application/json' }
+        })
+      );
+    } catch (error) {
+      if (!isLegacyCsvEndpointFallback(error)) throw error;
+      payload = unwrap(
+        await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/collision-reports/export/`, {
+          headers: { Accept: 'text/csv, application/json' }
+        })
+      );
+    }
+    const csv = csvPayloadText(payload);
+    if (csv) return csv;
+  } catch (error) {
+    if (!isLegacyCsvEndpointFallback(error)) throw error;
+  }
+  const reports = unwrap(
+    await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/collision-reports/`)
+  ).map(normalizeCollisionReport);
+  return collisionReportsToCsv(reports);
 }
 
 export async function createExportTask(projectId: string | number, input: CreateExportInput) {

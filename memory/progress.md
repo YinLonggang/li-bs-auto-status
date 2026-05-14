@@ -160,3 +160,9 @@
 - 后端候选接口只返回带 `idaas_id` 的候选，检查项 `owners` 写入缺少 `idaas_id` 时返回 400。
 - 本轮 IDaaS 责任人和附件一致性返修后验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`cd li_sicar && source scripts/backend-dev-env.sh && .venv/bin/python manage.py test li_bs_auto_status`（28 tests OK）、`makemigrations --check --dry-run`、`manage.py check`、`git diff --check`。
 - 按 dev-environment-bootstrap 技能重启后端和 3005，`GET http://127.0.0.1:8000/api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。Playwright smoke 因当前包未安装 `playwright` 未执行。
+- 重点问题页从卡片只读改为横向表格选行 + 下方新增/编辑表单；表单覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人/确认人、截止、对策、进展、备注、图片 bucket/key。
+- 碰撞一页纸页从多卡片展示改为横向表格选行 + 下方新增/编辑表单；字段覆盖 phase、title、reportDate、status、riskLevel、summary、owner/dueDate 和 content 常用正式字段。
+- 前端 API adapter 新增重点问题与碰撞一页纸 create/update/delete/import/export CSV 方法，保持提交到后端的 snake_case 映射；CSV 导入导出优先走后端专用端点，未提供时用正式 CRUD/List 做前端降级。
+- 只读权限口径保持：页面、筛选和列表可见，新增、保存、删除、导入、导出均按 `canWrite` 禁用。
+- CSV import/export 路径最终对齐后端集合动作：`/key-issues/import|export/?project=<id>` 与 `/collision-reports/import|export/?project=<id>`，旧项目子资源路径仅保留 404/405 fallback。
+- 本轮前端收口验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`；按 dev-environment-bootstrap 重启后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
