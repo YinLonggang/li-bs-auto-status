@@ -102,6 +102,7 @@
 - 保持现有只读权限逻辑：只读用户仍可查看模块，写操作仍由原有 `canWrite` 控制。
 - 首页项目卡阶段轨补齐每阶段检查项完成摘要，展示 `完成数/总数 检查项`；阶段日期改为计划开始/结束双行展示，修复半宽卡片内日期被截断的问题。
 - 首页项目卡阶段轨下线横向滚动：5/6 阶段按卡片宽度等分，6 阶段自动进入紧凑模式，用户打开首页即可看到完整阶段清单。
+- 首页项目卡阶段排期改为按 ISO 周展示，精确日期保留在 tooltip；阶段进度页时间甘特横轴同步改为周刻度，阶段/检查项条仍按日期计算位置。
 
 ### 验证
 
@@ -113,6 +114,7 @@
 - 真实 `/api/li-bs-auto-status/v1/dashboard/projects/` 返回 3 个 dev 项目，覆盖 X04C 5 阶段、X11/X13 6 阶段和原型样例 6 阶段；每个 `phase_progress` 均包含 `completed_check_item_count/check_item_count`。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-full-136.png` 确认首页项目卡日期不截断，且每阶段显示检查项完成简报。
 - Playwright 截图 `/tmp/li-bs-auto-status-home-no-phase-scroll.png` 确认首页项目卡 5/6 阶段均不再出现横向拖动条。
+- Playwright 截图 `/tmp/li-bs-auto-status-home-week-progress.png` 与 `/tmp/li-bs-auto-status-timeline-week-progress.png` 确认首页阶段轨和阶段进度甘特均按周展示。
 
 ### 问题与风险
 

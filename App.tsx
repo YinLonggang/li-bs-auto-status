@@ -167,6 +167,73 @@ const COMPLETE_STATUSES = new Set(['done', 'completed', 'pass', 'na', 'waived', 
 const BLOCKED_STATUSES = new Set(['blocked', 'fail', 'failed', 'critical']);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const dateFromValue = (value?: string | null) => {
+  if (!value) return null;
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const isoWeekOf = (date: Date) => {
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const weekday = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - weekday);
+  const weekYear = target.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(weekYear, 0, 1));
+  const week = Math.ceil((((target.getTime() - yearStart.getTime()) / DAY_MS) + 1) / 7);
+  return { weekYear, week };
+};
+
+const formatWeekInfo = (value?: string | null) => {
+  const date = dateFromValue(value);
+  return date ? isoWeekOf(date) : null;
+};
+
+const formatWeekLabel = (value?: string | null) => {
+  const weekInfo = formatWeekInfo(value);
+  return weekInfo ? `${weekInfo.weekYear} W${`${weekInfo.week}`.padStart(2, '0')}` : '-';
+};
+
+const formatWeekRange = (startDate?: string | null, endDate?: string | null) => {
+  const startWeek = formatWeekInfo(startDate);
+  const endWeek = formatWeekInfo(endDate);
+  const exactStart = formatDate(startDate);
+  const exactEnd = formatDate(endDate);
+  const title = exactStart === '-' && exactEnd === '-' ? '未设置日期' : `${exactStart} 至 ${exactEnd}`;
+
+  if (!startWeek && !endWeek) return { start: '未设置周', title };
+  if (startWeek && endWeek && startWeek.weekYear === endWeek.weekYear && startWeek.week === endWeek.week) {
+    return { start: formatWeekLabel(startDate), title };
+  }
+  if (!startWeek && endWeek) return { start: '开始周未设置', end: `至 ${formatWeekLabel(endDate)}`, title };
+  if (startWeek && !endWeek) return { start: formatWeekLabel(startDate), end: '结束周未设置', title };
+  if (startWeek && endWeek) {
+    const endPrefix = startWeek.weekYear === endWeek.weekYear ? '' : `${endWeek.weekYear} `;
+    return {
+      start: formatWeekLabel(startDate),
+      end: `至 ${endPrefix}W${`${endWeek.week}`.padStart(2, '0')}`,
+      title
+    };
+  }
+  return { start: '未设置周', title };
+};
+
+const formatWeekRangeText = (startDate?: string | null, endDate?: string | null) => {
+  const weekRange = formatWeekRange(startDate, endDate);
+  return weekRange.end ? `${weekRange.start} ${weekRange.end}` : weekRange.start;
+};
+
+const startOfIsoWeekMs = (value: number) => {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  const weekday = date.getDay() || 7;
+  date.setDate(date.getDate() - weekday + 1);
+  return date.getTime();
+};
+
+const formatWeekLabelFromMs = (value: number) => formatWeekLabel(formatLocalDate(new Date(value)));
+
 const dateMs = (value?: string | null) => {
   if (!value) return null;
   const date = new Date(`${value.slice(0, 10)}T00:00:00`);
@@ -1201,9 +1268,7 @@ function ProjectPhaseProgressRail({
           const done = phase.progressPercent >= 100 || isComplete(phase.status) || phase.status === 'completed';
           const blocked = isBlocked(phase.status);
           const active = index === currentIndex && !done;
-          const startDate = formatDate(phase.plannedStartDate);
-          const endDate = formatDate(phase.plannedEndDate);
-          const dateLabel = startDate === '-' && endDate === '-' ? '未设置日期' : `${startDate} 至 ${endDate}`;
+          const weekRange = formatWeekRange(phase.plannedStartDate, phase.plannedEndDate);
           const checkSummary = `${phase.completedCheckItemCount}/${phase.checkItemCount} 检查项`;
           const phaseProgress = phase.checkItemCount > 0
             ? (phase.completedCheckItemCount / phase.checkItemCount) * 100
@@ -1218,15 +1283,9 @@ function ProjectPhaseProgressRail({
               ) : null}
               <span className="project-phase-dot">{done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
               <span className="project-phase-name" title={phase.name}>{phase.name}</span>
-              <span className="project-phase-date" title={dateLabel}>
-                {dateLabel === '未设置日期' ? (
-                  <span>{dateLabel}</span>
-                ) : (
-                  <>
-                    <span>{startDate}</span>
-                    <span>至 {endDate}</span>
-                  </>
-                )}
+              <span className="project-phase-date" title={weekRange.title}>
+                <span>{weekRange.start}</span>
+                {weekRange.end ? <span>{weekRange.end}</span> : null}
               </span>
               <span className="project-phase-checks" title={checkSummary}>{checkSummary}</span>
               <span className="project-phase-progress">
@@ -2256,13 +2315,17 @@ function TimelineView({
   const todayPosition = todayMs === null ? null : ((todayMs - paddedStart) / (totalDays * DAY_MS)) * 100;
   const showToday = todayPosition !== null && todayPosition >= 0 && todayPosition <= 100;
   const moduleById = new Map(modules.map(module => [idOf(module.id), module]));
-  const ticks = Array.from({ length: 5 }, (_, index) => {
-    const value = paddedStart + Math.round(((totalDays - 1) * index) / 4) * DAY_MS;
-    return {
-      left: `${(index / 4) * 100}%`,
-      label: formatDate(new Date(value).toISOString())
-    };
-  });
+  const weekStart = startOfIsoWeekMs(paddedStart);
+  const weekEnd = startOfIsoWeekMs(paddedEnd);
+  const weekTicks = [];
+  for (let value = weekStart; value <= weekEnd; value += 7 * DAY_MS) {
+    const left = ((value - paddedStart) / (totalDays * DAY_MS)) * 100;
+    weekTicks.push({
+      left: `${Math.max(0, Math.min(100, left))}%`,
+      label: formatWeekLabelFromMs(value)
+    });
+  }
+  const ticks = weekTicks.length ? weekTicks : [{ left: '0%', label: formatWeekLabelFromMs(paddedStart) }];
   const rangeStyle = (startDate?: string, endDate?: string) => {
     const start = dateMs(startDate) ?? paddedStart;
     const end = dateMs(endDate) ?? start;
@@ -2289,11 +2352,11 @@ function TimelineView({
         <div>
           <p className="kicker">Time Gantt</p>
           <h2 className="text-xl font-semibold">时间甘特</h2>
-          <p className="text-sm text-ink-muted">阶段和检查项均按计划开始/结束时间计算位置。</p>
+          <p className="text-sm text-ink-muted">阶段和检查项均按计划开始/结束时间计算位置，横轴按周展示。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="chip"><Clock3 className="h-3.5 w-3.5" />当前日期 {today}</span>
-          <span className="chip">{formatDate(new Date(paddedStart).toISOString())} 至 {formatDate(new Date(paddedEnd).toISOString())}</span>
+          <span className="chip">周期 {formatWeekRangeText(formatLocalDate(new Date(paddedStart)), formatLocalDate(new Date(paddedEnd)))}</span>
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 text-xs">
@@ -2373,7 +2436,7 @@ function TimelineView({
                     <StatusPill status={phase.status} />
                   </div>
                   <div className="mt-3 text-xs text-ink-muted">
-                    {formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}
+                    周期：{formatWeekRangeText(phase.plannedStartDate, phase.plannedEndDate)}
                   </div>
                   <div className="mt-2 text-xs text-ink-subtle">{items.length} 个检查项 · {percent(phase.progressPercent)}</div>
                 </div>
@@ -2391,7 +2454,7 @@ function TimelineView({
                   <div
                     className="absolute top-5 h-7 rounded-lg border border-primary/40 bg-primary/20"
                     style={rangeStyle(phase.plannedStartDate, phase.plannedEndDate)}
-                    title={`${phase.name}: ${formatDate(phase.plannedStartDate)} 至 ${formatDate(phase.plannedEndDate)}`}
+                    title={`${phase.name}: ${formatWeekRangeText(phase.plannedStartDate, phase.plannedEndDate)} · ${formatDate(phase.plannedStartDate)} 至 ${formatDate(phase.plannedEndDate)}`}
                   >
                     <div className="h-full rounded-lg bg-primary/50" style={{ width: percent(phase.progressPercent) }} />
                   </div>
@@ -2403,7 +2466,7 @@ function TimelineView({
                         key={item.id}
                         className={`absolute h-4 overflow-hidden rounded-full px-2 text-[11px] font-semibold leading-4 shadow-sm ${itemClass(item)}`}
                         style={{ ...rangeStyle(item.plannedStartDate, item.plannedEndDate), top: 58 + index * 24 }}
-                        title={`${item.title} · ${module?.name ?? '未设置模块'} · ${formatDate(item.plannedStartDate)} 至 ${formatDate(item.plannedEndDate)} · ${overdue ? '逾期' : STATUS_LABEL[item.status] ?? item.status}`}
+                        title={`${item.title} · ${module?.name ?? '未设置模块'} · ${formatWeekRangeText(item.plannedStartDate, item.plannedEndDate)} · ${formatDate(item.plannedStartDate)} 至 ${formatDate(item.plannedEndDate)} · ${overdue ? '逾期' : STATUS_LABEL[item.status] ?? item.status}`}
                       >
                         <span className="block truncate">
                           {overdue ? '逾期 · ' : ''}{module?.name ?? '模块'} / {item.title}
