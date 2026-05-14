@@ -100,12 +100,18 @@
 - 项目卡新增跳转到阶段进度、检查项、重点问题、碰撞一页纸和配置中心的按钮，跳转前设置全局当前项目。
 - 阶段进度、检查项、重点问题、碰撞一页纸和报告导出模块新增当前项目筛选条，模块切换默认沿用全局当前项目。
 - 保持现有只读权限逻辑：只读用户仍可查看模块，写操作仍由原有 `canWrite` 控制。
+- 首页项目卡阶段轨补齐每阶段检查项完成摘要，展示 `完成数/总数 检查项`；阶段日期改为计划开始/结束双行展示，修复半宽卡片内日期被截断的问题。
 
 ### 验证
 
 - `npm run type-check` 通过。
 - `npm run build` 通过。
+- `npm run permission-regression` 通过，三态 cookie 缺失场景按脚本规则 SKIP，失败数 0。
+- `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+- `GET http://127.0.0.1:8000/api/auth/csrf/` 返回 HTTP 200。
+- 真实 `/api/li-bs-auto-status/v1/dashboard/projects/` 返回 3 个 dev 项目，覆盖 X04C 5 阶段、X11/X13 6 阶段和原型样例 6 阶段；每个 `phase_progress` 均包含 `completed_check_item_count/check_item_count`。
+- Playwright 截图 `/tmp/li-bs-auto-status-home-full-136.png` 确认首页项目卡日期不截断，且每阶段显示检查项完成简报。
 
 ### 问题与风险
 
-- 当前只做前端适配；`phase_progress` 字段需要后端按 additive 契约补齐后才能显示完整阶段名称/日期。
+- 旧响应缺少 `phase_progress` 时仍走摘要字段暂缺降级展示；dev 正式数据已由真实后端返回阶段日期和检查项计数。

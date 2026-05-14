@@ -563,7 +563,10 @@ const normalizeProjectPhaseProgress = (input: unknown): ProjectPhaseProgress => 
     plannedStartDate: firstString(raw, ['planned_start', 'planned_start_date', 'plannedStartDate']),
     plannedEndDate: firstString(raw, ['planned_end', 'planned_end_date', 'plannedEndDate']),
     status: firstString(raw, ['status'], 'not_started'),
-    progressPercent: firstNumber(raw, ['progress_percent', 'completion_rate', 'progressPercent']) || firstNumber(metadata, ['progressPercent', 'progress_percent'])
+    progressPercent: firstNumber(raw, ['progress_percent', 'completion_rate', 'progressPercent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
+    checkItemCount: firstNumber(raw, ['check_item_count', 'checkItemCount']),
+    completedCheckItemCount: firstNumber(raw, ['completed_check_item_count', 'completedCheckItemCount']),
+    isOverdue: asBoolean(raw.is_overdue, asBoolean(raw.isOverdue, false))
   };
 };
 

@@ -321,6 +321,9 @@ export type ProjectPhaseProgress = {
   plannedEndDate?: string;
   status: PhaseStatus;
   progressPercent: number;
+  checkItemCount: number;
+  completedCheckItemCount: number;
+  isOverdue?: boolean;
 };
 
 export type ProjectTimeline = {

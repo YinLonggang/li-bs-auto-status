@@ -1156,9 +1156,10 @@ function ProjectPhaseProgressRail({
     Math.max(0, Math.floor((stat.completionRate / 100) * fallbackCount))
   );
   const railCount = sorted.length || fallbackCount;
+  const phaseColumnWidth = 136;
   const railStyle = {
-    minWidth: `${Math.max(railCount, 1) * 132}px`,
-    gridTemplateColumns: `repeat(${Math.max(railCount, 1)}, minmax(132px, 1fr))`
+    minWidth: `${Math.max(railCount, 1) * phaseColumnWidth}px`,
+    gridTemplateColumns: `repeat(${Math.max(railCount, 1)}, minmax(${phaseColumnWidth}px, 1fr))`
   };
 
   if (!sorted.length) {
@@ -1178,6 +1179,7 @@ function ProjectPhaseProgressRail({
                 <span className="project-phase-dot">{done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
                 <span className="project-phase-name">{label}</span>
                 <span className="project-phase-date">{stat.currentPhaseName && active ? '当前阶段' : '摘要字段暂缺'}</span>
+                <span className="project-phase-checks">检查项摘要暂缺</span>
                 <span className="project-phase-progress">
                   <span style={{ width: done ? '100%' : active ? percent(stat.completionRate) : '0%' }} />
                 </span>
@@ -1200,19 +1202,36 @@ function ProjectPhaseProgressRail({
           const done = phase.progressPercent >= 100 || isComplete(phase.status) || phase.status === 'completed';
           const blocked = isBlocked(phase.status);
           const active = index === currentIndex && !done;
+          const startDate = formatDate(phase.plannedStartDate);
+          const endDate = formatDate(phase.plannedEndDate);
+          const dateLabel = startDate === '-' && endDate === '-' ? '未设置日期' : `${startDate} 至 ${endDate}`;
+          const checkSummary = `${phase.completedCheckItemCount}/${phase.checkItemCount} 检查项`;
+          const phaseProgress = phase.checkItemCount > 0
+            ? (phase.completedCheckItemCount / phase.checkItemCount) * 100
+            : phase.progressPercent;
           return (
             <div
               key={phase.key || `${phase.name}-${index}`}
-              className={`project-phase-step ${done ? 'is-done' : ''} ${active ? 'is-active' : ''} ${blocked ? 'is-blocked' : ''}`}
+              className={`project-phase-step ${done ? 'is-done' : ''} ${active ? 'is-active' : ''} ${blocked ? 'is-blocked' : ''} ${phase.isOverdue ? 'is-overdue' : ''}`}
             >
               {index < sorted.length - 1 ? (
                 <span className={`project-phase-line ${done || index < currentIndex ? 'is-complete' : ''}`} />
               ) : null}
               <span className="project-phase-dot">{done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
               <span className="project-phase-name" title={phase.name}>{phase.name}</span>
-              <span className="project-phase-date">{formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</span>
+              <span className="project-phase-date" title={dateLabel}>
+                {dateLabel === '未设置日期' ? (
+                  <span>{dateLabel}</span>
+                ) : (
+                  <>
+                    <span>{startDate}</span>
+                    <span>至 {endDate}</span>
+                  </>
+                )}
+              </span>
+              <span className="project-phase-checks" title={checkSummary}>{checkSummary}</span>
               <span className="project-phase-progress">
-                <span style={{ width: percent(phase.progressPercent) }} />
+                <span style={{ width: percent(phaseProgress) }} />
               </span>
             </div>
           );
