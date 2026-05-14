@@ -101,3 +101,35 @@ export async function requestWithPrefix<T>(
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   return requestWithPrefix<T>(API_PREFIX, path, init);
 }
+
+export async function requestBlobWithPrefix(
+  prefix: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<{ blob: Blob; fileName?: string }> {
+  const { headers, method = 'GET', body, ...rest } = init;
+  const response = await fetch(`${API_BASE_URL}${prefix}${path}`, {
+    credentials: 'include',
+    method,
+    headers: buildHeaders(headers, method, body),
+    body,
+    ...rest
+  });
+  const requestId = response.headers.get('x-request-id') || response.headers.get('X-Request-Id');
+
+  if (!response.ok) {
+    const payload = await parseBody(response);
+    const fallback = response.status === 403 ? '当前账号没有写权限。' : `请求失败：${response.status}`;
+    throw new ApiError(messageFrom(payload, fallback), response.status, payload, requestId);
+  }
+
+  const disposition = response.headers.get('content-disposition') || '';
+  const fileNameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+  const rawFileName = fileNameMatch?.[1] || fileNameMatch?.[2] || '';
+  const fileName = rawFileName ? decodeURIComponent(rawFileName) : undefined;
+  return { blob: await response.blob(), fileName };
+}
+
+export async function apiBlobRequest(path: string, init: RequestInit = {}) {
+  return requestBlobWithPrefix(API_PREFIX, path, init);
+}

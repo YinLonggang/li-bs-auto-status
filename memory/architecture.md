@@ -117,3 +117,10 @@
 - 碰撞一页纸维护字段覆盖 phase、title、reportDate、status、riskLevel、summary、owner、dueDate 以及 content 常用正式字段，包括问题定义、零件、车型、故障频次、责任区域、问题描述、诊断维修、原因分析、措施、支持、影响、遏制、预防、验证和签核槽位。
 - 前端 API adapter 新增重点问题和碰撞一页纸 create/update/delete/import/export 方法：CRUD 走现有项目子资源与顶层资源路由；CSV import/export 优先调用后端专用端点，后端未提供时降级为前端 CSV 解析后逐条调用正式 CRUD 或从正式列表生成 CSV。
 - 权限口径不变：只读用户保留页面、筛选和列表查看能力，新增、编辑、删除、导入和导出 CSV 控件均按 `canWrite` 禁用。
+
+## 2026-05-14 审计历史与一页纸 Excel
+
+- `AuditHistoryPanel` 从检查项专用扩展为对象通用面板；重点问题和碰撞一页纸编辑区均通过真实 `/audit-logs/?object_type=<type>&object_id=<id>` 展示历史动作、操作者、来源和 request id。
+- 重点问题审计查询固定使用 `object_type=KeyIssue`，碰撞一页纸审计查询固定使用 `object_type=CollisionReport`；前端只展示后端审计结果，不提交或伪造操作者。
+- 碰撞一页纸编辑区新增单份 `导出 Excel` 操作，调用 `/collision-reports/{id}/export-excel/` 下载后端生成的 `xlsx` Blob；集合 CSV 导出仍保留项目级批量导出。
+- 前端请求层新增 Blob 下载通道，复用既有 IDaaS session、CSRF/错误处理口径，避免把二进制响应交给 JSON 解析。

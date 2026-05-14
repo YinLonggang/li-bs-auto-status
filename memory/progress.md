@@ -166,3 +166,11 @@
 - 只读权限口径保持：页面、筛选和列表可见，新增、保存、删除、导入、导出均按 `canWrite` 禁用。
 - CSV import/export 路径最终对齐后端集合动作：`/key-issues/import|export/?project=<id>` 与 `/collision-reports/import|export/?project=<id>`，旧项目子资源路径仅保留 404/405 fallback。
 - 本轮前端收口验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`；按 dev-environment-bootstrap 重启后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
+### 审计历史与一页纸 Excel 导出
+
+- 重点问题编辑区新增审计历史面板，按所选问题调用 `/audit-logs/?object_type=KeyIssue&object_id=<id>`；新增态显示保存后开始记录审计。
+- 碰撞一页纸编辑区新增审计历史面板，按所选报告调用 `/audit-logs/?object_type=CollisionReport&object_id=<id>`；导出 Excel 后会刷新审计列表。
+- 碰撞一页纸编辑区新增单份 `导出 Excel` 按钮，调用后端 `/collision-reports/{id}/export-excel/` 下载 `xlsx` Blob；项目级 CSV 导入/导出能力保持不变。
+- 前端请求层新增 Blob 下载 API，避免 `xlsx` 响应被 JSON/text 解析。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`（三态 cookie 缺失场景按脚本规则 SKIP，失败数 0）；后端 `python manage.py test li_bs_auto_status` 通过，34 tests OK；`manage.py check` 通过，`makemigrations --check --dry-run` 输出 `No changes detected`；按 dev-environment-bootstrap 重启后端和 3005，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。

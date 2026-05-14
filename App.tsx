@@ -42,11 +42,14 @@ import {
   deleteCheckItem,
   deleteKeyIssue,
   deleteProjectPhase,
+  exportCollisionReportExcel,
   exportCollisionReportsCsv,
   exportKeyIssuesCsv,
   fetchAttachmentDownloadLink,
   fetchCheckItemAuditLogs,
+  fetchCollisionReportAuditLogs,
   fetchExportDownloadLink,
+  fetchKeyIssueAuditLogs,
   fetchOwnerCandidates,
   fetchWorkspaceData,
   importCollisionReportsCsv,
@@ -165,6 +168,18 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'check_item.create': '创建检查项',
   'check_item.update': '更新检查项',
   'check_item.status_change': '状态变更',
+  'key_issue.create': '创建重点问题',
+  'key_issue.update': '更新重点问题',
+  'key_issue.delete': '删除重点问题',
+  'key_issue.import_create': '导入新增重点问题',
+  'key_issue.import_update': '导入更新重点问题',
+  'collision_report.create': '创建一页纸',
+  'collision_report.update': '更新一页纸',
+  'collision_report.delete': '删除一页纸',
+  'collision_report.import_create': '导入新增一页纸',
+  'collision_report.import_update': '导入更新一页纸',
+  'collision_report.export_excel': '导出一页纸 Excel',
+  'collision_report.submit': '提交一页纸',
   CheckItem: '检查项'
 };
 
@@ -198,6 +213,10 @@ const formatFileSize = (value?: number) => {
 
 const downloadTextFile = (fileName: string, content: string, type = 'text/csv;charset=utf-8') => {
   const blob = new Blob([content], { type });
+  downloadBlobFile(fileName, blob);
+};
+
+const downloadBlobFile = (fileName: string, blob: Blob) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -421,12 +440,14 @@ function AuditHistoryPanel({
   logs,
   loading,
   error,
-  onRefresh
+  onRefresh,
+  emptyMessage = '当前对象暂无审计记录。'
 }: {
   logs: AuditLog[];
   loading: boolean;
   error: string;
   onRefresh: () => void;
+  emptyMessage?: string;
 }) {
   return (
     <div className="rounded-lg border border-outline bg-surface p-3">
@@ -441,7 +462,7 @@ function AuditHistoryPanel({
         </button>
       </div>
       {error ? <div className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
-      {!loading && !logs.length && !error ? <div className="mt-3"><EmptyState message="当前检查项暂无审计记录。" /></div> : null}
+      {!loading && !logs.length && !error ? <div className="mt-3"><EmptyState message={emptyMessage} /></div> : null}
       {logs.length ? (
         <div className="table-shell mt-3">
           <table className="data-table">
@@ -4014,7 +4035,8 @@ function IssuesCrudView({
   onUpdateIssue,
   onDeleteIssue,
   onImportCsv,
-  onExportCsv
+  onExportCsv,
+  onFetchAuditLogs
 }: {
   project: Project | null;
   issues: KeyIssue[];
@@ -4027,12 +4049,16 @@ function IssuesCrudView({
   onDeleteIssue: (issue: KeyIssue) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
+  onFetchAuditLogs: (issue: KeyIssue) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [selectedIssueId, setSelectedIssueId] = useState('new');
   const [draft, setDraft] = useState<KeyIssueDraft>(() => emptyKeyIssueDraft(phases));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
   const selectedIssue = issues.find(issue => idOf(issue.id) === selectedIssueId) ?? null;
   const selectedIsNew = selectedIssueId === 'new' || !selectedIssue;
   const statusOptions = statusOptionValues(issues.flatMap(issue => [issue.status, issue.currentProgress ?? '']));
@@ -4057,12 +4083,44 @@ function IssuesCrudView({
     setDraft(keyIssueDraftFromIssue(selectedIssue, phases));
   }, [selectedIssue, phases]);
 
+  const loadAuditLogs = async (issue: KeyIssue | null = selectedIssue) => {
+    if (!issue) {
+      setAuditLogs([]);
+      setAuditError('');
+      setAuditLoading(false);
+      return;
+    }
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const logs = await onFetchAuditLogs(issue);
+      setAuditLogs(logs);
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : '审计历史加载失败。');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedIsNew || !selectedIssue) {
+      setAuditLogs([]);
+      setAuditError('');
+      setAuditLoading(false);
+      return;
+    }
+    void loadAuditLogs(selectedIssue);
+  }, [selectedIssue?.id, selectedIsNew]);
+
   const runMutation = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
     setMessage('');
     try {
       await action();
       setMessage(successMessage);
+      if (selectedIssue && !selectedIsNew) {
+        await loadAuditLogs(selectedIssue);
+      }
     } finally {
       setSaving(false);
     }
@@ -4229,6 +4287,15 @@ function IssuesCrudView({
           <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
         </div>
       </div>
+      <div className="mt-5">
+        <AuditHistoryPanel
+          logs={auditLogs}
+          loading={auditLoading}
+          error={auditError}
+          emptyMessage={selectedIsNew ? '保存重点问题后开始记录审计历史。' : '当前重点问题暂无审计记录。'}
+          onRefresh={() => void loadAuditLogs()}
+        />
+      </div>
     </section>
   );
 }
@@ -4242,7 +4309,9 @@ function CollisionCrudView({
   onUpdateReport,
   onDeleteReport,
   onImportCsv,
-  onExportCsv
+  onExportCsv,
+  onExportExcel,
+  onFetchAuditLogs
 }: {
   project: Project | null;
   reports: CollisionReport[];
@@ -4253,12 +4322,17 @@ function CollisionCrudView({
   onDeleteReport: (report: CollisionReport) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
+  onExportExcel: (report: CollisionReport) => Promise<void>;
+  onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [selectedReportId, setSelectedReportId] = useState('new');
   const [draft, setDraft] = useState<CollisionDraft>(() => emptyCollisionDraft(phases));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
   const selectedReport = reports.find(report => idOf(report.id) === selectedReportId) ?? null;
   const selectedIsNew = selectedReportId === 'new' || !selectedReport;
   const statusOptions = statusOptionValues(reports.map(report => report.status));
@@ -4282,12 +4356,44 @@ function CollisionCrudView({
     setDraft(collisionDraftFromReport(selectedReport, phases));
   }, [selectedReport, phases]);
 
+  const loadAuditLogs = async (report: CollisionReport | null = selectedReport) => {
+    if (!report) {
+      setAuditLogs([]);
+      setAuditError('');
+      setAuditLoading(false);
+      return;
+    }
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const logs = await onFetchAuditLogs(report);
+      setAuditLogs(logs);
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : '审计历史加载失败。');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedIsNew || !selectedReport) {
+      setAuditLogs([]);
+      setAuditError('');
+      setAuditLoading(false);
+      return;
+    }
+    void loadAuditLogs(selectedReport);
+  }, [selectedReport?.id, selectedIsNew]);
+
   const runMutation = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
     setMessage('');
     try {
       await action();
       setMessage(successMessage);
+      if (selectedReport && !selectedIsNew) {
+        await loadAuditLogs(selectedReport);
+      }
     } finally {
       setSaving(false);
     }
@@ -4381,6 +4487,15 @@ function CollisionCrudView({
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div><p className="kicker">{selectedIsNew ? 'Create' : 'Edit'}</p><h3 className="text-lg font-semibold">{selectedIsNew ? '新增碰撞一页纸' : '编辑碰撞一页纸'}</h3></div>
           <div className="flex flex-wrap gap-2">
+            <button
+              className="btn btn-ghost btn--sm"
+              type="button"
+              disabled={!canWrite || saving || selectedIsNew || !selectedReport}
+              onClick={() => selectedReport && void runMutation(() => onExportExcel(selectedReport), '碰撞一页纸 Excel 已导出。')}
+            >
+              <FileDown className="h-4 w-4" />
+              导出 Excel
+            </button>
             <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || saving || !project || !draft.title.trim()} onClick={() => void runMutation(() => selectedReport && !selectedIsNew ? onUpdateReport(selectedReport, draft) : onCreateReport(draft), selectedReport && !selectedIsNew ? '碰撞一页纸已保存。' : '碰撞一页纸已新增。')}><Save className="h-4 w-4" />保存</button>
             <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving || selectedIsNew || !selectedReport} onClick={() => {
               if (selectedReport && window.confirm(`确认删除碰撞一页纸「${selectedReport.title}」？`)) {
@@ -4416,6 +4531,15 @@ function CollisionCrudView({
           <label className="md:col-span-2"><span className="field-label">签核槽位</span><input className="input" value={draft.approvalSignoff} disabled={!canWrite} onChange={event => setDraft({ ...draft, approvalSignoff: event.target.value })} /></label>
           <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
         </div>
+      </div>
+      <div className="mt-5">
+        <AuditHistoryPanel
+          logs={auditLogs}
+          loading={auditLoading}
+          error={auditError}
+          emptyMessage={selectedIsNew ? '保存碰撞一页纸后开始记录审计历史。' : '当前碰撞一页纸暂无审计记录。'}
+          onRefresh={() => void loadAuditLogs()}
+        />
       </div>
     </section>
   );
@@ -6243,6 +6367,18 @@ export default function App() {
     }
   };
 
+  const handleExportCollisionReportExcel = async (report: CollisionReport) => {
+    if (!canWrite) return;
+    try {
+      const result = await exportCollisionReportExcel(report.id);
+      const fallbackName = `${(report.title || `collision-report-${report.id}`).replace(/[\\/:*?"<>|]/g, '_')}.xlsx`;
+      downloadBlobFile(result.fileName || fallbackName, result.blob);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸 Excel 导出失败'));
+      throw err;
+    }
+  };
+
   const handleCreateExport = async (report: ReportDefinition) => {
     if (!canWrite || !workspace.selectedProject) return;
     try {
@@ -6376,6 +6512,7 @@ export default function App() {
           onDeleteIssue={handleDeleteKeyIssue}
           onImportCsv={handleImportKeyIssues}
           onExportCsv={handleExportKeyIssues}
+          onFetchAuditLogs={issue => fetchKeyIssueAuditLogs(issue.id)}
         />
       );
     }
@@ -6391,6 +6528,8 @@ export default function App() {
           onDeleteReport={handleDeleteCollisionReport}
           onImportCsv={handleImportCollisionReports}
           onExportCsv={handleExportCollisionReports}
+          onExportExcel={handleExportCollisionReportExcel}
+          onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
         />
       );
     }

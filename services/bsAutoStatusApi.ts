@@ -1,5 +1,5 @@
 import { BASE_CONFIG_PREFIX } from '../config';
-import { ApiError, apiRequest, requestWithPrefix } from './http';
+import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http';
 import type {
   ApiEnvelope,
   Attachment,
@@ -1515,9 +1515,21 @@ export async function updateCheckItemStatus(
 }
 
 export async function fetchCheckItemAuditLogs(checkItemId: string | number) {
+  return fetchObjectAuditLogs('CheckItem', checkItemId);
+}
+
+export async function fetchKeyIssueAuditLogs(issueId: string | number) {
+  return fetchObjectAuditLogs('KeyIssue', issueId);
+}
+
+export async function fetchCollisionReportAuditLogs(reportId: string | number) {
+  return fetchObjectAuditLogs('CollisionReport', reportId);
+}
+
+async function fetchObjectAuditLogs(objectType: string, objectId: string | number) {
   const query = new URLSearchParams({
-    object_type: 'CheckItem',
-    object_id: String(checkItemId),
+    object_type: objectType,
+    object_id: String(objectId),
     page_size: '100'
   });
   const payload = await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/audit-logs/?${query.toString()}`);
@@ -1863,6 +1875,14 @@ export async function exportCollisionReportsCsv(projectId: string | number) {
     await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/collision-reports/`)
   ).map(normalizeCollisionReport);
   return collisionReportsToCsv(reports);
+}
+
+export async function exportCollisionReportExcel(reportId: string | number) {
+  return apiBlobRequest(`/collision-reports/${reportId}/export-excel/`, {
+    headers: {
+      Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    }
+  });
 }
 
 export async function createExportTask(projectId: string | number, input: CreateExportInput) {
