@@ -15,7 +15,7 @@
 - UI 复现原型核心体验：阶段轨道、统计卡、检查模块泳道、详情面板、重点问题表、碰撞一页纸、签核状态、附件入口。
 - KeyIssue、Attachment、ExportJob 已兼容 bucket/object key 字段。
 - 审查修复：导出任务不再直接渲染 `content_url` /本地产物 URL，点击下载时调用 `/export-jobs/{id}/download-link/`，403 作为页面内无权限提示处理。
-- 审查修复：`/idaas-candidates/` 负责人候选兼容 snake_case 后端返回与候选集合包装，仍保留负责人手工输入。
+- 审查修复：`/idaas-candidates/` 负责人候选兼容 snake_case 后端返回与候选集合包装；检查项责任人后续收口为仅支持 IDaaS 候选。
 - 新增“基础配置”入口，支持维护项目工厂/车间/可选产线、名称、编号、状态、负责人、计划时间和说明。
 - 新增项目阶段配置 UI，保留默认六阶段稳定 code key，可编辑阶段名称、计划、目标、排序、状态和启用状态。
 - 新增阶段检查项配置 UI，保留默认 7 模块 / 37 项体验，可编辑名称、模块、标签、计划、负责人、状态和启用状态。
@@ -124,10 +124,10 @@
 
 - 前端类型新增 `CheckItemOwner`，`CheckItem` 增加 `owners` 数组，同时保留旧 `ownerName` / `ownerIdaasId` 快照字段。
 - API adapter 已兼容后端 `owners` 数组；创建/更新检查项时提交 `owners`，并将第一位责任人同步写入 `owner_name` / `owner_idaas_id` 及 metadata 快照。
-- 集成硬化：前端 owner normalize/serialize 保留 `manual_name`、`role`、`sort_order`、`is_primary`、`metadata` 等后端字段；增删责任人保存时按当前列表顺序生成 `sort_order`，候选人新增默认 `role=owner`，手工输入继续写入 `displayName`。
+- 集成硬化：前端 owner normalize/serialize 保留 `role`、`sort_order`、`is_primary`、`metadata` 等后端字段；增删责任人保存时按当前列表顺序生成 `sort_order`，候选人新增默认 `role=owner`，`manual_name` 运行期置空。
 - OwnerListEditor 移除按钮改用 lucide `X` 图标，避免裸文本 `x`。
 - 后端 `normalize_check_item_owner_payloads` 对非法 `sort_order` 按输入顺序兜底；未显式主责任人时按最终排序后的第一条设为主责任人，并同步 API README 契约说明。
-- 检查项台账页和配置中心检查项表/新增表单支持候选人添加、手工输入添加和移除责任人，只读态禁用添加、移除、保存和新增。
+- 检查项台账页和配置中心检查项表/新增表单支持 IDaaS 候选人添加和移除责任人，只读态禁用添加、移除、保存和新增。
 - 检查项台账、配置中心检查项和时间甘特筛选已改为命中所有责任人的姓名、IDaaS ID、邮箱和部门。
 
 ### 检查项多责任人验证
@@ -155,3 +155,8 @@
 - 所选检查项面板新增附件上传/下载：上传复用后端 `/attachments/upload/`，下载复用 `/attachments/{id}/download-link/`，只读态禁用上传和下载按钮。
 - HTTP 请求层支持 multipart `FormData`，上传时不再自动设置 JSON `Content-Type`。
 - 附件入口补强后重新执行 `npm run type-check`、`npm run build` 通过。
+- 检查项责任人添加入口改为 IDaaS 搜索：`OwnerListEditor` 调用 `/idaas-candidates/?q=...` 动态搜索候选，去掉手工输入责任人；新增通用 `UserAvatar` 用于责任人 chip 和候选列表。
+- 阶段进度甘特选中检查项面板补齐负责人保存能力，和检查项台账/配置中心共用同一责任人编辑器；检查项台账附件列改为同源上传/下载组件。
+- 后端候选接口只返回带 `idaas_id` 的候选，检查项 `owners` 写入缺少 `idaas_id` 时返回 400。
+- 本轮 IDaaS 责任人和附件一致性返修后验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`cd li_sicar && source scripts/backend-dev-env.sh && .venv/bin/python manage.py test li_bs_auto_status`（28 tests OK）、`makemigrations --check --dry-run`、`manage.py check`、`git diff --check`。
+- 按 dev-environment-bootstrap 技能重启后端和 3005，`GET http://127.0.0.1:8000/api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。Playwright smoke 因当前包未安装 `playwright` 未执行。

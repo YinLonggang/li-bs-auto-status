@@ -85,8 +85,8 @@ const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
     idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']),
     email: firstString(raw, ['email']),
     department: firstString(raw, ['department', 'department_name', 'org_name']),
-    manualName,
-    manual_name: manualName,
+    manualName: '',
+    manual_name: '',
     role: firstString(raw, ['role']),
     sortOrder: Number.isFinite(sortOrder) ? sortOrder : undefined,
     sort_order: Number.isFinite(sortOrder) ? sortOrder : undefined,
@@ -100,26 +100,26 @@ const normalizeCheckItemOwners = (input: unknown, fallbackName = '', fallbackIda
   const seen = new Set<string>();
   const owners = asArray(input)
     .map(normalizeCheckItemOwner)
-    .filter(owner => owner.displayName || owner.idaasId || owner.manualName || owner.manual_name)
+    .filter(owner => owner.idaasId)
     .filter(owner => {
-      const key = `${owner.idaasId || ''}|${owner.displayName || owner.manualName || owner.manual_name}`;
+      const key = owner.idaasId || '';
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
   if (owners.length) return owners;
-  return fallbackName || fallbackIdaasId
-    ? [{ displayName: fallbackName || fallbackIdaasId, idaasId: fallbackIdaasId || undefined }]
+  return fallbackIdaasId
+    ? [{ displayName: fallbackName || fallbackIdaasId, idaasId: fallbackIdaasId }]
     : [];
 };
 
 const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
   (owners ?? [])
     .map((owner, index) => ({
-      display_name: (owner.displayName || '').trim(),
-      idaas_id: owner.idaasId || undefined,
+      display_name: (owner.displayName || owner.idaasId || '').trim(),
+      idaas_id: owner.idaasId?.trim() || undefined,
       email: owner.email || undefined,
-      manual_name: owner.manualName || owner.manual_name || undefined,
+      manual_name: undefined,
       role: owner.role || undefined,
       sort_order: index,
       is_primary: owner.isPrimary ?? owner.is_primary ?? undefined,
@@ -128,7 +128,7 @@ const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
         ...(owner.department ? { department: owner.department } : {})
       }
     }))
-    .filter(owner => owner.display_name || owner.idaas_id || owner.manual_name);
+    .filter(owner => owner.idaas_id);
 
 const firstString = (record: RawRecord, keys: string[], fallback = '') => {
   for (const key of keys) {
@@ -420,8 +420,10 @@ const normalizeChecklistTemplate = (input: unknown): ChecklistTemplate => {
 const normalizeCheckItem = (input: unknown): CheckItem => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
-  const ownerName = firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置');
   const ownerIdaasId = firstString(raw, ['ownerIdaasId', 'owner_idaas_id']);
+  const ownerName = ownerIdaasId
+    ? firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置')
+    : firstString(raw, ['ownerName', 'owner_display_name'], '未设置');
   const owners = normalizeCheckItemOwners(raw.owners, ownerName === '未设置' ? '' : ownerName, ownerIdaasId);
   return {
     id: firstId(raw, ['id']),
@@ -433,8 +435,8 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
     acceptanceCriteria: firstString(raw, ['acceptanceCriteria', 'acceptance_criteria']) || firstString(metadata, ['acceptanceCriteria', 'acceptance_criteria']),
     tags: asStringArray(raw.tags).length ? asStringArray(raw.tags) : asStringArray(metadata.tags),
     ownerName: ownerName === '未设置'
-      ? owners[0]?.displayName || owners[0]?.manualName || owners[0]?.manual_name || '未设置'
-      : ownerName || owners[0]?.displayName || owners[0]?.manualName || owners[0]?.manual_name || '未设置',
+      ? owners[0]?.displayName || '未设置'
+      : ownerName || owners[0]?.displayName || '未设置',
     ownerIdaasId: ownerIdaasId || owners[0]?.idaasId,
     owners,
     plannedStartDate: firstString(raw, ['plannedStartDate', 'planned_start', 'planned_start_date']) || firstString(metadata, ['plannedStartDate', 'planned_start_date']),
@@ -590,9 +592,11 @@ const normalizeExportTask = (input: unknown): ExportTask => {
 
 const normalizeOwnerCandidate = (input: unknown): OwnerCandidate => {
   const raw = asRecord(input);
+  const idaasId = firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']);
+  const displayName = firstString(raw, ['displayName', 'display_name', 'name', 'username'], idaasId);
   return {
-    idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']),
-    displayName: firstString(raw, ['displayName', 'display_name', 'name', 'username']),
+    idaasId,
+    displayName,
     email: firstString(raw, ['email']),
     department: firstString(raw, ['department', 'department_name', 'org_name'])
   };
@@ -979,8 +983,11 @@ export async function updateProject(projectId: string | number, input: UpdatePro
   return normalizeProject(project);
 }
 
-export async function fetchOwnerCandidates(query = '') {
-  const search = query ? `?q=${encodeURIComponent(query)}` : '';
+export async function fetchOwnerCandidates(query = '', limit = 50) {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('q', query.trim());
+  params.set('limit', String(limit));
+  const search = `?${params.toString()}`;
   try {
     const payload = unwrap(
       await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/idaas-candidates/${search}`)
@@ -989,7 +996,7 @@ export async function fetchOwnerCandidates(query = '') {
     const candidates = Array.isArray(payload)
       ? payload
       : asArray(record.candidates ?? record.results ?? record.items);
-    return candidates.map(normalizeOwnerCandidate).filter(candidate => candidate.idaasId || candidate.displayName);
+    return candidates.map(normalizeOwnerCandidate).filter(candidate => candidate.idaasId);
   } catch (error) {
     if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
       return [];
@@ -1204,8 +1211,8 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
         owners: payload.owners === undefined ? undefined : owners,
-        owner_name: primaryOwner?.display_name ?? payload.ownerName,
-        owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId,
+        owner_name: primaryOwner?.display_name,
+        owner_idaas_id: primaryOwner?.idaas_id,
         status: payload.status,
         is_enabled: payload.isActive,
         progress_percent: payload.progressPercent,
@@ -1214,8 +1221,8 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
           planned_end_date: optionalDate(payload.plannedEndDate),
-          owner_name: primaryOwner?.display_name ?? payload.ownerName,
-          owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId
+          owner_name: primaryOwner?.display_name,
+          owner_idaas_id: primaryOwner?.idaas_id
         }
       })
     })
@@ -1238,8 +1245,8 @@ export async function createCheckItem(projectId: string | number, payload: Creat
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
         owners,
-        owner_name: primaryOwner?.display_name ?? payload.ownerName,
-        owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId,
+        owner_name: primaryOwner?.display_name,
+        owner_idaas_id: primaryOwner?.idaas_id,
         status: payload.status ?? 'pending',
         is_enabled: payload.isActive ?? true,
         progress_percent: payload.progressPercent,
@@ -1248,8 +1255,8 @@ export async function createCheckItem(projectId: string | number, payload: Creat
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
           planned_end_date: optionalDate(payload.plannedEndDate),
-          owner_name: primaryOwner?.display_name ?? payload.ownerName,
-          owner_idaas_id: primaryOwner?.idaas_id ?? payload.ownerIdaasId
+          owner_name: primaryOwner?.display_name,
+          owner_idaas_id: primaryOwner?.idaas_id
         }
       })
     })

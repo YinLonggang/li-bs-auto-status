@@ -8,7 +8,7 @@
 - 基础数据级联读取 `/api/v1/base/factories/`、`/api/v1/base/workshops/`、`/api/v1/base/lines/`，后端不可用时用项目快照兜底，避免界面空白。
 - dev 展示数据直接来自真实后端项目 API；后端默认配置只保留阶段模板、检查模块和检查项模板，不再创建原型样例项目。KeyIssue 重点问题表字段在后端已是正式列，前端类型直接兼容这些字段。
 - 导出任务列表只展示状态、文件名、文件大小、内容类型和时间等安全元信息；下载统一通过管理员动作 `/api/li-bs-auto-status/v1/export-jobs/{id}/download-link/` 获取短链，禁止直接把 `content_url`、bucket/object key 或本地产物地址渲染为链接。
-- 负责人候选接口保持 `/api/li-bs-auto-status/v1/idaas-candidates/`，前端 adapter 接受 snake_case 候选字段和候选数组包装；候选不可用时回退为空列表，负责人字段仍可手工输入。
+- 负责人候选接口保持 `/api/li-bs-auto-status/v1/idaas-candidates/`，前端 adapter 接受 snake_case 候选字段和候选数组包装；检查项责任人只允许从带 `idaasId/idaas_id` 的候选人中选择，不再提供手工责任人入口。
 
 ## 2026-05-13 基础配置与时间甘特
 
@@ -88,9 +88,9 @@
 
 - `CheckItem` 新增 `owners: CheckItemOwner[]`，继续保留 `ownerName` / `ownerIdaasId` 作为主责任人快照兼容字段。
 - 检查项 API adapter 接收后端 `owners` 数组，缺省时从旧快照字段降级生成单责任人；创建和更新检查项时提交 `owners` 数组，并把数组第一位同步到 `owner_name` / `owner_idaas_id` 与 `metadata` 快照。
-- `CheckItemOwner` 前端模型和 adapter 保留后端多责任人扩展字段：`manualName/manual_name`、`role`、`sortOrder/sort_order`、`isPrimary/is_primary`、`metadata`；保存时按当前列表顺序重写 `sort_order`，避免增删责任人丢失后端字段。
-- 检查项台账页与配置中心检查项表保持横向表格形态，责任人单元格内用 chip 展示多人，并提供候选人添加、手工输入添加和移除；只读态沿用 `canWrite` 禁用所有写控件。
-- 候选人添加默认写入 `role=owner`；手工输入仍作为 `displayName` 进入责任人列表；移除按钮使用 lucide `X` 图标。
+- `CheckItemOwner` 前端模型和 adapter 保留后端多责任人扩展字段：`role`、`sortOrder/sort_order`、`isPrimary/is_primary`、`metadata`；保存时按当前列表顺序重写 `sort_order`，避免增删责任人丢失后端字段；`manualName/manual_name` 运行期置空。
+- 检查项台账页与配置中心检查项表保持横向表格形态，责任人单元格内用头像 chip 展示多人，并提供 IDaaS 搜索添加和移除；只读态沿用 `canWrite` 禁用所有写控件。
+- 候选人添加默认写入 `role=owner`；责任人身份必须包含 `idaasId`；移除按钮使用 lucide `X` 图标。
 - 检查项台账、配置中心检查项和时间甘特的负责人筛选/关键字搜索均命中所有 `owners` 的姓名、IDaaS ID、邮箱和部门，而不是只看旧单一 `ownerName`。
 
 ## 2026-05-14 后端数据口径
@@ -108,3 +108,4 @@
 - `AuditHistoryPanel` 通过 `/audit-logs/?object_type=CheckItem&object_id=<id>` 拉取真实审计日志，展示时间、动作、状态变化、操作者、来源和 request id，不在前端伪造审计信息。
 - 所选检查项面板新增附件区，上传走 `/attachments/upload/`，固定传 `object_type=check_item` 与当前检查项 `object_id`；下载走 `/attachments/{id}/download-link/` 获取受控预签名链接。
 - 前端请求层对 `FormData` 跳过 JSON `Content-Type`，避免 multipart 上传被错误声明为 `application/json`。
+- 阶段甘特所选检查项面板与检查项台账页共用 `OwnerListEditor` 和 `UserAvatar`；责任人新增通过 `/idaas-candidates/?q=...` 动态搜索，附件上传/下载在阶段进度和检查项页保持同一组件能力。

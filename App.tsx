@@ -41,6 +41,7 @@ import {
   fetchAttachmentDownloadLink,
   fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
+  fetchOwnerCandidates,
   fetchWorkspaceData,
   seedProjectTemplate,
   updateCheckItem,
@@ -456,16 +457,42 @@ function AuditHistoryPanel({
   );
 }
 
+function UserAvatar({
+  name,
+  idaasId,
+  size = 'sm'
+}: {
+  name?: string;
+  idaasId?: string;
+  size?: 'xs' | 'sm';
+}) {
+  const label = (name || idaasId || '').trim();
+  const initials = Array.from(label).slice(0, 2).join('').toUpperCase();
+  const sizeClass = size === 'xs' ? 'h-5 w-5 text-[10px]' : 'h-7 w-7 text-xs';
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 font-semibold text-primary ${sizeClass}`}
+      aria-hidden="true"
+      title={label || undefined}
+    >
+      {initials || <UserRound className={size === 'xs' ? 'h-3 w-3' : 'h-4 w-4'} />}
+    </span>
+  );
+}
+
 function CheckItemAttachmentPanel({
   item,
   canWrite,
   onUploadAttachment,
-  onDownloadAttachment
+  onDownloadAttachment,
+  compact = false
 }: {
   item: CheckItem;
   canWrite: boolean;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  compact?: boolean;
 }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -517,11 +544,13 @@ function CheckItemAttachmentPanel({
   };
 
   return (
-    <div className="rounded-lg border border-outline bg-surface p-3">
+    <div className={`rounded-lg border border-outline bg-surface ${compact ? 'p-2' : 'p-3'}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold text-ink">附件</h4>
-          <p className="text-xs text-ink-muted">附件归档到当前检查项，上传和下载由后端 OiS3 接口控制。</p>
+          {!compact ? (
+            <p className="text-xs text-ink-muted">附件归档到当前检查项，上传和下载由后端 OiS3 接口控制。</p>
+          ) : null}
         </div>
         <Paperclip className="h-4 w-4 text-ink-muted" />
       </div>
@@ -629,22 +658,22 @@ const textMatches = (keyword: string, values: Array<string | number | null | und
 };
 
 const ownerKeyOf = (owner: CheckItemOwner) =>
-  `${normalizeText(owner.idaasId)}|${normalizeText(owner.displayName || owner.manualName || owner.manual_name)}`;
+  normalizeText(owner.idaasId);
 
 const normalizeOwners = (owners: CheckItemOwner[]) => {
   const seen = new Set<string>();
   return owners
     .map((owner, index) => ({
       ...owner,
-      displayName: owner.displayName.trim(),
+      displayName: (owner.displayName || owner.idaasId || '').trim(),
       idaasId: owner.idaasId?.trim() || undefined,
-      manualName: owner.manualName?.trim() || owner.manual_name?.trim() || undefined,
-      manual_name: owner.manualName?.trim() || owner.manual_name?.trim() || undefined,
+      manualName: undefined,
+      manual_name: undefined,
       role: owner.role?.trim() || undefined,
       sortOrder: index,
       sort_order: index
     }))
-    .filter(owner => owner.displayName || owner.idaasId || owner.manualName || owner.manual_name)
+    .filter(owner => owner.idaasId)
     .filter(owner => {
       const key = ownerKeyOf(owner);
       if (seen.has(key)) return false;
@@ -657,7 +686,7 @@ const ownersOfItem = (item: CheckItem) =>
   normalizeOwners(
     item.owners?.length
       ? item.owners
-      : item.ownerName && item.ownerName !== '未设置'
+      : item.ownerIdaasId && item.ownerName && item.ownerName !== '未设置'
         ? [{ displayName: item.ownerName, idaasId: item.ownerIdaasId }]
         : []
   );
@@ -665,15 +694,43 @@ const ownersOfItem = (item: CheckItem) =>
 const ownersForSearch = (owners?: CheckItemOwner[]) =>
   (owners ?? []).flatMap(owner => [
     owner.displayName,
-    owner.manualName,
-    owner.manual_name,
     owner.idaasId,
     owner.email,
     owner.department
   ]);
 
 const ownerDisplayName = (owner: CheckItemOwner) =>
-  owner.displayName || owner.manualName || owner.manual_name || owner.idaasId || '';
+  owner.displayName || owner.idaasId || '';
+
+const candidateKeyOf = (candidate: OwnerCandidate) => normalizeText(candidate.idaasId);
+
+const normalizeOwnerCandidates = (candidates: OwnerCandidate[]) => {
+  const seen = new Set<string>();
+  return candidates
+    .map(candidate => ({
+      ...candidate,
+      idaasId: candidate.idaasId?.trim() ?? '',
+      displayName: (candidate.displayName || candidate.idaasId || '').trim()
+    }))
+    .filter(candidate => candidate.idaasId)
+    .filter(candidate => {
+      const key = candidateKeyOf(candidate);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const candidateMatches = (candidate: OwnerCandidate, keyword: string) =>
+  textMatches(keyword, [candidate.displayName, candidate.idaasId, candidate.email, candidate.department]);
+
+const ownerCandidateToOwner = (candidate: OwnerCandidate): CheckItemOwner => ({
+  displayName: candidate.displayName || candidate.idaasId,
+  idaasId: candidate.idaasId,
+  email: candidate.email,
+  department: candidate.department,
+  role: 'owner'
+});
 
 const dateRangeMatches = (itemStart?: string | null, itemEnd?: string | null, filterStart?: string, filterEnd?: string) => {
   const startLimit = dateMs(filterStart);
@@ -2619,8 +2676,10 @@ function TimelineView({
   phases,
   checkItems,
   modules,
+  ownerCandidates,
   canWrite,
   onUpdateStatus,
+  onUpdateOwner,
   onUploadAttachment,
   onDownloadAttachment
 }: {
@@ -2628,8 +2687,10 @@ function TimelineView({
   phases: ProjectPhase[];
   checkItems: CheckItem[];
   modules: InspectionModule[];
+  ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
+  onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => Promise<void>;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
 }) {
@@ -2638,6 +2699,9 @@ function TimelineView({
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState('');
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
+  const [ownerSaving, setOwnerSaving] = useState(false);
+  const [ownerMessage, setOwnerMessage] = useState('');
   const sorted = activePhasesOf(phases);
   const today = formatLocalDate(new Date());
   const phaseById = new Map(sorted.map(phase => [idOf(phase.id), phase]));
@@ -2711,6 +2775,13 @@ function TimelineView({
   const selectedPhase = selectedCheckItem ? phaseById.get(idOf(selectedCheckItem.projectPhaseId)) : null;
   const selectedModule = selectedCheckItem ? moduleById.get(idOf(selectedCheckItem.moduleId)) : null;
   const latestStatusAudit = auditLogs.find(log => log.action === 'check_item.status_change');
+  const selectedOwnerDraft = selectedCheckItem
+    ? ownerDrafts[idOf(selectedCheckItem.id)] ?? {
+        owners: ownersOfItem(selectedCheckItem),
+        ownerName: '',
+        ownerIdaasId: undefined
+      }
+    : null;
 
   const loadAuditLogs = async (checkItemId: string | number) => {
     setAuditLoading(true);
@@ -2745,10 +2816,41 @@ function TimelineView({
     void loadAuditLogs(selectedCheckItemId);
   }, [selectedCheckItemId]);
 
+  useEffect(() => {
+    if (!selectedCheckItem) {
+      setOwnerMessage('');
+      return;
+    }
+    setOwnerDrafts(current => ({
+      ...current,
+      [idOf(selectedCheckItem.id)]: current[idOf(selectedCheckItem.id)] ?? {
+        owners: ownersOfItem(selectedCheckItem),
+        ownerName: '',
+        ownerIdaasId: undefined
+      }
+    }));
+    setOwnerMessage('');
+  }, [selectedCheckItemId]);
+
   const handleUpdateTimelineStatus = async (item: CheckItem, status: CheckItemStatus, source: string) => {
     await onUpdateStatus(item, status, source);
     if (idOf(item.id) === selectedCheckItemId) {
       await loadAuditLogs(item.id);
+    }
+  };
+
+  const handleUpdateTimelineOwner = async () => {
+    if (!selectedCheckItem || !selectedOwnerDraft) return;
+    setOwnerSaving(true);
+    setOwnerMessage('');
+    try {
+      await onUpdateOwner(selectedCheckItem, ownersFromDraft(selectedOwnerDraft));
+      await loadAuditLogs(selectedCheckItem.id);
+      setOwnerMessage('负责人已更新。');
+    } catch (err) {
+      setOwnerMessage(mutationErrorMessage(err, '负责人更新失败。'));
+    } finally {
+      setOwnerSaving(false);
     }
   };
 
@@ -2920,7 +3022,7 @@ function TimelineView({
               )}
             </div>
           </div>
-          <div className="mt-4 grid gap-4 xl:grid-cols-[300px_360px_1fr]">
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
             <div className="rounded-lg border border-outline bg-surface p-3">
               <div className="mb-3 text-sm font-semibold text-ink">直接更新状态</div>
               <CheckItemStatusControl
@@ -2932,6 +3034,38 @@ function TimelineView({
               <div className="mt-3 text-xs text-ink-muted">
                 点击甘特条切换检查项；保存后后端会记录状态审计和 IDaaS 操作者。
               </div>
+            </div>
+            <div className="rounded-lg border border-outline bg-surface p-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-ink">负责人</div>
+                  <div className="text-xs text-ink-muted">仅支持从 IDaaS 候选人搜索添加。</div>
+                </div>
+                <button
+                  className="btn btn-primary btn--sm"
+                  type="button"
+                  disabled={!canWrite || ownerSaving || !selectedOwnerDraft}
+                  onClick={() => void handleUpdateTimelineOwner()}
+                >
+                  <Save className="h-4 w-4" />
+                  {ownerSaving ? '保存中' : '保存负责人'}
+                </button>
+              </div>
+              {selectedOwnerDraft ? (
+                <OwnerListEditor
+                  owners={selectedOwnerDraft.owners}
+                  ownerCandidates={ownerCandidates}
+                  canWrite={canWrite}
+                  candidateLabel={`甘特检查项 ${selectedCheckItem.title} IDaaS 责任人`}
+                  onChange={next =>
+                    setOwnerDrafts(current => ({
+                      ...current,
+                      [idOf(selectedCheckItem.id)]: next
+                    }))
+                  }
+                />
+              ) : null}
+              {ownerMessage ? <div className="mt-2 text-xs text-ink-muted">{ownerMessage}</div> : null}
             </div>
             <CheckItemAttachmentPanel
               item={selectedCheckItem}
@@ -3014,23 +3148,66 @@ function TimelineView({
 
 function OwnerListEditor({
   owners,
-  ownerName,
-  ownerIdaasId,
   ownerCandidates,
   canWrite,
   candidateLabel,
-  manualLabel,
   onChange
 }: {
   owners: CheckItemOwner[];
-  ownerName: string;
-  ownerIdaasId?: string;
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
   candidateLabel: string;
-  manualLabel: string;
   onChange: (next: { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const [remoteCandidates, setRemoteCandidates] = useState<OwnerCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const normalizedOwners = normalizeOwners(owners);
+  const selectedKeys = new Set(normalizedOwners.map(ownerKeyOf));
+  const normalizedBaseCandidates = normalizeOwnerCandidates(ownerCandidates);
+  const localMatches = query.trim()
+    ? normalizedBaseCandidates.filter(candidate => candidateMatches(candidate, query))
+    : normalizedBaseCandidates;
+  const candidatePool = normalizeOwnerCandidates([...localMatches, ...remoteCandidates])
+    .filter(candidate => !selectedKeys.has(candidateKeyOf(candidate)));
+
+  useEffect(() => {
+    const keyword = query.trim();
+    let cancelled = false;
+    if (!keyword || !canWrite) {
+      setRemoteCandidates([]);
+      setSearchError('');
+      setSearching(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setSearching(true);
+    setSearchError('');
+    const timer = window.setTimeout(() => {
+      fetchOwnerCandidates(keyword, 30)
+        .then(candidates => {
+          if (!cancelled) setRemoteCandidates(normalizeOwnerCandidates(candidates));
+        })
+        .catch(err => {
+          if (!cancelled) {
+            setRemoteCandidates([]);
+            setSearchError(err instanceof Error ? err.message : 'IDaaS 候选人搜索失败');
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, canWrite]);
+
   const addOwner = (owner: CheckItemOwner) => {
     onChange({
       owners: normalizeOwners([...owners, owner]),
@@ -3041,16 +3218,17 @@ function OwnerListEditor({
   const removeOwner = (owner: CheckItemOwner) => {
     onChange({
       owners: normalizeOwners(owners.filter(current => ownerKeyOf(current) !== ownerKeyOf(owner))),
-      ownerName,
-      ownerIdaasId
+      ownerName: '',
+      ownerIdaasId: undefined
     });
   };
   return (
     <div className="grid gap-2">
       <div className="flex flex-wrap gap-1.5">
-        {owners.length ? owners.map(owner => (
-          <span key={ownerKeyOf(owner)} className="chip">
-            {ownerDisplayName(owner)}
+        {normalizedOwners.length ? normalizedOwners.map(owner => (
+          <span key={ownerKeyOf(owner)} className="chip gap-1.5">
+            <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} size="xs" />
+            <span>{ownerDisplayName(owner)}</span>
             <button
               className="ml-1 text-ink-muted hover:text-danger disabled:hover:text-ink-muted"
               type="button"
@@ -3063,50 +3241,48 @@ function OwnerListEditor({
           </span>
         )) : <span className="text-xs text-ink-muted">未设置</span>}
       </div>
-      <select
-        className="select"
-        value=""
-        disabled={!canWrite}
-        onChange={event => {
-          const candidate = ownerCandidates.find(owner => owner.idaasId === event.target.value);
-          if (candidate) {
-            addOwner({
-              displayName: candidate.displayName,
-              idaasId: candidate.idaasId,
-              email: candidate.email,
-              department: candidate.department,
-              role: 'owner'
-            });
-          }
-        }}
-        aria-label={candidateLabel}
-      >
-        <option value="">候选人添加</option>
-        {ownerCandidates.map(owner => (
-          <option key={owner.idaasId} value={owner.idaasId}>
-            {owner.displayName} / {owner.department ?? owner.email ?? owner.idaasId}
-          </option>
-        ))}
-      </select>
-      <div className="flex gap-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
         <input
-          className="input"
-          value={ownerName}
+          className="input pl-9"
+          value={query}
           disabled={!canWrite}
-          onChange={event => onChange({ owners, ownerName: event.target.value, ownerIdaasId: undefined })}
-          placeholder="手工输入责任人"
-          aria-label={manualLabel}
+          onChange={event => setQuery(event.target.value)}
+          placeholder="搜索姓名 / IDaaS / 邮箱"
+          aria-label={candidateLabel}
         />
-        <button
-          className="btn btn-ghost btn--sm shrink-0"
-          type="button"
-          disabled={!canWrite || !ownerName.trim()}
-          onClick={() => addOwner({ displayName: ownerName, idaasId: ownerIdaasId })}
-        >
-          <Plus className="h-4 w-4" />
-          添加
-        </button>
       </div>
+      <div className="max-h-48 overflow-y-auto rounded-lg border border-outline bg-surface-soft p-1">
+        {candidatePool.length ? candidatePool.map(candidate => (
+          <button
+            key={candidate.idaasId}
+            className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-ink transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            disabled={!canWrite}
+            onClick={() => {
+              addOwner(ownerCandidateToOwner(candidate));
+              setQuery('');
+              setRemoteCandidates([]);
+            }}
+          >
+            <UserAvatar name={candidate.displayName} idaasId={candidate.idaasId} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold">{candidate.displayName || candidate.idaasId}</span>
+              <span className="block truncate text-xs text-ink-muted">{candidate.department || candidate.email || candidate.idaasId}</span>
+            </span>
+            <Plus className="h-4 w-4 shrink-0 text-ink-muted" />
+          </button>
+        )) : (
+          <div className="px-3 py-4 text-xs text-ink-muted">
+            {searching
+              ? '正在搜索 IDaaS 候选人...'
+              : query.trim()
+                ? '未找到 IDaaS 候选人。'
+                : '输入关键字搜索 IDaaS 候选人。'}
+          </div>
+        )}
+      </div>
+      {searchError ? <div className="text-xs text-danger">{searchError}</div> : null}
     </div>
   );
 }
@@ -3117,20 +3293,24 @@ function ChecksView({
   modules,
   ownerCandidates,
   canWrite,
-  defaultOwnerName,
+  defaultOwner,
   onCreateCheckItem,
   onUpdateOwner,
-  onUpdateStatus
+  onUpdateStatus,
+  onUploadAttachment,
+  onDownloadAttachment
 }: {
   checkItems: CheckItem[];
   phases: ProjectPhase[];
   modules: InspectionModule[];
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
-  defaultOwnerName: string;
+  defaultOwner?: OwnerCandidate;
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
-  onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => void;
+  onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => Promise<void>;
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
+  onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
+  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -3162,6 +3342,7 @@ function ChecksView({
   const statusOptions = statusOptionValues(checkItems.map(item => item.status));
   const selectedNewPhase = visiblePhases.find(phase => idOf(phase.id) === newDraft?.projectPhaseId) ?? defaultPhase;
   const selectedNewModule = orderedModules.find(module => idOf(module.id) === newDraft?.moduleId) ?? defaultModule;
+  const defaultOwners = defaultOwner?.idaasId ? [ownerCandidateToOwner(defaultOwner)] : [];
   const createDisabledReason = !canWrite
     ? '当前账号只读，写操作已禁用。'
     : !newDraft?.title.trim()
@@ -3188,14 +3369,14 @@ function ChecksView({
         tags: '',
         plannedStartDate: dateInputValue(defaultPhase.plannedStartDate),
         plannedEndDate: dateInputValue(defaultPhase.plannedEndDate),
-        ownerName: defaultOwnerName,
+        ownerName: '',
         ownerIdaasId: undefined,
-        owners: defaultOwnerName ? [{ displayName: defaultOwnerName }] : [],
+        owners: defaultOwners,
         status: 'pending',
         isActive: true
       };
     });
-  }, [defaultPhase?.id, defaultModule?.id, defaultOwnerName, visiblePhaseKey, moduleKey]);
+  }, [defaultPhase?.id, defaultModule?.id, defaultOwner?.idaasId, defaultOwner?.displayName, visiblePhaseKey, moduleKey]);
 
   const handleCreate = async () => {
     if (!newDraft) return;
@@ -3213,7 +3394,7 @@ function ChecksView({
         tags: '',
         plannedStartDate: dateInputValue(selectedNewPhase?.plannedStartDate),
         plannedEndDate: dateInputValue(selectedNewPhase?.plannedEndDate),
-        ownerName: newDraft.ownerName || defaultOwnerName,
+        ownerName: '',
         ownerIdaasId: undefined,
         owners: ownersFromDraft(newDraft),
         status: 'pending',
@@ -3298,12 +3479,9 @@ function ChecksView({
               <span className="field-label">责任人</span>
               <OwnerListEditor
                 owners={newDraft.owners}
-                ownerName={newDraft.ownerName}
-                ownerIdaasId={newDraft.ownerIdaasId}
                 ownerCandidates={ownerCandidates}
                 canWrite={canWrite}
-                candidateLabel="检查项页面新增候选责任人"
-                manualLabel="检查项页面新增手工责任人"
+                candidateLabel="检查项页面新增 IDaaS 责任人"
                 onChange={next => setNewDraft({ ...newDraft, ...next })}
               />
             </div>
@@ -3406,12 +3584,9 @@ function ChecksView({
                   <td className="min-w-[280px]">
                     <OwnerListEditor
                       owners={draft.owners}
-                      ownerName={draft.ownerName}
-                      ownerIdaasId={draft.ownerIdaasId}
                       ownerCandidates={ownerCandidates}
                       canWrite={canWrite}
-                      candidateLabel={`检查项 ${item.title} 候选责任人`}
-                      manualLabel={`检查项 ${item.title} 手工责任人`}
+                      candidateLabel={`检查项 ${item.title} IDaaS 责任人`}
                       onChange={next =>
                         setDrafts(current => ({
                           ...current,
@@ -3432,13 +3607,21 @@ function ChecksView({
                       onUpdateStatus={onUpdateStatus}
                     />
                   </td>
-                  <td className="min-w-[260px]"><AttachmentList attachments={item.attachments} /></td>
+                  <td className="min-w-[320px]">
+                    <CheckItemAttachmentPanel
+                      item={item}
+                      canWrite={canWrite}
+                      compact
+                      onUploadAttachment={onUploadAttachment}
+                      onDownloadAttachment={onDownloadAttachment}
+                    />
+                  </td>
                   <td>
                     <button
                       className="btn btn-primary btn--sm"
                       type="button"
                       disabled={!canWrite}
-                      onClick={() => onUpdateOwner(item, ownersFromDraft(draft))}
+                      onClick={() => void onUpdateOwner(item, ownersFromDraft(draft))}
                     >
                       <Save className="h-4 w-4" />
                       保存
@@ -3863,12 +4046,7 @@ type CheckItemConfigDraft = {
 };
 
 const ownersFromDraft = (draft: Pick<CheckItemConfigDraft, 'owners' | 'ownerName' | 'ownerIdaasId'>) =>
-  normalizeOwners([
-    ...draft.owners,
-    ...(draft.ownerName.trim()
-      ? [{ displayName: draft.ownerName, idaasId: draft.ownerIdaasId }]
-      : [])
-  ]);
+  normalizeOwners(draft.owners);
 
 function BaseConfigView({
   data,
@@ -4125,8 +4303,8 @@ function BaseConfigView({
             tags: (item.tags?.length ? item.tags : item.acceptanceCriteria ? [item.acceptanceCriteria] : []).join('，'),
             plannedStartDate: dateInputValue(item.plannedStartDate),
             plannedEndDate: dateInputValue(item.plannedEndDate),
-            ownerName: item.ownerName,
-            ownerIdaasId: item.ownerIdaasId,
+            ownerName: '',
+            ownerIdaasId: undefined,
             owners: ownersOfItem(item),
             status: item.status,
             isActive: item.isActive !== false
@@ -4148,9 +4326,9 @@ function BaseConfigView({
       tags: '',
       plannedStartDate: dateInputValue(sortedPhases[0]?.plannedStartDate),
       plannedEndDate: dateInputValue(sortedPhases[0]?.plannedEndDate),
-      ownerName: project.ownerName,
+      ownerName: '',
       ownerIdaasId: undefined,
-      owners: project.ownerName ? [{ displayName: project.ownerName }] : [],
+      owners: [],
       status: 'pending',
       isActive: true
     });
@@ -4743,12 +4921,9 @@ function BaseConfigView({
                 <span className="field-label">责任人</span>
                 <OwnerListEditor
                   owners={newCheckDraft.owners}
-                  ownerName={newCheckDraft.ownerName}
-                  ownerIdaasId={newCheckDraft.ownerIdaasId}
                   ownerCandidates={data.ownerCandidates}
                   canWrite={canWrite}
-                  candidateLabel="配置中心新增候选责任人"
-                  manualLabel="配置中心新增手工责任人"
+                  candidateLabel="配置中心新增 IDaaS 责任人"
                   onChange={next => setNewCheckDraft({ ...newCheckDraft, ...next })}
                 />
               </div>
@@ -4840,12 +5015,9 @@ function BaseConfigView({
                     <td className="min-w-[280px]">
                       <OwnerListEditor
                         owners={draft.owners}
-                        ownerName={draft.ownerName}
-                        ownerIdaasId={draft.ownerIdaasId}
                         ownerCandidates={data.ownerCandidates}
                         canWrite={canWrite}
-                        candidateLabel={`配置中心 ${item.title} 候选责任人`}
-                        manualLabel={`配置中心 ${item.title} 手工责任人`}
+                        candidateLabel={`配置中心 ${item.title} IDaaS 责任人`}
                         onChange={next =>
                           setCheckItemDrafts(current => ({
                             ...current,
@@ -4953,12 +5125,15 @@ function BaseConfigView({
             <div className="text-sm font-semibold text-ink">负责人候选</div>
             <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
               {data.ownerCandidates.map(owner => (
-                <div key={owner.idaasId || owner.displayName} className="rounded-lg border border-outline bg-surface px-3 py-2">
-                  <div className="text-sm font-semibold text-ink">{owner.displayName}</div>
-                  <div className="mt-1 text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
+                <div key={owner.idaasId || owner.displayName} className="flex items-center gap-2 rounded-lg border border-outline bg-surface px-3 py-2">
+                  <UserAvatar name={owner.displayName} idaasId={owner.idaasId} />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-ink">{owner.displayName || owner.idaasId}</div>
+                    <div className="mt-1 truncate text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
+                  </div>
                 </div>
               ))}
-              {!data.ownerCandidates.length ? <EmptyState message="暂无负责人候选，负责人字段仍可手工输入。" /> : null}
+              {!data.ownerCandidates.length ? <EmptyState message="暂无 IDaaS 责任人候选，可在责任人编辑器中输入关键字搜索。" /> : null}
             </div>
           </div>
         </div>
@@ -5278,8 +5453,8 @@ export default function App() {
         tags: draft.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
         plannedStartDate: draft.plannedStartDate,
         plannedEndDate: draft.plannedEndDate,
-        ownerName: draft.ownerName,
-        ownerIdaasId: draft.ownerIdaasId,
+        ownerName: undefined,
+        ownerIdaasId: undefined,
         owners: ownersFromDraft(draft),
         status: draft.status,
         isActive: draft.isActive,
@@ -5302,8 +5477,8 @@ export default function App() {
         tags: draft.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
         plannedStartDate: draft.plannedStartDate,
         plannedEndDate: draft.plannedEndDate,
-        ownerName: draft.ownerName,
-        ownerIdaasId: draft.ownerIdaasId,
+        ownerName: undefined,
+        ownerIdaasId: undefined,
         owners: ownersFromDraft(draft),
         status: draft.status,
         isActive: draft.isActive,
@@ -5417,8 +5592,10 @@ export default function App() {
           phases={workspace.timeline?.phases.length ? workspace.timeline.phases : workspace.phases}
           checkItems={workspace.timeline?.checkItems.length ? workspace.timeline.checkItems : workspace.checkItems}
           modules={workspace.inspectionModules}
+          ownerCandidates={workspace.ownerCandidates}
           canWrite={canWrite}
           onUpdateStatus={handleUpdateCheckItemStatus}
+          onUpdateOwner={handleUpdateOwner}
           onUploadAttachment={handleUploadCheckItemAttachment}
           onDownloadAttachment={handleDownloadAttachment}
         />
@@ -5432,10 +5609,16 @@ export default function App() {
           modules={workspace.inspectionModules}
           ownerCandidates={workspace.ownerCandidates}
           canWrite={canWrite}
-          defaultOwnerName={workspace.selectedProject?.ownerName ?? profile?.displayName ?? ''}
+          defaultOwner={
+            profile?.userId
+              ? { idaasId: profile.userId, displayName: profile.displayName, email: profile.email }
+              : undefined
+          }
           onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateOwner={handleUpdateOwner}
           onUpdateStatus={handleUpdateCheckItemStatus}
+          onUploadAttachment={handleUploadCheckItemAttachment}
+          onDownloadAttachment={handleDownloadAttachment}
         />
       );
     }
