@@ -174,3 +174,10 @@
 - 碰撞一页纸编辑区新增单份 `导出 Excel` 按钮，调用后端 `/collision-reports/{id}/export-excel/` 下载 `xlsx` Blob；项目级 CSV 导入/导出能力保持不变。
 - 前端请求层新增 Blob 下载 API，避免 `xlsx` 响应被 JSON/text 解析。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`（三态 cookie 缺失场景按脚本规则 SKIP，失败数 0）；后端 `python manage.py test li_bs_auto_status` 通过，34 tests OK；`manage.py check` 通过，`makemigrations --check --dry-run` 输出 `No changes detected`；按 dev-environment-bootstrap 重启后端和 3005，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
+### 一页纸模板下载
+
+- 碰撞一页纸模块头部新增 `下载模板` 按钮，调用后端 `/collision-reports/template/` 下载同正式版式的 Excel 模板。
+- 模板下载走统一 Blob 下载通道，文件名优先读取后端 `Content-Disposition`，无文件名时兜底为 `collision_one_pager_template.xlsx`。
+- 只读态沿用 `canWrite` 禁用模板下载入口，权限兜底由后端返回 403。
+- 本轮验证：`npm run type-check`、`npm run build`、`npm run permission-regression` 通过，权限三态 cookie 缺失场景按脚本规则 SKIP，失败数 0；后端 `python manage.py test li_bs_auto_status` 通过，35 tests OK；按 dev-environment-bootstrap 重启后端和 3005 后，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。

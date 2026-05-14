@@ -42,6 +42,7 @@ import {
   deleteCheckItem,
   deleteKeyIssue,
   deleteProjectPhase,
+  downloadCollisionReportTemplateExcel,
   exportCollisionReportExcel,
   exportCollisionReportsCsv,
   exportKeyIssuesCsv,
@@ -179,6 +180,7 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'collision_report.import_create': '导入新增一页纸',
   'collision_report.import_update': '导入更新一页纸',
   'collision_report.export_excel': '导出一页纸 Excel',
+  'collision_report.template_download': '下载一页纸模板',
   'collision_report.submit': '提交一页纸',
   CheckItem: '检查项'
 };
@@ -4310,6 +4312,7 @@ function CollisionCrudView({
   onDeleteReport,
   onImportCsv,
   onExportCsv,
+  onDownloadTemplate,
   onExportExcel,
   onFetchAuditLogs
 }: {
@@ -4322,6 +4325,7 @@ function CollisionCrudView({
   onDeleteReport: (report: CollisionReport) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
+  onDownloadTemplate: () => Promise<void>;
   onExportExcel: (report: CollisionReport) => Promise<void>;
   onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
@@ -4415,6 +4419,10 @@ function CollisionCrudView({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="chip">{filteredReports.length}/{reports.length} 份</span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving} onClick={() => void runMutation(onDownloadTemplate, '碰撞一页纸模板已下载。')}>
+            <Download className="h-4 w-4" />
+            下载模板
+          </button>
           <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => void runMutation(onExportCsv, '碰撞一页纸 CSV 已导出。')}>
             <FileDown className="h-4 w-4" />
             导出 CSV
@@ -6367,6 +6375,17 @@ export default function App() {
     }
   };
 
+  const handleDownloadCollisionReportTemplate = async () => {
+    if (!canWrite) return;
+    try {
+      const result = await downloadCollisionReportTemplateExcel();
+      downloadBlobFile(result.fileName || 'collision_one_pager_template.xlsx', result.blob);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '碰撞一页纸模板下载失败'));
+      throw err;
+    }
+  };
+
   const handleExportCollisionReportExcel = async (report: CollisionReport) => {
     if (!canWrite) return;
     try {
@@ -6528,6 +6547,7 @@ export default function App() {
           onDeleteReport={handleDeleteCollisionReport}
           onImportCsv={handleImportCollisionReports}
           onExportCsv={handleExportCollisionReports}
+          onDownloadTemplate={handleDownloadCollisionReportTemplate}
           onExportExcel={handleExportCollisionReportExcel}
           onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
         />

@@ -1885,6 +1885,14 @@ export async function exportCollisionReportExcel(reportId: string | number) {
   });
 }
 
+export async function downloadCollisionReportTemplateExcel() {
+  return apiBlobRequest('/collision-reports/template/', {
+    headers: {
+      Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    }
+  });
+}
+
 export async function createExportTask(projectId: string | number, input: CreateExportInput) {
   const job = unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/exports/`, {

@@ -123,4 +123,5 @@
 - `AuditHistoryPanel` 从检查项专用扩展为对象通用面板；重点问题和碰撞一页纸编辑区均通过真实 `/audit-logs/?object_type=<type>&object_id=<id>` 展示历史动作、操作者、来源和 request id。
 - 重点问题审计查询固定使用 `object_type=KeyIssue`，碰撞一页纸审计查询固定使用 `object_type=CollisionReport`；前端只展示后端审计结果，不提交或伪造操作者。
 - 碰撞一页纸编辑区新增单份 `导出 Excel` 操作，调用 `/collision-reports/{id}/export-excel/` 下载后端生成的 `xlsx` Blob；集合 CSV 导出仍保留项目级批量导出。
+- 碰撞一页纸模块头部新增 `下载模板` 操作，调用 `/collision-reports/template/` 下载同版式、带占位提示的一页纸 Excel 模板；该入口不依赖选中报告或项目。
 - 前端请求层新增 Blob 下载通道，复用既有 IDaaS session、CSRF/错误处理口径，避免把二进制响应交给 JSON 解析。
