@@ -1,5 +1,12 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-15 重点问题附件缩略图返修
+
+- 重点问题新增/编辑表单不再渲染 `problemPhotoBucketName` / `problemPhotoObjectKey` 对应的图片 Bucket、图片 Key 输入；前端类型与 API adapter 仍兼容旧字段，用于读取历史数据和保存时内部透传，不作为用户维护入口。
+- 通用 `AttachmentList` 对可预览图片附件直接通过 `/attachments/{id}/preview/` 受控 Blob 通道加载缩略图网格；用户点击缩略图后复用同一受控预览 lightbox 放大，不读取或展示 bucket、object key、downloadUrl。
+- 重点问题描述、整改对策、当前进展和备注字段下方按 `key_issue_slot` metadata 展示附件区域；图片显示缩略图，非图片仍以文件行展示，下载按钮继续受 `canWrite/canDownload` 与后端 `can_download` 共同约束。
+- 导出任务列表不再把产物 bucket/object key 作为文件名或二级说明渲染；产物下载仍通过受控下载链接获取。
+
 ## 2026-05-15 附件共享盘配置
 
 - Auto Status 不直接读取 `SHARED_STORAGE_SMB_URL / SMB_URL / PLC_SHARE_SMB_URL` 环境变量作为业务配置入口；SPA 配置中心通过共享存储配置 API 维护 `li_bs_auto_status` scope。
@@ -133,7 +140,7 @@
 ## 2026-05-14 重点问题与碰撞一页纸维护收口
 
 - 重点问题与碰撞一页纸业务页从只读卡片改为“横向表格选行 + 下方自然维护表单”布局；筛选栏保留关键字、阶段、状态、风险、负责人和日期范围。
-- 重点问题维护字段覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人、确认人、截止、整改对策、当前进展、备注、图片 bucket/key；保存时继续向后端 snake_case 字段提交。
+- 重点问题维护字段覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人、确认人、截止、整改对策、当前进展和备注；图片 bucket/key 用户可见输入已在 2026-05-15 返修移除，旧字段仅作为 API 兼容字段保留。
 - 碰撞一页纸维护字段覆盖 phase、title、reportDate、status、riskLevel、summary、owner、dueDate 以及 content 常用正式字段，包括问题定义、零件、车型、故障频次、责任区域、问题描述、诊断维修、原因分析、措施、支持、影响、遏制、预防、验证和签核槽位。
 - 前端 API adapter 新增重点问题和碰撞一页纸 create/update/delete/import/export 方法：CRUD 走现有项目子资源与顶层资源路由；CSV import/export 优先调用后端专用端点，后端未提供时降级为前端 CSV 解析后逐条调用正式 CRUD 或从正式列表生成 CSV。
 - 权限口径不变：只读用户保留页面、筛选和列表查看能力，新增、编辑、删除、导入和导出 CSV 控件均按 `canWrite` 禁用。
@@ -152,7 +159,7 @@
 - 附件预览层支持关闭按钮、遮罩关闭和 ESC 关闭；预览中的下载按钮继续复用 `/attachments/{id}/download-link/`，按 `canWrite` 与后端 `can_download` 状态禁用。
 - `Attachment` 类型兼容 `preview_url`、`can_preview`、`can_download`、`is_image`，同时仍接收旧 `bucket/object_key` 但普通附件列表不渲染真实 object key。
 - 检查项附件上传保持原链路 `/attachments/upload/`；重点问题和碰撞一页纸编辑区新增所选对象附件列表，可预览图片并按权限下载已有附件。
-- 重点问题列表/详情不再向普通用户展示问题照片 bucket/object key；图片存储字段只在 `canWrite` 管理维护表单内保留。
+- 重点问题列表/详情不再向用户展示问题照片 bucket/object key；图片存储旧字段只作为 API 兼容字段保留，不再提供管理维护输入。
 
 ## 2026-05-15 碰撞一页纸 Excel 对齐输入画布
 

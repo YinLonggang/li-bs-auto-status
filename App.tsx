@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Clock3,
   Download,
-  Eye,
   Factory as FactoryIcon,
   FileDown,
   FileText,
@@ -1090,6 +1089,12 @@ type AttachmentPreviewState = {
   error?: string;
 };
 
+type AttachmentThumbnailState = {
+  url?: string;
+  loading?: boolean;
+  error?: string;
+};
+
 function AttachmentPreviewModal({
   state,
   canDownload,
@@ -1182,8 +1187,15 @@ function AttachmentList({
   emptyMessage?: string;
 }) {
   const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
   const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [message, setMessage] = useState('');
+  const thumbnailUrlsRef = useRef<string[]>([]);
+  const imageAttachments = attachments.filter(canPreviewAttachment);
+  const fileAttachments = attachments.filter(attachment => !canPreviewAttachment(attachment));
+  const imageAttachmentKey = imageAttachments
+    .map(attachment => `${attachment.id}:${attachment.fileName}:${attachment.createdAt ?? ''}:${attachment.fileSize ?? ''}`)
+    .join('|');
 
   const closePreview = () => {
     setPreview(current => {
@@ -1195,6 +1207,44 @@ function AttachmentList({
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
   }, [preview?.url]);
+
+  useEffect(() => {
+    let cancelled = false;
+    thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    thumbnailUrlsRef.current = [];
+    setThumbnails({});
+
+    imageAttachments.forEach(attachment => {
+      const key = idOf(attachment.id);
+      setThumbnails(current => ({ ...current, [key]: { loading: true } }));
+      void fetchAttachmentPreview(attachment.id)
+        .then(result => {
+          const url = URL.createObjectURL(result.blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          thumbnailUrlsRef.current.push(url);
+          setThumbnails(current => ({ ...current, [key]: { url, loading: false } }));
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setThumbnails(current => ({
+            ...current,
+            [key]: {
+              loading: false,
+              error: mutationErrorMessage(err, '缩略图加载失败。')
+            }
+          }));
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      thumbnailUrlsRef.current = [];
+    };
+  }, [imageAttachmentKey]);
 
   const openPreview = async (attachment: Attachment) => {
     if (!canPreviewAttachment(attachment)) return;
@@ -1239,28 +1289,72 @@ function AttachmentList({
   }
 
   return (
-    <div className="space-y-2">
-      {attachments.map(attachment => (
+    <div className="space-y-3">
+      {imageAttachments.length ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {imageAttachments.map(attachment => {
+            const thumbnail = thumbnails[idOf(attachment.id)];
+            return (
+              <div key={attachment.id} className="overflow-hidden rounded-lg border border-outline bg-surface">
+                <button
+                  className="group block w-full text-left"
+                  type="button"
+                  onClick={() => void openPreview(attachment)}
+                  aria-label={`放大预览 ${attachment.fileName}`}
+                >
+                  <div className="aspect-[4/3] w-full bg-surface-soft">
+                    {thumbnail?.url ? (
+                      <img
+                        className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+                        src={thumbnail.url}
+                        alt={attachment.fileName}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs text-ink-muted">
+                        {thumbnail?.error ? '缩略图加载失败' : '图片加载中...'}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 px-2 py-2">
+                    <div className="truncate text-xs font-semibold text-ink" title={attachment.fileName}>
+                      {attachment.fileName}
+                    </div>
+                    <div className="mt-1 text-[11px] text-ink-muted">
+                      {formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}
+                    </div>
+                  </div>
+                </button>
+                {onDownloadAttachment ? (
+                  <div className="border-t border-outline px-2 py-2">
+                    <button
+                      className="btn btn-ghost btn--sm w-full"
+                      type="button"
+                      disabled={!canDownload || attachment.canDownload === false || downloadingId === attachment.id}
+                      onClick={() => void handleDownload(attachment)}
+                      title={!canDownload || attachment.canDownload === false ? '当前账号没有附件下载权限。' : undefined}
+                    >
+                      <Download className="h-4 w-4" />
+                      {downloadingId === attachment.id ? '获取中' : '下载'}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {fileAttachments.map(attachment => (
         <div key={attachment.id} className="rounded-lg border border-outline bg-surface-soft p-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
-              {isImageAttachment(attachment) ? (
-                <ImageIcon className="h-4 w-4 shrink-0 text-accent" />
-              ) : (
-                <FileText className="h-4 w-4 shrink-0 text-ink-muted" />
-              )}
+              <FileText className="h-4 w-4 shrink-0 text-ink-muted" />
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-ink" title={attachment.fileName}>{attachment.fileName}</div>
                 <div className="mt-1 text-xs text-ink-muted">{formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}</div>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {canPreviewAttachment(attachment) ? (
-                <button className="btn btn-secondary btn--sm" type="button" onClick={() => void openPreview(attachment)}>
-                  <Eye className="h-4 w-4" />
-                  预览
-                </button>
-              ) : null}
               {onDownloadAttachment ? (
                 <button
                   className="btn btn-ghost btn--sm"
@@ -4361,9 +4455,9 @@ function IssuesCrudView({
   });
   const visibleCheckItems = checkItems.filter(item => !draft.projectPhaseId || idOf(item.projectPhaseId) === draft.projectPhaseId);
   const [activeIssueFieldKey, setActiveIssueFieldKey] = useState('description');
-  const imageAttachments = (selectedIssue?.attachments ?? []).filter(canPreviewAttachment);
+  const issueAttachments = selectedIssue?.attachments ?? [];
   const attachmentsForField = (fieldKey: string) =>
-    imageAttachments.filter(attachment => issueAttachmentSlot(attachment) === fieldKey);
+    issueAttachments.filter(attachment => issueAttachmentSlot(attachment) === fieldKey);
   const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
   const setImageCaptionForField = (fieldKey: string, value: string) =>
     setDraft({
@@ -4697,12 +4791,6 @@ function IssuesCrudView({
           <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
           {renderIssueTextArea('countermeasure', '对策', draft.countermeasure, value => setDraft({ ...draft, countermeasure: value }))}
           {renderIssueTextArea('currentProgress', '进展', draft.currentProgress, value => setDraft({ ...draft, currentProgress: value }))}
-          {canWrite ? (
-            <>
-              <label><span className="field-label">图片 Bucket</span><input className="input" value={draft.problemPhotoBucketName} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoBucketName: event.target.value })} /></label>
-              <label><span className="field-label">图片 Key</span><input className="input font-mono" value={draft.problemPhotoObjectKey} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoObjectKey: event.target.value })} /></label>
-            </>
-          ) : null}
           {renderIssueTextArea('remark', '备注', draft.remark, value => setDraft({ ...draft, remark: value }))}
         </div>
         {!selectedIsNew && selectedIssue ? (
@@ -5348,14 +5436,9 @@ function ReportsView({
                     </td>
                     <td>
                       <div className="space-y-2">
-                        <div className="max-w-[280px] truncate text-xs text-ink" title={task.fileName || task.resultObjectKey || ''}>
-                          {task.fileName || task.resultObjectKey || task.errorMessage || '等待产物生成'}
+                        <div className="max-w-[280px] truncate text-xs text-ink" title={task.fileName || task.errorMessage || ''}>
+                          {task.fileName || task.errorMessage || (task.hasResult ? '导出产物已生成' : '等待产物生成')}
                         </div>
-                        {task.resultBucketName || task.resultObjectKey ? (
-                          <div className="max-w-[280px] truncate text-[11px] text-ink-subtle" title={[task.resultBucketName, task.resultObjectKey].filter(Boolean).join('/')}>
-                            {[task.resultBucketName, task.resultObjectKey].filter(Boolean).join('/')}
-                          </div>
-                        ) : null}
                         <button
                           className="btn btn-ghost btn--sm"
                           type="button"

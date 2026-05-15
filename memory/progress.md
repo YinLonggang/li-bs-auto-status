@@ -2,6 +2,14 @@
 
 ## 2026-05-15
 
+### 重点问题图片缩略图返修
+
+- 重点问题新增/编辑表单移除图片 Bucket、图片 Key 输入控件；旧 `problemPhotoBucketName/problemPhotoObjectKey` 字段仅保留为内部兼容字段，不再作为用户可见维护项。
+- 通用附件列表增强为图片缩略图网格：图片通过 `/attachments/{id}/preview/` Blob 通道直接显示缩略图，点击缩略图打开既有 lightbox；非图片附件仍以文件行展示。
+- 重点问题描述、对策、进展、备注四个字段下方按附件 metadata 槽位直接展示对应附件区域；图片缩略图和非图片文件行均不暴露 bucket/object key/downloadUrl。
+- 导出任务列表同步隐藏产物 bucket/object key 明细，仅显示文件名、错误信息或“导出产物已生成”状态。
+- 验证通过：`npm run type-check`、`npm run build`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
 ### Auto Status SMB 配置入口
 
 - 配置中心底部新增“附件共享盘配置”面板，维护 `li_bs_auto_status` scope 的 SMB URL、host/share、业务根路径、凭据、对象前缀、环境目录和传输参数。
@@ -75,7 +83,7 @@
 - Dashboard 首页撤回项目统计表行内详情 `<tr>`：`ProjectStatisticsList` 只负责横向统计表、选中态、行点击和 Enter/Space 键盘选择；所选项目详情改由列表下方的 `ProjectDashboardExpansion` 连续区域承载。
 - 列表下方详情区承载 Project Context、单项目统计、阶段轨、范围统计、详情筛选、模块泳道、检查项详情、重点问题、碰撞一页纸和导出操作；顶层保留范围工具、项目总览和项目统计列表，项目筛选归入项目统计列表栏。
 - Dashboard 检查详情区继续收口为“上选下详”：详情筛选、检查模块泳道、检查清单详情顺序堆叠，不再使用 xl 侧边详情。
-- Dashboard 重点问题表改为“表格选择在上、问题详情在下”：`KeyIssueTable` 内部选中第一条问题，支持行点击、按钮点击和 Enter/Space 选择；详情展示问题标题/描述、照片 bucket/object key、整改对策、整改完成时间、供应商、责任人、确认人、进度、备注、附件、关闭时间、状态和严重度，不新增 API 或 mock。
+- Dashboard 重点问题表改为“表格选择在上、问题详情在下”：`KeyIssueTable` 内部选中第一条问题，支持行点击、按钮点击和 Enter/Space 选择；详情展示问题标题/描述、照片配置状态、整改对策、整改完成时间、供应商、责任人、确认人、进度、备注、附件、关闭时间、状态和严重度，不新增 API 或 mock。
 - 本轮泳道与重点问题“上选下详”返修后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
 - 本轮 Dashboard 列表下方详情改造后重新执行 `npm run type-check`、`npm run build`、`git diff --check`、`npm run permission-regression` 均通过；权限三态因本地缺少测试 cookie/模式不匹配按脚本规则 SKIP，失败数 0。
 - 审核返修：Dashboard 列表下方详情改为只跟随当前可见项目统计列表，若项目筛选隐藏当前选中项目，则不再继续展示该隐藏项目详情。
@@ -169,7 +177,7 @@
 - 后端候选接口只返回带 `idaas_id` 的候选，检查项 `owners` 写入缺少 `idaas_id` 时返回 400。
 - 本轮 IDaaS 责任人和附件一致性返修后验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`cd li_sicar && source scripts/backend-dev-env.sh && .venv/bin/python manage.py test li_bs_auto_status`（28 tests OK）、`makemigrations --check --dry-run`、`manage.py check`、`git diff --check`。
 - 按 dev-environment-bootstrap 技能重启后端和 3005，`GET http://127.0.0.1:8000/api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。Playwright smoke 因当前包未安装 `playwright` 未执行。
-- 重点问题页从卡片只读改为横向表格选行 + 下方新增/编辑表单；表单覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人/确认人、截止、对策、进展、备注、图片 bucket/key。
+- 重点问题页从卡片只读改为横向表格选行 + 下方新增/编辑表单；表单覆盖阶段、模块、检查项、标题、描述、严重度、状态、供应商、负责人/确认人、截止、对策、进展、备注。图片 bucket/key 用户可见入口已在 2026-05-15 返修中移除，仅保留内部兼容字段。
 - 碰撞一页纸页从多卡片展示改为横向表格选行 + 下方新增/编辑表单；字段覆盖 phase、title、reportDate、status、riskLevel、summary、owner/dueDate 和 content 常用正式字段。
 - 前端 API adapter 新增重点问题与碰撞一页纸 create/update/delete/import/export CSV 方法，保持提交到后端的 snake_case 映射；CSV 导入导出优先走后端专用端点，未提供时用正式 CRUD/List 做前端降级。
 - 只读权限口径保持：页面、筛选和列表可见，新增、保存、删除、导入、导出均按 `canWrite` 禁用。
@@ -203,7 +211,7 @@
 - 附件下载继续通过 `/attachments/{id}/download-link/` 获取受控链接；只读账号或后端 `can_download=false` 时下载按钮禁用。
 - 检查项附件上传保留原有 `/attachments/upload/` 链路；检查项台账与阶段进度页复用同一附件列表预览能力。
 - 重点问题和碰撞一页纸编辑区补齐所选对象附件列表，支持图片预览和按权限下载已有附件。
-- 通用附件列表不再渲染 `objectKey`、bucket 或后端直给 `downloadUrl`；重点问题列表/详情仅显示“已配置”照片状态，图片 Bucket/Key 字段只在 `canWrite` 管理表单内保留。
+- 通用附件列表不再渲染 `objectKey`、bucket 或后端直给 `downloadUrl`；重点问题列表/详情仅显示“已配置”照片状态，图片 Bucket/Key 字段后续已从管理表单移除。
 - `Attachment` 类型与 adapter 兼容 `preview_url`、`can_preview`、`can_download`、`is_image`，并新增 `fetchAttachmentPreview` service。
 
 ### 验证
