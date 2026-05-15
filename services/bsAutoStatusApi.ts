@@ -576,6 +576,7 @@ const normalizeKeyIssue = (input: unknown): KeyIssue => {
     confirmerEmail: firstString(raw, ['confirmerEmail', 'confirmer_email']),
     currentProgress: firstString(raw, ['currentProgress', 'progress_note']) || firstString(metadata, ['currentProgress', 'current_progress']),
     remark: firstString(raw, ['remark']) || firstString(metadata, ['remark']),
+    imageCaptions: asStringRecord(metadata.imageCaptions ?? metadata.image_captions),
     metadata,
     attachments: asArray(raw.attachments).map(normalizeAttachment)
   };
@@ -949,6 +950,7 @@ export type KeyIssueInput = {
   problemPhotoBucketName?: string;
   problemPhotoObjectKey?: string;
   resolution?: string;
+  imageCaptions?: Record<string, string>;
   metadata?: Record<string, unknown>;
 };
 
@@ -1027,7 +1029,8 @@ const serializeKeyIssuePayload = (input: Partial<KeyIssueInput>) => ({
     ...(input.metadata ?? {}),
     countermeasure: input.countermeasure,
     current_progress: input.currentProgress,
-    remark: input.remark
+    remark: input.remark,
+    imageCaptions: input.imageCaptions ?? {}
   }
 });
 

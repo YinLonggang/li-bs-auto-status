@@ -9,10 +9,16 @@
 
 ## 2026-05-15 碰撞一页纸字段级贴图
 
-- 碰撞一页纸输入画布不再依赖单独“插入图片”按钮；各摘要栏位和正文栏位在自身输入框内监听剪贴板图片，用户可直接粘贴截图。
+- 碰撞一页纸输入画布不再依赖单独“插入图片”按钮；各摘要栏位和正文栏位在自身输入框与画布容器监听剪贴板图片，兼容 `clipboardData.files`、`items` 和 HTML/data URL 图片。
 - 字段级贴图上传仍复用 `/attachments/upload/`，对象绑定 `object_type=collision_report`、`object_id=<report.id>`，并在附件 `metadata` 中写入 `collision_slot`、`collision_slot_label`、`caption`、`source=clipboard_paste`。
 - 图片说明以 `content.imageCaptions` 作为报告级字段保存，附件 metadata 中的 caption 作为上传时快照；展示时按 `collision_slot` 把附件归到对应栏位。
-- 新建报告未保存前不能上传附件，前端在输入框粘贴图片时提示先保存，避免产生无业务对象的游离附件。
+- 新建报告填写标题后可在粘贴图片时自动创建报告并绑定附件，避免产生无业务对象的游离附件。
+
+## 2026-05-15 重点问题字段级贴图
+
+- 重点问题编辑区支持在描述、对策、进展和备注输入框内直接粘贴图片；表单容器也会把粘贴图片落到最近聚焦栏位。
+- 重点问题贴图上传复用 `/attachments/upload/`，对象绑定 `object_type=key_issue`、`object_id=<issue.id>`，附件 metadata 写入 `key_issue_slot`、`key_issue_slot_label`、`caption`、`source=clipboard_paste`。
+- 重点问题详情依赖后端返回的 `attachments` 安全列表展示图片预览；图片说明以 `metadata.imageCaptions` 作为问题级字段保存，附件 metadata caption 作为上传快照。
 
 ## 2026-05-13 Dashboard 收口
 

@@ -4060,6 +4060,7 @@ type KeyIssueDraft = {
   remark: string;
   problemPhotoBucketName: string;
   problemPhotoObjectKey: string;
+  imageCaptions: Record<string, string>;
 };
 
 type CollisionDraft = {
@@ -4093,6 +4094,13 @@ type CollisionDraft = {
   approvalSignoff: string;
   imageObjectKey: string;
   imageCaptions: Record<string, string>;
+};
+
+const KEY_ISSUE_FIELD_LABELS: Record<string, string> = {
+  description: '问题描述',
+  countermeasure: '对策',
+  currentProgress: '进展',
+  remark: '备注'
 };
 
 const COLLISION_FIELD_LABELS: Record<string, string> = {
@@ -4129,19 +4137,63 @@ const collisionAttachmentCaption = (attachment: Attachment) => {
   return String(metadata.caption ?? metadata.image_caption ?? '').trim();
 };
 
-const pastedImageFilesFromClipboard = (clipboardData: DataTransfer, fieldKey: string) => {
+const dataUrlToImageFile = async (dataUrl: string, fieldKey: string, index: number) => {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+  if (!match) return null;
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const extension = (match[1].split('/')[1] || 'png').replace('jpeg', 'jpg');
+  return new File([blob], `${fieldKey}-${Date.now()}-${index + 1}.${extension}`, { type: blob.type || match[1] });
+};
+
+const clipboardHasImagePayload = (clipboardData: DataTransfer) =>
+  Array.from(clipboardData.files).some(file => file.type.startsWith('image/')) ||
+  Array.from(clipboardData.items).some(item => item.kind === 'file' && item.type.startsWith('image/')) ||
+  (clipboardData.getData('text/html') || '').includes('data:image/') ||
+  (clipboardData.getData('text/plain') || '').trim().startsWith('data:image/');
+
+const pastedImageFilesFromClipboard = async (clipboardData: DataTransfer, fieldKey: string) => {
   const files: File[] = [];
+  const seen = new Set<string>();
+  const addFile = (file: File | null, index: number) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const fingerprint = `${file.name}:${file.type}:${file.size}`;
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const fileName = file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name)
+      ? file.name
+      : `${fieldKey}-${Date.now()}-${index + 1}.${extension}`;
+    files.push(new File([file], fileName, { type: file.type }));
+  };
+
+  Array.from(clipboardData.files).forEach((file, index) => addFile(file, index));
   Array.from(clipboardData.items).forEach((item, index) => {
     if (item.kind !== 'file' || !item.type.startsWith('image/')) return;
-    const pastedFile = item.getAsFile();
-    if (!pastedFile) return;
-    const extension = item.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
-    const fileName = pastedFile.name && pastedFile.name !== 'image.png'
-      ? pastedFile.name
-      : `${fieldKey}-${Date.now()}-${index + 1}.${extension}`;
-    files.push(new File([pastedFile], fileName, { type: pastedFile.type || item.type }));
+    addFile(item.getAsFile(), index);
   });
+
+  const html = clipboardData.getData('text/html') || '';
+  const plain = clipboardData.getData('text/plain') || '';
+  const dataUrls = [
+    ...Array.from(html.matchAll(/<img[^>]+src=["'](data:image\/[^"']+)["']/gi)).map(match => match[1]),
+    ...(plain.startsWith('data:image/') ? [plain.trim()] : [])
+  ];
+  for (const [index, dataUrl] of dataUrls.entries()) {
+    const file = await dataUrlToImageFile(dataUrl, fieldKey, files.length + index);
+    addFile(file, files.length + index);
+  }
   return files;
+};
+
+const issueAttachmentSlot = (attachment: Attachment) => {
+  const metadata = attachment.metadata ?? {};
+  return String(metadata.key_issue_slot ?? metadata.keyIssueSlot ?? 'description');
+};
+
+const issueAttachmentCaption = (attachment: Attachment) => {
+  const metadata = attachment.metadata ?? {};
+  return String(metadata.caption ?? metadata.image_caption ?? '').trim();
 };
 
 const emptyKeyIssueDraft = (phases: ProjectPhase[]): KeyIssueDraft => ({
@@ -4160,7 +4212,8 @@ const emptyKeyIssueDraft = (phases: ProjectPhase[]): KeyIssueDraft => ({
   currentProgress: '',
   remark: '',
   problemPhotoBucketName: '',
-  problemPhotoObjectKey: ''
+  problemPhotoObjectKey: '',
+  imageCaptions: {}
 });
 
 const keyIssueDraftFromIssue = (issue: KeyIssue | null, phases: ProjectPhase[]): KeyIssueDraft =>
@@ -4181,7 +4234,8 @@ const keyIssueDraftFromIssue = (issue: KeyIssue | null, phases: ProjectPhase[]):
         currentProgress: issue.currentProgress ?? '',
         remark: issue.remark ?? '',
         problemPhotoBucketName: issue.problemPhotoBucketName ?? '',
-        problemPhotoObjectKey: issue.problemPhotoObjectKey ?? ''
+        problemPhotoObjectKey: issue.problemPhotoObjectKey ?? '',
+        imageCaptions: issue.imageCaptions ?? {}
       }
     : emptyKeyIssueDraft(phases);
 
@@ -4266,6 +4320,7 @@ function IssuesCrudView({
   onDeleteIssue,
   onImportCsv,
   onExportCsv,
+  onUploadIssueAttachment,
   onDownloadAttachment,
   onFetchAuditLogs
 }: {
@@ -4275,11 +4330,12 @@ function IssuesCrudView({
   modules: InspectionModule[];
   checkItems: CheckItem[];
   canWrite: boolean;
-  onCreateIssue: (draft: KeyIssueDraft) => Promise<void>;
+  onCreateIssue: (draft: KeyIssueDraft) => Promise<KeyIssue | null>;
   onUpdateIssue: (issue: KeyIssue, draft: KeyIssueDraft) => Promise<void>;
   onDeleteIssue: (issue: KeyIssue) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
+  onUploadIssueAttachment: (issue: KeyIssue, file: File, metadata?: Record<string, unknown>) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onFetchAuditLogs: (issue: KeyIssue) => Promise<AuditLog[]>;
 }) {
@@ -4304,6 +4360,19 @@ function IssuesCrudView({
     return dateRangeMatches(issue.dueDate, issue.dueDate, filters.startDate, filters.endDate);
   });
   const visibleCheckItems = checkItems.filter(item => !draft.projectPhaseId || idOf(item.projectPhaseId) === draft.projectPhaseId);
+  const [activeIssueFieldKey, setActiveIssueFieldKey] = useState('description');
+  const imageAttachments = (selectedIssue?.attachments ?? []).filter(canPreviewAttachment);
+  const attachmentsForField = (fieldKey: string) =>
+    imageAttachments.filter(attachment => issueAttachmentSlot(attachment) === fieldKey);
+  const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
+  const setImageCaptionForField = (fieldKey: string, value: string) =>
+    setDraft({
+      ...draft,
+      imageCaptions: {
+        ...draft.imageCaptions,
+        [fieldKey]: value
+      }
+    });
 
   useEffect(() => {
     if (selectedIssueId !== 'new' && !issues.some(issue => idOf(issue.id) === selectedIssueId)) {
@@ -4344,7 +4413,7 @@ function IssuesCrudView({
     void loadAuditLogs(selectedIssue);
   }, [selectedIssue?.id, selectedIsNew]);
 
-  const runMutation = async (action: () => Promise<void>, successMessage: string) => {
+  const runMutation = async (action: () => Promise<unknown>, successMessage: string) => {
     setSaving(true);
     setMessage('');
     try {
@@ -4364,6 +4433,110 @@ function IssuesCrudView({
     if (!file || !canWrite) return;
     await runMutation(() => onImportCsv(file), '重点问题 CSV 已导入。');
   };
+
+  const ensureIssueForImagePaste = async () => {
+    if (selectedIssue && !selectedIsNew) return selectedIssue;
+    if (!draft.title.trim()) {
+      setMessage('填写标题后可粘贴图片。');
+      return null;
+    }
+    const createdIssue = await onCreateIssue(draft);
+    if (createdIssue) {
+      setSelectedIssueId(idOf(createdIssue.id));
+    }
+    return createdIssue;
+  };
+
+  const handleIssueFieldPaste = async (
+    fieldKey: string,
+    fieldLabel: string,
+    event: ClipboardEvent<HTMLElement>
+  ) => {
+    if (!canWrite || !clipboardHasImagePayload(event.clipboardData)) return;
+    event.preventDefault();
+    const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
+    if (!files.length) return;
+    if (!selectedIssue && !draft.title.trim()) {
+      setMessage('填写标题后可粘贴图片。');
+      return;
+    }
+    await runMutation(
+      async () => {
+        const targetIssue = await ensureIssueForImagePaste();
+        if (!targetIssue) return;
+        for (const file of files) {
+          await onUploadIssueAttachment(targetIssue, file, {
+            key_issue_slot: fieldKey,
+            key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
+            caption: imageCaptionForField(fieldKey),
+            source: 'clipboard_paste'
+          });
+        }
+      },
+      `${fieldLabel}已粘贴 ${files.length} 张图片。`
+    );
+  };
+
+  const renderIssueFieldAssets = (fieldKey: string, fieldLabel: string) => {
+    const fieldAttachments = attachmentsForField(fieldKey);
+    const hasAttachmentCaption = fieldAttachments.some(attachment => issueAttachmentCaption(attachment));
+    const fieldCaption = imageCaptionForField(fieldKey);
+    if (!fieldAttachments.length && !fieldCaption && !hasAttachmentCaption) return null;
+    return (
+      <div className="issue-field-assets">
+        <label>
+          <span>图片说明</span>
+          <input
+            value={fieldCaption}
+            disabled={!canWrite}
+            onChange={event => setImageCaptionForField(fieldKey, event.target.value)}
+            placeholder={`${fieldLabel}图片说明`}
+          />
+        </label>
+        {fieldAttachments.length ? (
+          <AttachmentList
+            attachments={fieldAttachments}
+            canDownload={canWrite}
+            onDownloadAttachment={onDownloadAttachment}
+            emptyMessage="暂无图片"
+          />
+        ) : null}
+        {fieldAttachments.length && hasAttachmentCaption ? (
+          <div className="issue-caption-list">
+            {fieldAttachments.map(attachment => {
+              const caption = issueAttachmentCaption(attachment);
+              return caption ? <p key={attachment.id}>{attachment.fileName}：{caption}</p> : null;
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderIssueTextArea = (
+    fieldKey: string,
+    label: string,
+    value: string,
+    onChange: (value: string) => void
+  ) => (
+    <div className="md:col-span-2">
+      <label>
+        <span className="field-label">{label}</span>
+        <textarea
+          className="input min-h-20"
+          value={value}
+          disabled={!canWrite}
+          onFocus={() => setActiveIssueFieldKey(fieldKey)}
+          onChange={event => onChange(event.target.value)}
+          onPaste={event => {
+            event.stopPropagation();
+            void handleIssueFieldPaste(fieldKey, label, event);
+          }}
+        />
+      </label>
+      {renderIssueFieldAssets(fieldKey, label)}
+    </div>
+  );
 
   return (
     <section className="panel">
@@ -4471,7 +4644,7 @@ function IssuesCrudView({
                     <td><div>{issue.ownerName || '-'}</div><div className="text-xs text-ink-muted">{issue.confirmer || '-'}</div></td>
                     <td>{formatDate(issue.dueDate)}</td>
 	                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
-	                    <td>{issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'}</td>
+	                    <td>{(issue.attachments ?? []).some(canPreviewAttachment) || issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'}</td>
                   </tr>
                 );
               })}
@@ -4479,7 +4652,15 @@ function IssuesCrudView({
           </table>
         </div>
       ) : <div className="mt-4"><EmptyState message="当前筛选下暂无重点问题。" /></div>}
-      <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+      <div
+        className="mt-5 rounded-lg border border-outline bg-surface-soft p-4"
+        onPaste={event => {
+          if (!event.defaultPrevented) {
+            const fieldKey = activeIssueFieldKey || 'description';
+            void handleIssueFieldPaste(fieldKey, KEY_ISSUE_FIELD_LABELS[fieldKey] ?? '问题描述', event);
+          }
+        }}
+      >
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="kicker">{selectedIsNew ? 'Create' : 'Edit'}</p>
@@ -4507,20 +4688,22 @@ function IssuesCrudView({
           <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
           <label><span className="field-label">严重度</span><select className="select" value={draft.severity} disabled={!canWrite} onChange={event => setDraft({ ...draft, severity: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
           <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>{['open', 'in_progress', 'blocked', 'resolved', 'closed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
-          <label className="md:col-span-2 xl:col-span-4"><span className="field-label">描述</span><textarea className="input min-h-20" value={draft.description} disabled={!canWrite} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+          <div className="xl:col-span-4">
+            {renderIssueTextArea('description', '描述', draft.description, value => setDraft({ ...draft, description: value }))}
+          </div>
           <label><span className="field-label">供应商</span><input className="input" value={draft.supplier} disabled={!canWrite} onChange={event => setDraft({ ...draft, supplier: event.target.value })} /></label>
           <label><span className="field-label">负责人</span><input className="input" value={draft.ownerName} disabled={!canWrite} onChange={event => setDraft({ ...draft, ownerName: event.target.value })} /></label>
           <label><span className="field-label">确认人</span><input className="input" value={draft.confirmer} disabled={!canWrite} onChange={event => setDraft({ ...draft, confirmer: event.target.value })} /></label>
           <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">对策</span><textarea className="input min-h-20" value={draft.countermeasure} disabled={!canWrite} onChange={event => setDraft({ ...draft, countermeasure: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">进展</span><textarea className="input min-h-20" value={draft.currentProgress} disabled={!canWrite} onChange={event => setDraft({ ...draft, currentProgress: event.target.value })} /></label>
+          {renderIssueTextArea('countermeasure', '对策', draft.countermeasure, value => setDraft({ ...draft, countermeasure: value }))}
+          {renderIssueTextArea('currentProgress', '进展', draft.currentProgress, value => setDraft({ ...draft, currentProgress: value }))}
           {canWrite ? (
             <>
               <label><span className="field-label">图片 Bucket</span><input className="input" value={draft.problemPhotoBucketName} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoBucketName: event.target.value })} /></label>
               <label><span className="field-label">图片 Key</span><input className="input font-mono" value={draft.problemPhotoObjectKey} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoObjectKey: event.target.value })} /></label>
             </>
           ) : null}
-          <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
+          {renderIssueTextArea('remark', '备注', draft.remark, value => setDraft({ ...draft, remark: value }))}
         </div>
         {!selectedIsNew && selectedIssue ? (
           <div className="mt-5 rounded-lg border border-outline bg-surface p-3">
@@ -4569,7 +4752,7 @@ function CollisionCrudView({
   reports: CollisionReport[];
   phases: ProjectPhase[];
   canWrite: boolean;
-  onCreateReport: (draft: CollisionDraft) => Promise<void>;
+  onCreateReport: (draft: CollisionDraft) => Promise<CollisionReport | null>;
   onUpdateReport: (report: CollisionReport, draft: CollisionDraft) => Promise<void>;
   onDeleteReport: (report: CollisionReport) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
@@ -4601,6 +4784,7 @@ function CollisionCrudView({
     if (!textMatches(filters.keyword, [report.title, report.summary, report.problemDefinition, report.parts, report.vehicleModel, report.responsibilityArea, report.progress, report.owner, report.rootCause, report.correctiveAction])) return false;
     return dateRangeMatches(report.reportDate || report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
   });
+  const [activeCollisionFieldKey, setActiveCollisionFieldKey] = useState('problemDescription');
   const attachmentsForField = (fieldKey: string) =>
     imageAttachments.filter(attachment => collisionAttachmentSlot(attachment) === fieldKey);
   const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
@@ -4652,7 +4836,7 @@ function CollisionCrudView({
     void loadAuditLogs(selectedReport);
   }, [selectedReport?.id, selectedIsNew]);
 
-  const runMutation = async (action: () => Promise<void>, successMessage: string) => {
+  const runMutation = async (action: () => Promise<unknown>, successMessage: string) => {
     setSaving(true);
     setMessage('');
     try {
@@ -4673,22 +4857,38 @@ function CollisionCrudView({
     await runMutation(() => onImportCsv(file), '碰撞一页纸 CSV 已导入。');
   };
 
+  const ensureReportForImagePaste = async () => {
+    if (selectedReport && !selectedIsNew) return selectedReport;
+    if (!draft.title.trim()) {
+      setMessage('填写标题后可粘贴图片。');
+      return null;
+    }
+    const createdReport = await onCreateReport(draft);
+    if (createdReport) {
+      setSelectedReportId(idOf(createdReport.id));
+    }
+    return createdReport;
+  };
+
   const handleCollisionFieldPaste = async (
     fieldKey: string,
     fieldLabel: string,
-    event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>
+    event: ClipboardEvent<HTMLElement>
   ) => {
-    const files = pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
-    if (!files.length || !canWrite) return;
+    if (!canWrite || !clipboardHasImagePayload(event.clipboardData)) return;
     event.preventDefault();
-    if (!selectedReport || selectedIsNew) {
-      setMessage('请先保存碰撞一页纸，再在输入框内粘贴图片。');
+    const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
+    if (!files.length) return;
+    if (!selectedReport && !draft.title.trim()) {
+      setMessage('填写标题后可粘贴图片。');
       return;
     }
     await runMutation(
       async () => {
+        const targetReport = await ensureReportForImagePaste();
+        if (!targetReport) return;
         for (const file of files) {
-          await onUploadReportAttachment(selectedReport, file, {
+          await onUploadReportAttachment(targetReport, file, {
             collision_slot: fieldKey,
             collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
             caption: imageCaptionForField(fieldKey),
@@ -4703,7 +4903,7 @@ function CollisionCrudView({
   const renderCollisionFieldAssets = (fieldKey: string, fieldLabel: string, compact = false) => {
     const fieldAttachments = attachmentsForField(fieldKey);
     const hasLegacyCaption = fieldAttachments.some(attachment => collisionAttachmentCaption(attachment));
-    if (!canWrite && !fieldAttachments.length && !hasLegacyCaption && !imageCaptionForField(fieldKey)) return null;
+    if (!fieldAttachments.length && !hasLegacyCaption && !imageCaptionForField(fieldKey)) return null;
     return (
       <div className={`collision-field-assets ${compact ? 'is-compact' : ''}`}>
         <label>
@@ -4722,9 +4922,7 @@ function CollisionCrudView({
             onDownloadAttachment={onDownloadAttachment}
             emptyMessage="暂无贴图"
           />
-        ) : (
-          <div className="collision-paste-hint">{selectedIsNew ? '保存报告后可在输入框内粘贴图片。' : '在上方输入框内直接粘贴图片。'}</div>
-        )}
+        ) : null}
         {fieldAttachments.length && hasLegacyCaption ? (
           <div className="collision-caption-list">
             {fieldAttachments.map(attachment => {
@@ -4747,7 +4945,11 @@ function CollisionCrudView({
     const inputProps = {
       value,
       disabled: !canWrite,
-      onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => void handleCollisionFieldPaste(fieldKey, label, event)
+      onFocus: () => setActiveCollisionFieldKey(fieldKey),
+      onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        event.stopPropagation();
+        void handleCollisionFieldPaste(fieldKey, label, event);
+      }
     };
     return (
       <label className={`${options.wide ? 'is-wide' : ''} has-paste-assets`}>
@@ -4774,9 +4976,12 @@ function CollisionCrudView({
       <textarea
         value={value}
         disabled={!canWrite}
+        onFocus={() => setActiveCollisionFieldKey(fieldKey)}
         onChange={event => onChange(event.target.value)}
-        onPaste={event => void handleCollisionFieldPaste(fieldKey, label, event)}
-        placeholder="输入文字，也可直接粘贴截图"
+        onPaste={event => {
+          event.stopPropagation();
+          void handleCollisionFieldPaste(fieldKey, label, event);
+        }}
       />
       {renderCollisionFieldAssets(fieldKey, label)}
     </div>
@@ -4885,7 +5090,16 @@ function CollisionCrudView({
           </div>
         </div>
         <div className="collision-sheet-scroll">
-          <div className="collision-sheet" aria-label="碰撞一页纸模板输入区">
+          <div
+            className="collision-sheet"
+            aria-label="碰撞一页纸模板输入区"
+            onPaste={event => {
+              if (!event.defaultPrevented) {
+                const fieldKey = activeCollisionFieldKey || 'problemDescription';
+                void handleCollisionFieldPaste(fieldKey, COLLISION_FIELD_LABELS[fieldKey] ?? '问题描述', event);
+              }
+            }}
+          >
             <label className="collision-title-field">
               <span className="sr-only">报告标题</span>
               <input
@@ -6708,6 +6922,23 @@ export default function App() {
     }
   };
 
+  const handleUploadKeyIssueAttachment = async (issue: KeyIssue, file: File, metadata?: Record<string, unknown>) => {
+    if (!canWrite) return;
+    try {
+      await uploadAttachment({
+        file,
+        projectId: issue.projectId,
+        objectType: 'key_issue',
+        objectId: issue.id,
+        metadata
+      });
+      await loadData(workspace.selectedProject?.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '重点问题图片上传失败'));
+      throw err;
+    }
+  };
+
   const handleUploadCollisionReportAttachment = async (report: CollisionReport, file: File, metadata?: Record<string, unknown>) => {
     if (!canWrite) return;
     try {
@@ -6876,9 +7107,9 @@ export default function App() {
   };
 
   const handleCreateKeyIssue = async (draft: KeyIssueDraft) => {
-    if (!canWrite || !workspace.selectedProject) return;
+    if (!canWrite || !workspace.selectedProject) return null;
     try {
-      await createKeyIssue(workspace.selectedProject.id, {
+      const issue = await createKeyIssue(workspace.selectedProject.id, {
         projectPhaseId: draft.projectPhaseId || null,
         moduleId: draft.moduleId || null,
         checkItemId: draft.checkItemId || null,
@@ -6894,9 +7125,11 @@ export default function App() {
         currentProgress: draft.currentProgress,
         remark: draft.remark,
         problemPhotoBucketName: draft.problemPhotoBucketName,
-        problemPhotoObjectKey: draft.problemPhotoObjectKey
+        problemPhotoObjectKey: draft.problemPhotoObjectKey,
+        imageCaptions: draft.imageCaptions
       });
       await loadData(workspace.selectedProject.id);
+      return issue;
     } catch (err) {
       setError(mutationErrorMessage(err, '重点问题新增失败'));
       throw err;
@@ -6923,6 +7156,7 @@ export default function App() {
         remark: draft.remark,
         problemPhotoBucketName: draft.problemPhotoBucketName,
         problemPhotoObjectKey: draft.problemPhotoObjectKey,
+        imageCaptions: draft.imageCaptions,
         metadata: issue.metadata
       });
       await loadData();
@@ -6966,10 +7200,11 @@ export default function App() {
   };
 
   const handleCreateCollisionReport = async (draft: CollisionDraft) => {
-    if (!canWrite || !workspace.selectedProject) return;
+    if (!canWrite || !workspace.selectedProject) return null;
     try {
-      await createCollisionReport(workspace.selectedProject.id, { ...draft, projectPhaseId: draft.projectPhaseId || null });
+      const report = await createCollisionReport(workspace.selectedProject.id, { ...draft, projectPhaseId: draft.projectPhaseId || null });
       await loadData(workspace.selectedProject.id);
+      return report;
     } catch (err) {
       setError(mutationErrorMessage(err, '碰撞一页纸新增失败'));
       throw err;
@@ -7181,6 +7416,7 @@ export default function App() {
           onDeleteIssue={handleDeleteKeyIssue}
           onImportCsv={handleImportKeyIssues}
           onExportCsv={handleExportKeyIssues}
+          onUploadIssueAttachment={handleUploadKeyIssueAttachment}
           onDownloadAttachment={handleDownloadAttachment}
           onFetchAuditLogs={issue => fetchKeyIssueAuditLogs(issue.id)}
         />

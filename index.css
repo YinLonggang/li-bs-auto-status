@@ -591,6 +591,30 @@
     @apply mt-2 space-y-1 text-xs text-slate-600;
   }
 
+  .issue-field-assets {
+    @apply mt-2 rounded-lg border border-dashed border-outline bg-surface p-2;
+  }
+
+  .issue-field-assets > label {
+    @apply grid gap-1;
+  }
+
+  .issue-field-assets > label > span {
+    @apply text-xs font-semibold text-ink-muted;
+  }
+
+  .issue-field-assets input {
+    @apply min-h-8 w-full rounded border border-outline bg-surface-soft px-2 py-1 text-sm text-ink outline-none focus:border-primary;
+  }
+
+  .issue-field-assets .space-y-2 {
+    @apply mt-2;
+  }
+
+  .issue-caption-list {
+    @apply mt-2 space-y-1 text-xs text-ink-muted;
+  }
+
   .collision-sheet input:disabled,
   .collision-sheet textarea:disabled,
   .collision-sheet select:disabled {

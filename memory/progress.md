@@ -228,3 +228,10 @@
 - 每个栏位下方新增图片说明输入和该栏位图片附件列表，图片按附件 metadata 的 `collision_slot` 归类，继续复用受控图片预览与管理员下载。
 - 新增 `content.imageCaptions` 前端模型与 API adapter 序列化，CSV 降级导出增加 `image_captions` 列。
 - 本轮验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
+### 粘贴体验与重点问题图片返修
+
+- 剪贴板图片解析从单一 `clipboardData.items` 扩展到 `files/items/text-html data:image/text-plain data:image`，粘贴时先识别图片并阻止浏览器默认行为。
+- 碰撞一页纸移除空栏位的粘贴提示，只在图片存在后显示图片说明和预览列表；画布容器可接收粘贴，默认归到最近聚焦栏位。
+- 重点问题编辑区补齐描述、对策、进展、备注字段的直接粘贴图片能力，上传为 `object_type=key_issue` 附件并按栏位展示受控预览。
+- 本轮验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。

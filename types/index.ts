@@ -296,6 +296,7 @@ export type KeyIssue = {
   confirmerEmail?: string;
   currentProgress?: string;
   remark?: string;
+  imageCaptions?: Record<string, string>;
   metadata?: Record<string, unknown>;
   attachments: Attachment[];
 };
