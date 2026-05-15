@@ -181,3 +181,27 @@
 - 模板下载走统一 Blob 下载通道，文件名优先读取后端 `Content-Disposition`，无文件名时兜底为 `collision_one_pager_template.xlsx`。
 - 只读态沿用 `canWrite` 禁用模板下载入口，权限兜底由后端返回 403。
 - 本轮验证：`npm run type-check`、`npm run build`、`npm run permission-regression` 通过，权限三态 cookie 缺失场景按脚本规则 SKIP，失败数 0；后端 `python manage.py test li_bs_auto_status` 通过，35 tests OK；按 dev-environment-bootstrap 重启后端和 3005 后，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
+## 2026-05-15
+
+### 今日目标
+
+- 让检查项、重点问题和碰撞一页纸附件列表支持受控图片预览，避免向普通用户暴露 object key。
+
+### 完成事项
+
+- 新增附件图片 lightbox：图片附件点击“预览”后走 `/attachments/{id}/preview/` Blob 通道展示，支持关闭按钮、遮罩关闭和 ESC。
+- 附件下载继续通过 `/attachments/{id}/download-link/` 获取受控链接；只读账号或后端 `can_download=false` 时下载按钮禁用。
+- 检查项附件上传保留原有 `/attachments/upload/` 链路；检查项台账与阶段进度页复用同一附件列表预览能力。
+- 重点问题和碰撞一页纸编辑区补齐所选对象附件列表，支持图片预览和按权限下载已有附件。
+- 通用附件列表不再渲染 `objectKey`、bucket 或后端直给 `downloadUrl`；重点问题列表/详情仅显示“已配置”照片状态，图片 Bucket/Key 字段只在 `canWrite` 管理表单内保留。
+- `Attachment` 类型与 adapter 兼容 `preview_url`、`can_preview`、`can_download`、`is_image`，并新增 `fetchAttachmentPreview` service。
+
+### 验证
+
+- `npm run type-check` 通过。
+- `git diff --check` 通过。
+
+### 问题与风险
+
+- 图片预览依赖后端 `/attachments/{id}/preview/` 按登录态返回图片 Blob；若后端暂未发布该 endpoint，前端会在 lightbox 内展示加载失败提示。

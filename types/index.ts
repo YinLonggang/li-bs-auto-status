@@ -82,12 +82,21 @@ export type Attachment = {
   id: string | number;
   fileName: string;
   bucketName?: string;
-  objectKey: string;
+  objectKey?: string;
   downloadUrl?: string | null;
+  previewUrl?: string | null;
   contentType?: string;
   fileSize?: number;
   uploadedBy?: string;
   createdAt?: string;
+  canPreview?: boolean;
+  canDownload?: boolean;
+  isImage?: boolean;
+};
+
+export type AttachmentPreview = {
+  blob: Blob;
+  fileName?: string;
 };
 
 export type AuditLog = {

@@ -125,3 +125,11 @@
 - 碰撞一页纸编辑区新增单份 `导出 Excel` 操作，调用 `/collision-reports/{id}/export-excel/` 下载后端生成的 `xlsx` Blob；集合 CSV 导出仍保留项目级批量导出。
 - 碰撞一页纸模块头部新增 `下载模板` 操作，调用 `/collision-reports/template/` 下载同版式、带占位提示的一页纸 Excel 模板；该入口不依赖选中报告或项目。
 - 前端请求层新增 Blob 下载通道，复用既有 IDaaS session、CSRF/错误处理口径，避免把二进制响应交给 JSON 解析。
+
+## 2026-05-15 附件图片预览体验
+
+- 附件列表统一使用受控预览链路：图片附件点击“预览”后调用 `GET /attachments/{id}/preview/` 拉取 Blob，并在前端 lightbox 中展示；不直接暴露对象存储地址。
+- 附件预览层支持关闭按钮、遮罩关闭和 ESC 关闭；预览中的下载按钮继续复用 `/attachments/{id}/download-link/`，按 `canWrite` 与后端 `can_download` 状态禁用。
+- `Attachment` 类型兼容 `preview_url`、`can_preview`、`can_download`、`is_image`，同时仍接收旧 `bucket/object_key` 但普通附件列表不渲染真实 object key。
+- 检查项附件上传保持原链路 `/attachments/upload/`；重点问题和碰撞一页纸编辑区新增所选对象附件列表，可预览图片并按权限下载已有附件。
+- 重点问题列表/详情不再向普通用户展示问题照片 bucket/object key；图片存储字段只在 `canWrite` 管理维护表单内保留。

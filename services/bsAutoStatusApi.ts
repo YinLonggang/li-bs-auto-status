@@ -3,6 +3,7 @@ import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http'
 import type {
   ApiEnvelope,
   Attachment,
+  AttachmentPreview,
   AuditLog,
   CheckItem,
   CheckItemOwner,
@@ -281,10 +282,14 @@ const normalizeAttachment = (input: unknown): Attachment => {
     bucketName: firstString(raw, ['bucketName', 'bucket_name']),
     objectKey: firstString(raw, ['objectKey', 'object_key']),
     downloadUrl: firstString(raw, ['downloadUrl', 'download_url']) || null,
+    previewUrl: firstString(raw, ['previewUrl', 'preview_url']) || null,
     contentType: firstString(raw, ['contentType', 'content_type']),
     fileSize: firstNumber(raw, ['fileSize', 'file_size']),
     uploadedBy: firstString(raw, ['uploadedBy', 'uploaded_by_name']),
-    createdAt: firstString(raw, ['createdAt', 'created_at'])
+    createdAt: firstString(raw, ['createdAt', 'created_at']),
+    canPreview: asBoolean(raw.canPreview, asBoolean(raw.can_preview, true)),
+    canDownload: asBoolean(raw.canDownload, asBoolean(raw.can_download, true)),
+    isImage: asBoolean(raw.isImage, asBoolean(raw.is_image, false))
   };
 };
 
@@ -1563,6 +1568,14 @@ export async function fetchAttachmentDownloadLink(attachmentId: string | number)
   );
   const raw = asRecord(payload);
   return firstString(raw, ['download_url', 'downloadUrl', 'url']);
+}
+
+export async function fetchAttachmentPreview(attachmentId: string | number): Promise<AttachmentPreview> {
+  const result = await apiBlobRequest(`/attachments/${attachmentId}/preview/`);
+  return {
+    blob: result.blob,
+    fileName: result.fileName
+  };
 }
 
 export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {

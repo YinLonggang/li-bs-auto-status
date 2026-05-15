@@ -6,11 +6,12 @@ import {
   CheckCircle2,
   Clock3,
   Download,
-  ExternalLink,
+  Eye,
   Factory as FactoryIcon,
   FileDown,
   FileText,
   Flag,
+  Image as ImageIcon,
   Lock,
   Moon,
   Paperclip,
@@ -47,6 +48,7 @@ import {
   exportCollisionReportsCsv,
   exportKeyIssuesCsv,
   fetchAttachmentDownloadLink,
+  fetchAttachmentPreview,
   fetchCheckItemAuditLogs,
   fetchCollisionReportAuditLogs,
   fetchExportDownloadLink,
@@ -212,6 +214,16 @@ const formatFileSize = (value?: number) => {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 };
+
+const IMAGE_EXTENSION_PATTERN = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+
+const isImageAttachment = (attachment: Attachment) =>
+  attachment.isImage === true ||
+  attachment.contentType?.toLowerCase().startsWith('image/') ||
+  IMAGE_EXTENSION_PATTERN.test(attachment.fileName);
+
+const canPreviewAttachment = (attachment: Attachment) =>
+  attachment.canPreview !== false && isImageAttachment(attachment);
 
 const downloadTextFile = (fileName: string, content: string, type = 'text/csv;charset=utf-8') => {
   const blob = new Blob([content], { type });
@@ -544,13 +556,11 @@ function CheckItemAttachmentPanel({
 }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     setSelectedFile(null);
     setMessage('');
-    setDownloadingId(null);
   }, [item.id]);
 
   const handleUpload = async () => {
@@ -572,22 +582,6 @@ function CheckItemAttachmentPanel({
       setMessage(mutationErrorMessage(err, '附件上传失败。'));
     } finally {
       setUploading(false);
-    }
-  };
-
-  const handleDownload = async (attachment: Attachment) => {
-    if (!canWrite) {
-      setMessage('当前账号没有附件下载权限。');
-      return;
-    }
-    setDownloadingId(attachment.id);
-    setMessage('');
-    try {
-      await onDownloadAttachment(attachment);
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
-    } finally {
-      setDownloadingId(null);
     }
   };
 
@@ -624,28 +618,13 @@ function CheckItemAttachmentPanel({
         </button>
       </div>
       {message ? <div className="mt-2 text-xs text-ink-muted">{message}</div> : null}
-      <div className="mt-4 space-y-2">
-        {item.attachments.length ? item.attachments.map(attachment => (
-          <div key={attachment.id} className="rounded-lg border border-outline bg-surface-soft p-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-ink" title={attachment.fileName}>{attachment.fileName}</div>
-                <div className="mt-1 text-xs text-ink-muted">{formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}</div>
-              </div>
-              <button
-                className="btn btn-ghost btn--sm shrink-0"
-                type="button"
-                disabled={!canWrite || downloadingId === attachment.id}
-                onClick={() => void handleDownload(attachment)}
-                title={!canWrite ? '当前账号没有附件下载权限。' : undefined}
-              >
-                <Download className="h-4 w-4" />
-                {downloadingId === attachment.id ? '获取中' : '下载'}
-              </button>
-            </div>
-            <div className="mt-1 break-all font-mono text-[11px] text-ink-muted">{attachment.objectKey}</div>
-          </div>
-        )) : <div className="rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">当前检查项暂无附件。</div>}
+      <div className="mt-4">
+        <AttachmentList
+          attachments={item.attachments}
+          canDownload={canWrite}
+          onDownloadAttachment={onDownloadAttachment}
+          emptyMessage="当前检查项暂无附件。"
+        />
       </div>
     </div>
   );
@@ -1100,25 +1079,208 @@ function ScopeToolbar({
   );
 }
 
-function AttachmentList({ attachments }: { attachments: CheckItem['attachments'] }) {
-  if (!attachments.length) return <span className="text-xs text-ink-muted">无附件</span>;
+type AttachmentPreviewState = {
+  attachment: Attachment;
+  url?: string;
+  loading: boolean;
+  error?: string;
+};
+
+function AttachmentPreviewModal({
+  state,
+  canDownload,
+  downloading,
+  onClose,
+  onDownload
+}: {
+  state: AttachmentPreviewState | null;
+  canDownload: boolean;
+  downloading: boolean;
+  onClose: () => void;
+  onDownload: (attachment: Attachment) => void;
+}) {
+  useEffect(() => {
+    if (!state) return undefined;
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state, onClose]);
+
+  if (!state) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`预览附件 ${state.attachment.fileName}`}
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-ink" title={state.attachment.fileName}>
+              {state.attachment.fileName}
+            </div>
+            <div className="mt-1 text-xs text-ink-muted">
+              {formatFileSize(state.attachment.fileSize)} · {formatDateTime(state.attachment.createdAt)}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn btn-ghost btn--sm"
+              type="button"
+              disabled={!canDownload || downloading}
+              onClick={() => onDownload(state.attachment)}
+              title={!canDownload ? '当前账号没有附件下载权限。' : undefined}
+            >
+              <Download className="h-4 w-4" />
+              {downloading ? '获取中' : '下载'}
+            </button>
+            <button className="btn btn-ghost btn--sm" type="button" onClick={onClose} aria-label="关闭附件预览">
+              <X className="h-4 w-4" />
+              关闭
+            </button>
+          </div>
+        </div>
+        <div className="flex min-h-[320px] flex-1 items-center justify-center bg-surface-soft p-3 sm:p-5">
+          {state.loading ? <div className="text-sm text-ink-muted">图片加载中...</div> : null}
+          {state.error ? <div className="max-w-md text-center text-sm text-danger">{state.error}</div> : null}
+          {state.url && !state.loading && !state.error ? (
+            <img
+              className="max-h-[76dvh] max-w-full rounded-lg object-contain"
+              src={state.url}
+              alt={state.attachment.fileName}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttachmentList({
+  attachments,
+  canDownload = false,
+  onDownloadAttachment,
+  emptyMessage = '无附件'
+}: {
+  attachments: Attachment[];
+  canDownload?: boolean;
+  onDownloadAttachment?: (attachment: Attachment) => Promise<void>;
+  emptyMessage?: string;
+}) {
+  const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
+  const [message, setMessage] = useState('');
+
+  const closePreview = () => {
+    setPreview(current => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  };
+
+  useEffect(() => () => {
+    if (preview?.url) URL.revokeObjectURL(preview.url);
+  }, [preview?.url]);
+
+  const openPreview = async (attachment: Attachment) => {
+    if (!canPreviewAttachment(attachment)) return;
+    setMessage('');
+    closePreview();
+    setPreview({ attachment, loading: true });
+    try {
+      const result = await fetchAttachmentPreview(attachment.id);
+      const url = URL.createObjectURL(result.blob);
+      setPreview({ attachment, url, loading: false });
+    } catch (err) {
+      setPreview({
+        attachment,
+        loading: false,
+        error: mutationErrorMessage(err, '附件预览加载失败。')
+      });
+    }
+  };
+
+  const handleDownload = async (attachment: Attachment) => {
+    if (!onDownloadAttachment || !canDownload || attachment.canDownload === false) {
+      setMessage('当前账号没有附件下载权限。');
+      return;
+    }
+    setDownloadingId(attachment.id);
+    setMessage('');
+    try {
+      await onDownloadAttachment(attachment);
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  if (!attachments.length) {
+    return (
+      <div className="rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">
+        {emptyMessage}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2">
       {attachments.map(attachment => (
         <div key={attachment.id} className="rounded-lg border border-outline bg-surface-soft p-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-semibold text-ink">{attachment.fileName}</span>
-            {attachment.downloadUrl ? (
-              <a className="chip hover:text-primary" href={attachment.downloadUrl}>
-                <ExternalLink className="h-3.5 w-3.5" />
-                download_url
-              </a>
-            ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              {isImageAttachment(attachment) ? (
+                <ImageIcon className="h-4 w-4 shrink-0 text-accent" />
+              ) : (
+                <FileText className="h-4 w-4 shrink-0 text-ink-muted" />
+              )}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-ink" title={attachment.fileName}>{attachment.fileName}</div>
+                <div className="mt-1 text-xs text-ink-muted">{formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {canPreviewAttachment(attachment) ? (
+                <button className="btn btn-secondary btn--sm" type="button" onClick={() => void openPreview(attachment)}>
+                  <Eye className="h-4 w-4" />
+                  预览
+                </button>
+              ) : null}
+              {onDownloadAttachment ? (
+                <button
+                  className="btn btn-ghost btn--sm"
+                  type="button"
+                  disabled={!canDownload || attachment.canDownload === false || downloadingId === attachment.id}
+                  onClick={() => void handleDownload(attachment)}
+                  title={!canDownload || attachment.canDownload === false ? '当前账号没有附件下载权限。' : undefined}
+                >
+                  <Download className="h-4 w-4" />
+                  {downloadingId === attachment.id ? '获取中' : '下载'}
+                </button>
+              ) : null}
+            </div>
           </div>
-          <div className="mt-1 break-all font-mono text-[11px] text-ink-muted">{attachment.objectKey}</div>
-          {attachment.bucketName ? <div className="mt-1 text-[11px] text-ink-subtle">bucket: {attachment.bucketName}</div> : null}
         </div>
       ))}
+      {message ? <div className="text-xs text-ink-muted">{message}</div> : null}
+      <AttachmentPreviewModal
+        state={preview}
+        canDownload={!!onDownloadAttachment && canDownload && preview?.attachment.canDownload !== false}
+        downloading={preview ? downloadingId === preview.attachment.id : false}
+        onClose={closePreview}
+        onDownload={attachment => void handleDownload(attachment)}
+      />
     </div>
   );
 }
@@ -2287,9 +2449,9 @@ function KeyIssueTable({ issues }: { issues: KeyIssue[] }) {
                     <td className="max-w-[260px]">{issue.description || issue.title}</td>
                     <td>
                       {issue.problemPhotoObjectKey || issue.problemPhoto ? (
-                        <span className="chip max-w-[220px] truncate" title={[issue.problemPhotoBucketName, issue.problemPhotoObjectKey || issue.problemPhoto].filter(Boolean).join('/')}>
-                          <FileText className="h-3.5 w-3.5" />
-                          {issue.problemPhotoObjectKey || issue.problemPhoto}
+                        <span className="chip">
+                          <ImageIcon className="h-3.5 w-3.5" />
+                          已配置
                         </span>
                       ) : '-'}
                     </td>
@@ -2337,7 +2499,6 @@ function DetailField({ label, value, mono = false }: { label: string; value: str
 }
 
 function KeyIssueDetail({ issue }: { issue: KeyIssue }) {
-  const photoObjectKey = issue.problemPhotoObjectKey || issue.problemPhoto;
   return (
     <article className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2352,8 +2513,7 @@ function KeyIssueDetail({ issue }: { issue: KeyIssue }) {
         </div>
       </div>
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
-        <DetailField label="问题照片 bucket" value={issue.problemPhotoBucketName || '-'} />
-        <DetailField label="问题照片 object key" value={photoObjectKey || '-'} mono />
+        <DetailField label="问题照片" value={issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'} />
         <DetailField label="整改完成时间" value={formatDate(issue.dueDate)} />
         <DetailField label="供应商" value={issue.supplier || '-'} />
         <DetailField label="责任人" value={issue.ownerName || '未设置'} />
@@ -4038,6 +4198,7 @@ function IssuesCrudView({
   onDeleteIssue,
   onImportCsv,
   onExportCsv,
+  onDownloadAttachment,
   onFetchAuditLogs
 }: {
   project: Project | null;
@@ -4051,6 +4212,7 @@ function IssuesCrudView({
   onDeleteIssue: (issue: KeyIssue) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
+  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onFetchAuditLogs: (issue: KeyIssue) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -4216,8 +4378,8 @@ function IssuesCrudView({
                 <th>供应商</th>
                 <th>负责人/确认人</th>
                 <th>截止</th>
-                <th>进展</th>
-                <th>图片 Key</th>
+	                <th>进展</th>
+	                <th>照片</th>
               </tr>
             </thead>
             <tbody>
@@ -4240,8 +4402,8 @@ function IssuesCrudView({
                     <td>{issue.supplier || '-'}</td>
                     <td><div>{issue.ownerName || '-'}</div><div className="text-xs text-ink-muted">{issue.confirmer || '-'}</div></td>
                     <td>{formatDate(issue.dueDate)}</td>
-                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
-                    <td className="max-w-[220px] font-mono text-xs">{issue.problemPhotoObjectKey || '-'}</td>
+	                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
+	                    <td>{issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'}</td>
                   </tr>
                 );
               })}
@@ -4284,10 +4446,27 @@ function IssuesCrudView({
           <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
           <label className="md:col-span-2"><span className="field-label">对策</span><textarea className="input min-h-20" value={draft.countermeasure} disabled={!canWrite} onChange={event => setDraft({ ...draft, countermeasure: event.target.value })} /></label>
           <label className="md:col-span-2"><span className="field-label">进展</span><textarea className="input min-h-20" value={draft.currentProgress} disabled={!canWrite} onChange={event => setDraft({ ...draft, currentProgress: event.target.value })} /></label>
-          <label><span className="field-label">图片 Bucket</span><input className="input" value={draft.problemPhotoBucketName} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoBucketName: event.target.value })} /></label>
-          <label><span className="field-label">图片 Key</span><input className="input font-mono" value={draft.problemPhotoObjectKey} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoObjectKey: event.target.value })} /></label>
+          {canWrite ? (
+            <>
+              <label><span className="field-label">图片 Bucket</span><input className="input" value={draft.problemPhotoBucketName} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoBucketName: event.target.value })} /></label>
+              <label><span className="field-label">图片 Key</span><input className="input font-mono" value={draft.problemPhotoObjectKey} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemPhotoObjectKey: event.target.value })} /></label>
+            </>
+          ) : null}
           <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
         </div>
+        {!selectedIsNew && selectedIssue ? (
+          <div className="mt-5 rounded-lg border border-outline bg-surface p-3">
+            <div className="text-xs font-semibold text-ink-muted">附件列表</div>
+            <div className="mt-2">
+              <AttachmentList
+                attachments={selectedIssue.attachments}
+                canDownload={canWrite}
+                onDownloadAttachment={onDownloadAttachment}
+                emptyMessage="当前重点问题暂无附件。"
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="mt-5">
         <AuditHistoryPanel
@@ -4314,6 +4493,7 @@ function CollisionCrudView({
   onExportCsv,
   onDownloadTemplate,
   onExportExcel,
+  onDownloadAttachment,
   onFetchAuditLogs
 }: {
   project: Project | null;
@@ -4327,6 +4507,7 @@ function CollisionCrudView({
   onExportCsv: () => Promise<void>;
   onDownloadTemplate: () => Promise<void>;
   onExportExcel: (report: CollisionReport) => Promise<void>;
+  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -4539,6 +4720,19 @@ function CollisionCrudView({
           <label className="md:col-span-2"><span className="field-label">签核槽位</span><input className="input" value={draft.approvalSignoff} disabled={!canWrite} onChange={event => setDraft({ ...draft, approvalSignoff: event.target.value })} /></label>
           <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
         </div>
+        {!selectedIsNew && selectedReport ? (
+          <div className="mt-5 rounded-lg border border-outline bg-surface p-3">
+            <div className="text-xs font-semibold text-ink-muted">附件列表</div>
+            <div className="mt-2">
+              <AttachmentList
+                attachments={selectedReport.attachments}
+                canDownload={canWrite}
+                onDownloadAttachment={onDownloadAttachment}
+                emptyMessage="当前一页纸暂无附件。"
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="mt-5">
         <AuditHistoryPanel
@@ -6531,6 +6725,7 @@ export default function App() {
           onDeleteIssue={handleDeleteKeyIssue}
           onImportCsv={handleImportKeyIssues}
           onExportCsv={handleExportKeyIssues}
+          onDownloadAttachment={handleDownloadAttachment}
           onFetchAuditLogs={issue => fetchKeyIssueAuditLogs(issue.id)}
         />
       );
@@ -6549,6 +6744,7 @@ export default function App() {
           onExportCsv={handleExportCollisionReports}
           onDownloadTemplate={handleDownloadCollisionReportTemplate}
           onExportExcel={handleExportCollisionReportExcel}
+          onDownloadAttachment={handleDownloadAttachment}
           onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
         />
       );
