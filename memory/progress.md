@@ -214,3 +214,17 @@
 ### 问题与风险
 
 - 图片预览依赖后端 `/attachments/{id}/preview/` 按登录态返回图片 Blob；若后端暂未发布该 endpoint，前端会在 lightbox 内展示加载失败提示。
+
+### 碰撞一页纸输入界面 Excel 对齐
+
+- 碰撞一页纸编辑区改为白底纸面式输入画布，布局对齐导出的 Excel：标题、品牌区、三行元信息、问题定义摘要表、双栏正文、现场图片/附件、诊断维修、制定措施和所需支持。
+- 新增正式字段输入：信息来源、过程分析、根因结论和图片对象引用；API adapter 同步序列化到 `content/metadata`，CSV 降级导入导出也补齐对应列。
+- 在现场图片区新增“插入图片”入口，保存后的报告可直接上传图片附件，上传使用 `object_type=collision_report` 并复用受控预览/下载组件。
+- 本轮验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启后端和 3005，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
+### 碰撞一页纸字段级粘贴贴图
+
+- 一页纸摘要栏位、正文栏位和补充栏位均支持在输入框内直接粘贴剪贴板图片，不再要求用户点击上传按钮。
+- 每个栏位下方新增图片说明输入和该栏位图片附件列表，图片按附件 metadata 的 `collision_slot` 归类，继续复用受控图片预览与管理员下载。
+- 新增 `content.imageCaptions` 前端模型与 API adapter 序列化，CSV 降级导出增加 `image_captions` 列。
+- 本轮验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。

@@ -7,6 +7,13 @@
 - 密码字段写入时前端只提交非空值，留空保留后端原密码；读取接口只返回 `passwordSet`，不回传真实密码。
 - PLC 的共享盘配置仍由 `li_sicar_plc` 工厂/车间模型维护，Auto Status 仅消费通用共享存储 profile。
 
+## 2026-05-15 碰撞一页纸字段级贴图
+
+- 碰撞一页纸输入画布不再依赖单独“插入图片”按钮；各摘要栏位和正文栏位在自身输入框内监听剪贴板图片，用户可直接粘贴截图。
+- 字段级贴图上传仍复用 `/attachments/upload/`，对象绑定 `object_type=collision_report`、`object_id=<report.id>`，并在附件 `metadata` 中写入 `collision_slot`、`collision_slot_label`、`caption`、`source=clipboard_paste`。
+- 图片说明以 `content.imageCaptions` 作为报告级字段保存，附件 metadata 中的 caption 作为上传时快照；展示时按 `collision_slot` 把附件归到对应栏位。
+- 新建报告未保存前不能上传附件，前端在输入框粘贴图片时提示先保存，避免产生无业务对象的游离附件。
+
 ## 2026-05-13 Dashboard 收口
 
 - 默认入口为 `dashboard`，首屏承载项目选择、总完成率、导出入口、层级筛选、阶段轨道、检查模块泳道、检查项详情、重点问题表、碰撞一页纸、签核状态和附件入口。
@@ -140,3 +147,10 @@
 - `Attachment` 类型兼容 `preview_url`、`can_preview`、`can_download`、`is_image`，同时仍接收旧 `bucket/object_key` 但普通附件列表不渲染真实 object key。
 - 检查项附件上传保持原链路 `/attachments/upload/`；重点问题和碰撞一页纸编辑区新增所选对象附件列表，可预览图片并按权限下载已有附件。
 - 重点问题列表/详情不再向普通用户展示问题照片 bucket/object key；图片存储字段只在 `canWrite` 管理维护表单内保留。
+
+## 2026-05-15 碰撞一页纸 Excel 对齐输入画布
+
+- 碰撞一页纸维护区从普通表单升级为贴近导出 Excel 的白底纸面画布：顶部标题、品牌区、编制/状态/提出日期、问题定义横向摘要表、左右双栏正文和“1/2/3/4/5”分区与导出版式一致。
+- 输入字段补齐 `source`、`processAnalysis`、`rootCauseConclusion`、`imageObjectKey`，保持写入 `content/metadata`，不改变后端模型结构。
+- 所选一页纸支持在画布“现场图片 / 附件”区域直接插入图片，上传对象固定为 `object_type=collision_report`、`object_id=<report.id>`；新增报告需先保存再插图。
+- 图片预览、下载继续复用受控附件组件，普通页面不暴露 SMB/object key。

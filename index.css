@@ -402,4 +402,217 @@
   .project-context-controls {
     @apply flex min-w-0 flex-1 flex-wrap items-end justify-end gap-3;
   }
+
+  .collision-sheet-scroll {
+    @apply w-full overflow-x-auto rounded-lg border border-outline bg-surface p-2;
+  }
+
+  .collision-sheet {
+    @apply mx-auto grid w-full min-w-[980px] max-w-[1180px] gap-0 bg-white p-5 text-slate-950 shadow-card;
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+  }
+
+  .collision-title-field {
+    @apply mb-5 block;
+  }
+
+  .collision-title-field input {
+    @apply h-12 w-full border-0 bg-transparent text-center text-2xl font-bold text-slate-950 outline-none;
+  }
+
+  .collision-title-field input::placeholder {
+    @apply text-slate-400;
+  }
+
+  .collision-sheet-head {
+    @apply grid border border-slate-400;
+    grid-template-columns: 180px 1fr 230px;
+  }
+
+  .collision-brand-cell,
+  .collision-report-title,
+  .collision-meta-table {
+    @apply border-slate-400;
+  }
+
+  .collision-brand-cell {
+    @apply flex min-h-24 flex-col items-center justify-center border-r text-center;
+  }
+
+  .collision-brand-cell strong {
+    @apply text-xl font-bold tracking-normal text-black;
+  }
+
+  .collision-brand-cell span {
+    @apply mt-1 text-xl font-semibold text-slate-950;
+  }
+
+  .collision-report-title {
+    @apply flex items-center justify-center border-r text-2xl font-bold text-slate-950;
+  }
+
+  .collision-meta-table {
+    @apply grid;
+  }
+
+  .collision-meta-table label {
+    @apply grid min-h-8 border-b border-slate-400 last:border-b-0;
+    grid-template-columns: 90px 1fr;
+  }
+
+  .collision-meta-table span {
+    @apply flex items-center justify-center border-r border-slate-400 bg-slate-50 text-sm font-semibold text-slate-900;
+  }
+
+  .collision-meta-table input,
+  .collision-meta-table select,
+  .collision-summary-table input,
+  .collision-summary-table textarea,
+  .collision-inline-fields input,
+  .collision-field input,
+  .collision-field textarea {
+    @apply min-h-9 w-full border-0 bg-transparent px-2 py-1 text-sm text-slate-950 outline-none;
+  }
+
+  .collision-meta-table select {
+    @apply cursor-pointer;
+  }
+
+  .collision-summary-table {
+    @apply grid border-x border-b border-slate-400;
+    grid-template-columns: 2fr repeat(7, minmax(92px, 1fr));
+  }
+
+  .collision-summary-table label {
+    @apply grid min-h-24 border-r border-slate-400 last:border-r-0;
+    grid-template-rows: 34px minmax(42px, 1fr) auto;
+  }
+
+  .collision-summary-table label.is-wide {
+    @apply min-w-[220px];
+  }
+
+  .collision-summary-table > label > span {
+    @apply flex items-center justify-center bg-teal-700 px-2 text-center text-sm font-semibold text-white;
+  }
+
+  .collision-summary-table textarea {
+    @apply resize-none text-center;
+  }
+
+  .collision-summary-table input {
+    @apply text-center;
+  }
+
+  .collision-sheet-toolbar {
+    @apply my-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 lg:grid-cols-3;
+  }
+
+  .collision-body-grid {
+    @apply grid border-l border-t border-slate-400;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .collision-section {
+    @apply grid min-h-48 border-b border-r border-slate-400 bg-white;
+  }
+
+  .collision-section h4 {
+    @apply flex min-h-10 items-center bg-teal-700 px-3 text-base font-bold text-white;
+  }
+
+  .collision-field {
+    @apply grid border-t border-slate-300;
+  }
+
+  .collision-field > span,
+  .collision-field-title {
+    @apply px-3 py-2 text-sm font-bold text-slate-950;
+  }
+
+  .collision-field textarea {
+    @apply min-h-24 resize-y leading-relaxed;
+  }
+
+  .collision-field.is-large textarea {
+    @apply min-h-72;
+  }
+
+  .collision-image-slot {
+    @apply min-h-72 border-t border-slate-300 bg-slate-50 p-3;
+  }
+
+  .collision-image-slot p {
+    @apply mt-1 text-xs text-slate-500;
+  }
+
+  .collision-inline-fields {
+    @apply grid gap-0 border-t border-slate-300 md:grid-cols-3;
+  }
+
+  .collision-inline-fields label {
+    @apply grid border-b border-slate-300 md:border-b-0 md:border-r md:last:border-r-0;
+    grid-template-rows: 32px 1fr;
+  }
+
+  .collision-inline-fields > label > span {
+    @apply flex items-center justify-center bg-slate-50 text-xs font-semibold text-slate-700;
+  }
+
+  .collision-field-assets {
+    @apply border-t border-dashed border-slate-300 bg-slate-50/80 p-2;
+  }
+
+  .collision-field-assets.is-compact {
+    @apply px-2 py-1;
+  }
+
+  .collision-field-assets > label {
+    @apply grid gap-1;
+  }
+
+  .collision-field-assets > label > span {
+    @apply text-xs font-semibold text-slate-600;
+  }
+
+  .collision-field-assets input {
+    @apply min-h-8 w-full rounded border border-slate-200 bg-white px-2 py-1 text-left text-xs text-slate-900 outline-none focus:border-teal-600;
+  }
+
+  .collision-field-assets .space-y-2 {
+    @apply mt-2;
+  }
+
+  .collision-paste-hint {
+    @apply mt-2 rounded border border-dashed border-slate-300 bg-white px-2 py-2 text-center text-xs text-slate-500;
+  }
+
+  .collision-caption-list {
+    @apply mt-2 space-y-1 text-xs text-slate-600;
+  }
+
+  .collision-sheet input:disabled,
+  .collision-sheet textarea:disabled,
+  .collision-sheet select:disabled {
+    @apply cursor-not-allowed opacity-70;
+  }
+
+  @media (max-width: 900px) {
+    .collision-sheet {
+      @apply min-w-0 p-3;
+    }
+
+    .collision-sheet-head,
+    .collision-summary-table,
+    .collision-body-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .collision-brand-cell,
+    .collision-report-title,
+    .collision-meta-table,
+    .collision-summary-table label {
+      @apply border-r-0;
+    }
+  }
 }

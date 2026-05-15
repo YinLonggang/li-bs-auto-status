@@ -92,6 +92,7 @@ export type Attachment = {
   canPreview?: boolean;
   canDownload?: boolean;
   isImage?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type AttachmentPreview = {
@@ -317,18 +318,23 @@ export type CollisionReport = {
   responsibilityArea?: string;
   progress?: string;
   remark?: string;
+  source?: string;
   problemDescription?: string;
   diagnosisRepair?: string;
+  processAnalysis?: string;
   supportNeeded?: string;
   impact: string;
   containment: string;
   rootCause: string;
+  rootCauseConclusion?: string;
   correctiveAction: string;
   preventiveAction: string;
   validation: string;
   owner: string;
   dueDate: string;
   approvalSignoff: string;
+  imageObjectKey?: string;
+  imageCaptions?: Record<string, string>;
   metadata?: Record<string, unknown>;
   attachments: Attachment[];
   updatedAt: string;

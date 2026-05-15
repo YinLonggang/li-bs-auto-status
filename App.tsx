@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -4078,16 +4078,70 @@ type CollisionDraft = {
   responsibilityArea: string;
   progress: string;
   remark: string;
+  source: string;
   problemDescription: string;
   diagnosisRepair: string;
+  processAnalysis: string;
   supportNeeded: string;
   impact: string;
   containment: string;
   rootCause: string;
+  rootCauseConclusion: string;
   correctiveAction: string;
   preventiveAction: string;
   validation: string;
   approvalSignoff: string;
+  imageObjectKey: string;
+  imageCaptions: Record<string, string>;
+};
+
+const COLLISION_FIELD_LABELS: Record<string, string> = {
+  problemDefinition: '问题定义',
+  parts: '涉及零件',
+  vehicleModel: '车型 / 涉及车辆',
+  failureFrequency: '故障频次',
+  responsibilityArea: '责任区域',
+  progress: '问题进展',
+  remark: '备注',
+  source: '信息来源',
+  problemDescription: '失效模式&工况',
+  diagnosisRepair: '诊断维修',
+  processAnalysis: '过程分析',
+  summary: '摘要',
+  rootCauseConclusion: '根本原因',
+  containment: '临时/拦截措施',
+  correctiveAction: '长期措施/追溯',
+  impact: '影响',
+  preventiveAction: '预防',
+  validation: '验证',
+  approvalSignoff: '备注 / 签核',
+  supportNeeded: '所需支持',
+  imageObjectKey: '图片对象引用'
+};
+
+const collisionAttachmentSlot = (attachment: Attachment) => {
+  const metadata = attachment.metadata ?? {};
+  return String(metadata.collision_slot ?? metadata.collisionSlot ?? 'problemDescription');
+};
+
+const collisionAttachmentCaption = (attachment: Attachment) => {
+  const metadata = attachment.metadata ?? {};
+  return String(metadata.caption ?? metadata.image_caption ?? '').trim();
+};
+
+const pastedImageFilesFromClipboard = (clipboardData: DataTransfer, fieldKey: string) => {
+  const files: File[] = [];
+  Array.from(clipboardData.items).forEach((item, index) => {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) return;
+    const pastedFile = item.getAsFile();
+    if (!pastedFile) return;
+    const extension = item.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const fileName = pastedFile.name && pastedFile.name !== 'image.png'
+      ? pastedFile.name
+      : `${fieldKey}-${Date.now()}-${index + 1}.${extension}`;
+    files.push(new File([pastedFile], fileName, { type: pastedFile.type || item.type }));
+  });
+  return files;
 };
 
 const emptyKeyIssueDraft = (phases: ProjectPhase[]): KeyIssueDraft => ({
@@ -4147,16 +4201,21 @@ const emptyCollisionDraft = (phases: ProjectPhase[]): CollisionDraft => ({
   responsibilityArea: '',
   progress: '',
   remark: '',
+  source: '',
   problemDescription: '',
   diagnosisRepair: '',
+  processAnalysis: '',
   supportNeeded: '',
   impact: '',
   containment: '',
   rootCause: '',
+  rootCauseConclusion: '',
   correctiveAction: '',
   preventiveAction: '',
   validation: '',
-  approvalSignoff: ''
+  approvalSignoff: '',
+  imageObjectKey: '',
+  imageCaptions: {}
 });
 
 const collisionDraftFromReport = (report: CollisionReport | null, phases: ProjectPhase[]): CollisionDraft =>
@@ -4177,16 +4236,21 @@ const collisionDraftFromReport = (report: CollisionReport | null, phases: Projec
         responsibilityArea: report.responsibilityArea ?? '',
         progress: report.progress ?? '',
         remark: report.remark ?? '',
+        source: report.source ?? '',
         problemDescription: report.problemDescription ?? '',
         diagnosisRepair: report.diagnosisRepair ?? '',
+        processAnalysis: report.processAnalysis ?? '',
         supportNeeded: report.supportNeeded ?? '',
         impact: report.impact ?? '',
         containment: report.containment ?? '',
         rootCause: report.rootCause ?? '',
+        rootCauseConclusion: report.rootCauseConclusion ?? '',
         correctiveAction: report.correctiveAction ?? '',
         preventiveAction: report.preventiveAction ?? '',
         validation: report.validation ?? '',
-        approvalSignoff: report.approvalSignoff ?? ''
+        approvalSignoff: report.approvalSignoff ?? '',
+        imageObjectKey: report.imageObjectKey ?? '',
+        imageCaptions: report.imageCaptions ?? {}
       }
     : emptyCollisionDraft(phases);
 
@@ -4497,6 +4561,7 @@ function CollisionCrudView({
   onExportCsv,
   onDownloadTemplate,
   onExportExcel,
+  onUploadReportAttachment,
   onDownloadAttachment,
   onFetchAuditLogs
 }: {
@@ -4511,6 +4576,7 @@ function CollisionCrudView({
   onExportCsv: () => Promise<void>;
   onDownloadTemplate: () => Promise<void>;
   onExportExcel: (report: CollisionReport) => Promise<void>;
+  onUploadReportAttachment: (report: CollisionReport, file: File, metadata?: Record<string, unknown>) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
@@ -4526,6 +4592,7 @@ function CollisionCrudView({
   const selectedIsNew = selectedReportId === 'new' || !selectedReport;
   const statusOptions = statusOptionValues(reports.map(report => report.status));
   const riskOptions = statusOptionValues(reports.map(report => report.riskLevel));
+  const imageAttachments = (selectedReport?.attachments ?? []).filter(canPreviewAttachment);
   const filteredReports = reports.filter(report => {
     if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
     if (filters.status && report.status !== filters.status) return false;
@@ -4534,6 +4601,17 @@ function CollisionCrudView({
     if (!textMatches(filters.keyword, [report.title, report.summary, report.problemDefinition, report.parts, report.vehicleModel, report.responsibilityArea, report.progress, report.owner, report.rootCause, report.correctiveAction])) return false;
     return dateRangeMatches(report.reportDate || report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
   });
+  const attachmentsForField = (fieldKey: string) =>
+    imageAttachments.filter(attachment => collisionAttachmentSlot(attachment) === fieldKey);
+  const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
+  const setImageCaptionForField = (fieldKey: string, value: string) =>
+    setDraft({
+      ...draft,
+      imageCaptions: {
+        ...draft.imageCaptions,
+        [fieldKey]: value
+      }
+    });
 
   useEffect(() => {
     if (selectedReportId !== 'new' && !reports.some(report => idOf(report.id) === selectedReportId)) {
@@ -4594,6 +4672,115 @@ function CollisionCrudView({
     if (!file || !canWrite) return;
     await runMutation(() => onImportCsv(file), '碰撞一页纸 CSV 已导入。');
   };
+
+  const handleCollisionFieldPaste = async (
+    fieldKey: string,
+    fieldLabel: string,
+    event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    const files = pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
+    if (!files.length || !canWrite) return;
+    event.preventDefault();
+    if (!selectedReport || selectedIsNew) {
+      setMessage('请先保存碰撞一页纸，再在输入框内粘贴图片。');
+      return;
+    }
+    await runMutation(
+      async () => {
+        for (const file of files) {
+          await onUploadReportAttachment(selectedReport, file, {
+            collision_slot: fieldKey,
+            collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
+            caption: imageCaptionForField(fieldKey),
+            source: 'clipboard_paste'
+          });
+        }
+      },
+      `${fieldLabel}已粘贴 ${files.length} 张图片。`
+    );
+  };
+
+  const renderCollisionFieldAssets = (fieldKey: string, fieldLabel: string, compact = false) => {
+    const fieldAttachments = attachmentsForField(fieldKey);
+    const hasLegacyCaption = fieldAttachments.some(attachment => collisionAttachmentCaption(attachment));
+    if (!canWrite && !fieldAttachments.length && !hasLegacyCaption && !imageCaptionForField(fieldKey)) return null;
+    return (
+      <div className={`collision-field-assets ${compact ? 'is-compact' : ''}`}>
+        <label>
+          <span>图片说明</span>
+          <input
+            value={imageCaptionForField(fieldKey)}
+            disabled={!canWrite}
+            onChange={event => setImageCaptionForField(fieldKey, event.target.value)}
+            placeholder={`${fieldLabel}图片说明`}
+          />
+        </label>
+        {fieldAttachments.length ? (
+          <AttachmentList
+            attachments={fieldAttachments}
+            canDownload={canWrite}
+            onDownloadAttachment={onDownloadAttachment}
+            emptyMessage="暂无贴图"
+          />
+        ) : (
+          <div className="collision-paste-hint">{selectedIsNew ? '保存报告后可在输入框内粘贴图片。' : '在上方输入框内直接粘贴图片。'}</div>
+        )}
+        {fieldAttachments.length && hasLegacyCaption ? (
+          <div className="collision-caption-list">
+            {fieldAttachments.map(attachment => {
+              const caption = collisionAttachmentCaption(attachment);
+              return caption ? <p key={attachment.id}>{attachment.fileName}：{caption}</p> : null;
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderSummaryField = (
+    fieldKey: string,
+    label: string,
+    value: string,
+    onChange: (value: string) => void,
+    options: { wide?: boolean; multiline?: boolean } = {}
+  ) => {
+    const inputProps = {
+      value,
+      disabled: !canWrite,
+      onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => void handleCollisionFieldPaste(fieldKey, label, event)
+    };
+    return (
+      <label className={`${options.wide ? 'is-wide' : ''} has-paste-assets`}>
+        <span>{label}</span>
+        {options.multiline ? (
+          <textarea {...inputProps} onChange={event => onChange(event.target.value)} />
+        ) : (
+          <input {...inputProps} onChange={event => onChange(event.target.value)} />
+        )}
+        {renderCollisionFieldAssets(fieldKey, label, true)}
+      </label>
+    );
+  };
+
+  const renderBodyField = (
+    fieldKey: string,
+    label: string,
+    value: string,
+    onChange: (value: string) => void,
+    options: { large?: boolean } = {}
+  ) => (
+    <div className={`collision-field ${options.large ? 'is-large' : ''}`}>
+      <span>{label}</span>
+      <textarea
+        value={value}
+        disabled={!canWrite}
+        onChange={event => onChange(event.target.value)}
+        onPaste={event => void handleCollisionFieldPaste(fieldKey, label, event)}
+        placeholder="输入文字，也可直接粘贴截图"
+      />
+      {renderCollisionFieldAssets(fieldKey, label)}
+    </div>
+  );
 
   return (
     <section className="panel">
@@ -4697,46 +4884,103 @@ function CollisionCrudView({
             }}><Trash2 className="h-4 w-4" />删除</button>
           </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label><span className="field-label">阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
-          <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label><span className="field-label">报告日期</span><input className="input" type="date" value={draft.reportDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, reportDate: event.target.value })} /></label>
-          <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>{['draft', 'pending', 'approved', 'rejected', 'signed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
-          <label><span className="field-label">风险等级</span><select className="select" value={draft.riskLevel} disabled={!canWrite} onChange={event => setDraft({ ...draft, riskLevel: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
-          <label><span className="field-label">负责人</span><input className="input" value={draft.owner} disabled={!canWrite} onChange={event => setDraft({ ...draft, owner: event.target.value })} /></label>
-          <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
-          <label className="md:col-span-2 xl:col-span-4"><span className="field-label">摘要</span><textarea className="input min-h-20" value={draft.summary} disabled={!canWrite} onChange={event => setDraft({ ...draft, summary: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">问题定义</span><textarea className="input min-h-20" value={draft.problemDefinition} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemDefinition: event.target.value })} /></label>
-          <label><span className="field-label">涉及零件</span><input className="input" value={draft.parts} disabled={!canWrite} onChange={event => setDraft({ ...draft, parts: event.target.value })} /></label>
-          <label><span className="field-label">车型</span><input className="input" value={draft.vehicleModel} disabled={!canWrite} onChange={event => setDraft({ ...draft, vehicleModel: event.target.value })} /></label>
-          <label><span className="field-label">故障频次</span><input className="input" value={draft.failureFrequency} disabled={!canWrite} onChange={event => setDraft({ ...draft, failureFrequency: event.target.value })} /></label>
-          <label><span className="field-label">责任区域</span><input className="input" value={draft.responsibilityArea} disabled={!canWrite} onChange={event => setDraft({ ...draft, responsibilityArea: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">问题进展</span><textarea className="input min-h-20" value={draft.progress} disabled={!canWrite} onChange={event => setDraft({ ...draft, progress: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">1 问题描述</span><textarea className="input min-h-20" value={draft.problemDescription} disabled={!canWrite} onChange={event => setDraft({ ...draft, problemDescription: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">2 诊断维修</span><textarea className="input min-h-20" value={draft.diagnosisRepair} disabled={!canWrite} onChange={event => setDraft({ ...draft, diagnosisRepair: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">3 原因分析</span><textarea className="input min-h-20" value={draft.rootCause} disabled={!canWrite} onChange={event => setDraft({ ...draft, rootCause: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">4 制定措施</span><textarea className="input min-h-20" value={draft.correctiveAction} disabled={!canWrite} onChange={event => setDraft({ ...draft, correctiveAction: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">5 所需支持</span><textarea className="input min-h-20" value={draft.supportNeeded} disabled={!canWrite} onChange={event => setDraft({ ...draft, supportNeeded: event.target.value })} /></label>
-          <label><span className="field-label">影响</span><input className="input" value={draft.impact} disabled={!canWrite} onChange={event => setDraft({ ...draft, impact: event.target.value })} /></label>
-          <label><span className="field-label">遏制</span><input className="input" value={draft.containment} disabled={!canWrite} onChange={event => setDraft({ ...draft, containment: event.target.value })} /></label>
-          <label><span className="field-label">预防措施</span><input className="input" value={draft.preventiveAction} disabled={!canWrite} onChange={event => setDraft({ ...draft, preventiveAction: event.target.value })} /></label>
-          <label><span className="field-label">验证</span><input className="input" value={draft.validation} disabled={!canWrite} onChange={event => setDraft({ ...draft, validation: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">签核槽位</span><input className="input" value={draft.approvalSignoff} disabled={!canWrite} onChange={event => setDraft({ ...draft, approvalSignoff: event.target.value })} /></label>
-          <label className="md:col-span-2"><span className="field-label">备注</span><textarea className="input min-h-20" value={draft.remark} disabled={!canWrite} onChange={event => setDraft({ ...draft, remark: event.target.value })} /></label>
-        </div>
-        {!selectedIsNew && selectedReport ? (
-          <div className="mt-5 rounded-lg border border-outline bg-surface p-3">
-            <div className="text-xs font-semibold text-ink-muted">附件列表</div>
-            <div className="mt-2">
-              <AttachmentList
-                attachments={selectedReport.attachments}
-                canDownload={canWrite}
-                onDownloadAttachment={onDownloadAttachment}
-                emptyMessage="当前一页纸暂无附件。"
+        <div className="collision-sheet-scroll">
+          <div className="collision-sheet" aria-label="碰撞一页纸模板输入区">
+            <label className="collision-title-field">
+              <span className="sr-only">报告标题</span>
+              <input
+                value={draft.title}
+                disabled={!canWrite}
+                onChange={event => setDraft({ ...draft, title: event.target.value })}
+                placeholder="制造工程重点问题一页纸报告——请输入问题标题"
               />
+            </label>
+
+            <div className="collision-sheet-head">
+              <div className="collision-brand-cell">
+                <strong>LI AUTO</strong>
+                <span>理想汽车</span>
+              </div>
+              <div className="collision-report-title">重点问题一页纸</div>
+              <div className="collision-meta-table">
+                <label>
+                  <span>编制</span>
+                  <input value={draft.owner} disabled={!canWrite} onChange={event => setDraft({ ...draft, owner: event.target.value })} />
+                </label>
+                <label>
+                  <span>问题状态</span>
+                  <select value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>
+                    {['draft', 'pending', 'approved', 'rejected', 'signed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>提出日期</span>
+                  <input type="date" value={draft.reportDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, reportDate: event.target.value })} />
+                </label>
+              </div>
+            </div>
+
+            <div className="collision-summary-table">
+              {renderSummaryField('problemDefinition', '问题定义', draft.problemDefinition, value => setDraft({ ...draft, problemDefinition: value }), { wide: true, multiline: true })}
+              {renderSummaryField('parts', '涉及零件', draft.parts, value => setDraft({ ...draft, parts: value }))}
+              {renderSummaryField('vehicleModel', '车型', draft.vehicleModel, value => setDraft({ ...draft, vehicleModel: value }))}
+              {renderSummaryField('failureFrequency', '故障频次', draft.failureFrequency, value => setDraft({ ...draft, failureFrequency: value }))}
+              {renderSummaryField('responsibilityArea', '责任区域', draft.responsibilityArea, value => setDraft({ ...draft, responsibilityArea: value }))}
+              {renderSummaryField('owner', '负责人', draft.owner, value => setDraft({ ...draft, owner: value }))}
+              {renderSummaryField('progress', '问题进展', draft.progress, value => setDraft({ ...draft, progress: value }))}
+              {renderSummaryField('remark', '备注', draft.remark, value => setDraft({ ...draft, remark: value }))}
+            </div>
+
+            <div className="collision-sheet-toolbar">
+              <label><span className="field-label">关联阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+              <label><span className="field-label">风险等级</span><select className="select" value={draft.riskLevel} disabled={!canWrite} onChange={event => setDraft({ ...draft, riskLevel: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+              <label><span className="field-label">断点计划</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
+            </div>
+
+            <div className="collision-body-grid">
+              <section className="collision-section">
+                <h4>1. 问题描述</h4>
+                {renderBodyField('problemDescription', '【失效模式&工况】', draft.problemDescription, value => setDraft({ ...draft, problemDescription: value }))}
+                {renderBodyField('vehicleModel', '【涉及车辆】', draft.vehicleModel, value => setDraft({ ...draft, vehicleModel: value }))}
+                {renderBodyField('source', '【信息来源】', draft.source, value => setDraft({ ...draft, source: value }))}
+              </section>
+
+              <section className="collision-section">
+                <h4>3. 原因分析</h4>
+                {renderBodyField('processAnalysis', '【过程分析】', draft.processAnalysis, value => setDraft({ ...draft, processAnalysis: value }))}
+                {renderBodyField('rootCauseConclusion', '【根本原因】', draft.rootCauseConclusion || draft.rootCause, value => setDraft({ ...draft, rootCauseConclusion: value, rootCause: value }))}
+                {renderBodyField('summary', '【摘要】', draft.summary, value => setDraft({ ...draft, summary: value }))}
+              </section>
+
+              <section className="collision-section">
+                <h4>2. 诊断维修</h4>
+                {renderBodyField('diagnosisRepair', '诊断维修记录', draft.diagnosisRepair, value => setDraft({ ...draft, diagnosisRepair: value }), { large: true })}
+              </section>
+
+              <section className="collision-section">
+                <h4>4. 制定措施</h4>
+                {renderBodyField('containment', '【临时/拦截措施】', draft.containment, value => setDraft({ ...draft, containment: value }))}
+                {renderBodyField('correctiveAction', '【长期措施/追溯】', draft.correctiveAction, value => setDraft({ ...draft, correctiveAction: value }))}
+                <div className="collision-inline-fields">
+                  {renderSummaryField('impact', '影响', draft.impact, value => setDraft({ ...draft, impact: value }))}
+                  {renderSummaryField('preventiveAction', '预防', draft.preventiveAction, value => setDraft({ ...draft, preventiveAction: value }))}
+                  {renderSummaryField('validation', '验证', draft.validation, value => setDraft({ ...draft, validation: value }))}
+                </div>
+              </section>
+
+              <section className="collision-section">
+                <h4>其他补充说明</h4>
+                {renderBodyField('approvalSignoff', '备注 / 签核', draft.approvalSignoff, value => setDraft({ ...draft, approvalSignoff: value }))}
+              </section>
+
+              <section className="collision-section">
+                <h4>5. 所需支持</h4>
+                {renderBodyField('supportNeeded', '支持事项', draft.supportNeeded, value => setDraft({ ...draft, supportNeeded: value }))}
+                {renderSummaryField('imageObjectKey', '图片对象引用', draft.imageObjectKey, value => setDraft({ ...draft, imageObjectKey: value }))}
+              </section>
             </div>
           </div>
-        ) : null}
+        </div>
       </div>
       <div className="mt-5">
         <AuditHistoryPanel
@@ -6464,6 +6708,23 @@ export default function App() {
     }
   };
 
+  const handleUploadCollisionReportAttachment = async (report: CollisionReport, file: File, metadata?: Record<string, unknown>) => {
+    if (!canWrite) return;
+    try {
+      await uploadAttachment({
+        file,
+        projectId: report.projectId,
+        objectType: 'collision_report',
+        objectId: report.id,
+        metadata
+      });
+      await loadData(workspace.selectedProject?.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '一页纸图片上传失败'));
+      throw err;
+    }
+  };
+
   const handleDownloadAttachment = async (attachment: Attachment) => {
     if (!canWrite) return;
     try {
@@ -6939,6 +7200,7 @@ export default function App() {
           onExportCsv={handleExportCollisionReports}
           onDownloadTemplate={handleDownloadCollisionReportTemplate}
           onExportExcel={handleExportCollisionReportExcel}
+          onUploadReportAttachment={handleUploadCollisionReportAttachment}
           onDownloadAttachment={handleDownloadAttachment}
           onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
         />

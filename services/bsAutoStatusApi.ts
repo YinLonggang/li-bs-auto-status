@@ -50,6 +50,24 @@ const asRecord = (value: unknown): RawRecord => (isRecord(value) ? value : {});
 
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
+const asStringRecord = (value: unknown): Record<string, string> => {
+  const raw = asRecord(value);
+  return Object.fromEntries(
+    Object.entries(raw)
+      .map(([key, item]) => [key, String(item ?? '').trim()])
+      .filter(([, item]) => item)
+  );
+};
+
+const safeJsonParse = (value: string): unknown => {
+  if (!value.trim()) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
 const asString = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value : fallback;
 
@@ -342,7 +360,8 @@ const normalizeAttachment = (input: unknown): Attachment => {
     createdAt: firstString(raw, ['createdAt', 'created_at']),
     canPreview: asBoolean(raw.canPreview, asBoolean(raw.can_preview, true)),
     canDownload: asBoolean(raw.canDownload, asBoolean(raw.can_download, true)),
-    isImage: asBoolean(raw.isImage, asBoolean(raw.is_image, false))
+    isImage: asBoolean(raw.isImage, asBoolean(raw.is_image, false)),
+    metadata: asRecord(raw.metadata)
   };
 };
 
@@ -598,12 +617,15 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
     responsibilityArea: firstString(content, ['responsibilityArea', 'responsibility_area', 'area']),
     progress: firstString(content, ['progress']),
     remark: firstString(content, ['remark']),
+    source: firstString(content, ['source']) || firstString(metadata, ['source']),
     problemDescription: firstString(content, ['problemDescription', 'problem_description']),
     diagnosisRepair: firstString(content, ['diagnosisRepair', 'diagnosis_repair']),
+    processAnalysis: firstString(content, ['processAnalysis', 'process_analysis', 'analysis']),
     supportNeeded: firstString(content, ['supportNeeded', 'support_needed']),
     impact: firstString(content, ['impact']),
     containment: firstString(content, ['containment']),
     rootCause: firstString(content, ['rootCause', 'root_cause']),
+    rootCauseConclusion: firstString(content, ['rootCauseConclusion', 'root_cause_conclusion']) || firstString(metadata, ['root_cause_conclusion']),
     correctiveAction: stringifyAction(content.correctiveAction ?? content.corrective_action ?? content.countermeasures),
     preventiveAction: firstString(content, ['preventiveAction', 'preventive_action']),
     validation: firstString(content, ['validation', 'verification']),
@@ -612,6 +634,8 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
     approvalSignoff:
       approvals.map(item => `${firstString(item, ['step_name'], '签核')}: ${firstString(item, ['status'], 'pending')}`).join(' / ') ||
       firstString(content, ['approvalSignoff', 'approval_signoff']),
+    imageObjectKey: firstString(content, ['imageObjectKey', 'image_object_key', 'photo', 'problemPhotoObjectKey', 'problem_photo_object_key']),
+    imageCaptions: asStringRecord(content.imageCaptions ?? content.image_captions),
     metadata,
     attachments: asArray(raw.attachments).map(normalizeAttachment),
     updatedAt: firstString(raw, ['updatedAt', 'updated_at'])
@@ -944,16 +968,21 @@ export type CollisionReportInput = {
   responsibilityArea?: string;
   progress?: string;
   remark?: string;
+  source?: string;
   problemDescription?: string;
   diagnosisRepair?: string;
+  processAnalysis?: string;
   supportNeeded?: string;
   impact?: string;
   containment?: string;
   rootCause?: string;
+  rootCauseConclusion?: string;
   correctiveAction?: string;
   preventiveAction?: string;
   validation?: string;
   approvalSignoff?: string;
+  imageObjectKey?: string;
+  imageCaptions?: Record<string, string>;
   content?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 };
@@ -1012,18 +1041,23 @@ const serializeCollisionReportPayload = (input: Partial<CollisionReportInput>) =
     responsibilityArea: input.responsibilityArea,
     progress: input.progress,
     remark: input.remark,
+    source: input.source,
     problemDescription: input.problemDescription,
     diagnosisRepair: input.diagnosisRepair,
+    processAnalysis: input.processAnalysis,
     supportNeeded: input.supportNeeded,
     impact: input.impact,
     containment: input.containment,
     rootCause: input.rootCause,
+    rootCauseConclusion: input.rootCauseConclusion,
     correctiveAction: input.correctiveAction,
     preventiveAction: input.preventiveAction,
     validation: input.validation,
     owner: input.owner,
     due_date: optionalDate(input.dueDate),
-    approvalSignoff: input.approvalSignoff
+    approvalSignoff: input.approvalSignoff,
+    imageObjectKey: input.imageObjectKey,
+    imageCaptions: input.imageCaptions ?? {}
   };
 
   return {
@@ -1037,7 +1071,9 @@ const serializeCollisionReportPayload = (input: Partial<CollisionReportInput>) =
     metadata: {
       ...(input.metadata ?? {}),
       risk_level: input.riskLevel,
-      owner: input.owner
+      owner: input.owner,
+      source: input.source,
+      root_cause_conclusion: input.rootCauseConclusion
     }
   };
 };
@@ -1141,16 +1177,21 @@ const collisionCsvHeaders = [
   'responsibility_area',
   'progress',
   'remark',
+  'source',
   'problem_description',
   'diagnosis_repair',
+  'process_analysis',
   'support_needed',
   'impact',
   'containment',
   'root_cause',
+  'root_cause_conclusion',
   'corrective_action',
   'preventive_action',
   'validation',
-  'approval_signoff'
+  'approval_signoff',
+  'image_object_key',
+  'image_captions'
 ];
 
 const keyIssuesToCsv = (issues: KeyIssue[]) =>
@@ -1197,16 +1238,21 @@ const collisionReportsToCsv = (reports: CollisionReport[]) =>
       report.responsibilityArea,
       report.progress,
       report.remark,
+      report.source,
       report.problemDescription,
       report.diagnosisRepair,
+      report.processAnalysis,
       report.supportNeeded,
       report.impact,
       report.containment,
       report.rootCause,
+      report.rootCauseConclusion,
       report.correctiveAction,
       report.preventiveAction,
       report.validation,
-      report.approvalSignoff
+      report.approvalSignoff,
+      report.imageObjectKey,
+      JSON.stringify(report.imageCaptions ?? {})
     ])
   );
 
@@ -1245,16 +1291,21 @@ const collisionInputFromCsv = (record: Record<string, string>): CollisionReportI
   responsibilityArea: csvField(record, ['responsibility_area', 'responsibilityArea', '责任区域']),
   progress: csvField(record, ['progress', '进展']),
   remark: csvField(record, ['remark', '备注']),
+  source: csvField(record, ['source', 'information_source', '信息来源']),
   problemDescription: csvField(record, ['problem_description', 'problemDescription', '问题描述']),
   diagnosisRepair: csvField(record, ['diagnosis_repair', 'diagnosisRepair', '诊断维修']),
+  processAnalysis: csvField(record, ['process_analysis', 'processAnalysis', '过程分析']),
   supportNeeded: csvField(record, ['support_needed', 'supportNeeded', '所需支持']),
   impact: csvField(record, ['impact', '影响']),
   containment: csvField(record, ['containment', '遏制']),
   rootCause: csvField(record, ['root_cause', 'rootCause', '原因分析']),
+  rootCauseConclusion: csvField(record, ['root_cause_conclusion', 'rootCauseConclusion', '根本原因']),
   correctiveAction: csvField(record, ['corrective_action', 'correctiveAction', '制定措施']),
   preventiveAction: csvField(record, ['preventive_action', 'preventiveAction', '预防措施']),
   validation: csvField(record, ['validation', 'verification', '验证']),
-  approvalSignoff: csvField(record, ['approval_signoff', 'approvalSignoff', '签核'])
+  approvalSignoff: csvField(record, ['approval_signoff', 'approvalSignoff', '签核']),
+  imageObjectKey: csvField(record, ['image_object_key', 'imageObjectKey', '现场图片']),
+  imageCaptions: asStringRecord(safeJsonParse(csvField(record, ['image_captions', 'imageCaptions', '图片说明'])))
 });
 
 const csvPayloadText = (payload: unknown) => {
@@ -1637,6 +1688,7 @@ export async function uploadAttachment(input: {
   projectId?: string | number | null;
   objectType: string;
   objectId: string | number;
+  metadata?: Record<string, unknown>;
 }) {
   const formData = new FormData();
   formData.append('file', input.file);
@@ -1645,6 +1697,9 @@ export async function uploadAttachment(input: {
   }
   formData.append('object_type', input.objectType);
   formData.append('object_id', String(input.objectId));
+  if (input.metadata) {
+    formData.append('metadata', JSON.stringify(input.metadata));
+  }
   return normalizeAttachment(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>('/attachments/upload/', {
       method: 'POST',
