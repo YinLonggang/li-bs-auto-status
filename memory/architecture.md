@@ -1,5 +1,12 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-15 附件共享盘配置
+
+- Auto Status 不直接读取 `SHARED_STORAGE_SMB_URL / SMB_URL / PLC_SHARE_SMB_URL` 环境变量作为业务配置入口；SPA 配置中心通过共享存储配置 API 维护 `li_bs_auto_status` scope。
+- 配置中心的共享盘面板只属于基础配置工作台，不参与项目筛选；它影响附件上传、图片预览和管理员下载的后端运行时存储 profile。
+- 密码字段写入时前端只提交非空值，留空保留后端原密码；读取接口只返回 `passwordSet`，不回传真实密码。
+- PLC 的共享盘配置仍由 `li_sicar_plc` 工厂/车间模型维护，Auto Status 仅消费通用共享存储 profile。
+
 ## 2026-05-13 Dashboard 收口
 
 - 默认入口为 `dashboard`，首屏承载项目选择、总完成率、导出入口、层级筛选、阶段轨道、检查模块泳道、检查项详情、重点问题表、碰撞一页纸、签核状态和附件入口。
