@@ -38,6 +38,7 @@ import {
   createExportTask,
   createKeyIssue,
   createProject,
+  deleteAttachment,
   deleteCollisionReport,
   deleteCheckItem,
   deleteKeyIssue,
@@ -59,6 +60,7 @@ import {
   importKeyIssuesCsv,
   seedProjectTemplate,
   updateCollisionReport,
+  updateAttachmentMetadata,
   updateCheckItem,
   updateCheckItemOwner,
   updateCheckItemStatus,
@@ -227,6 +229,11 @@ const isImageAttachment = (attachment: Attachment) =>
 
 const canPreviewAttachment = (attachment: Attachment) =>
   attachment.canPreview !== false && isImageAttachment(attachment);
+
+const attachmentCaption = (attachment: Attachment) => {
+  const metadata = attachment.metadata ?? {};
+  return String(metadata.caption ?? metadata.image_caption ?? '').trim();
+};
 
 const downloadTextFile = (fileName: string, content: string, type = 'text/csv;charset=utf-8') => {
   const blob = new Blob([content], { type });
@@ -549,12 +556,16 @@ function CheckItemAttachmentPanel({
   canWrite,
   onUploadAttachment,
   onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption,
   compact = false
 }: {
   item: CheckItem;
   canWrite: boolean;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
   compact?: boolean;
 }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -625,7 +636,11 @@ function CheckItemAttachmentPanel({
         <AttachmentList
           attachments={item.attachments}
           canDownload={canWrite}
+          canDelete={canWrite}
+          canEditCaption={canWrite}
           onDownloadAttachment={onDownloadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
           emptyMessage="当前检查项暂无附件。"
         />
       </div>
@@ -1098,15 +1113,21 @@ type AttachmentThumbnailState = {
 function AttachmentPreviewModal({
   state,
   canDownload,
+  canDelete,
   downloading,
+  deleting,
   onClose,
-  onDownload
+  onDownload,
+  onDelete
 }: {
   state: AttachmentPreviewState | null;
   canDownload: boolean;
+  canDelete: boolean;
   downloading: boolean;
+  deleting: boolean;
   onClose: () => void;
   onDownload: (attachment: Attachment) => void;
+  onDelete: (attachment: Attachment) => void;
 }) {
   useEffect(() => {
     if (!state) return undefined;
@@ -1153,6 +1174,16 @@ function AttachmentPreviewModal({
               <Download className="h-4 w-4" />
               {downloading ? '获取中' : '下载'}
             </button>
+            <button
+              className="btn btn-ghost btn--sm text-danger"
+              type="button"
+              disabled={!canDelete || deleting}
+              onClick={() => onDelete(state.attachment)}
+              title={!canDelete ? '当前账号没有附件删除权限。' : undefined}
+            >
+              <Trash2 className="h-4 w-4" />
+              {deleting ? '删除中' : '删除'}
+            </button>
             <button className="btn btn-ghost btn--sm" type="button" onClick={onClose} aria-label="关闭附件预览">
               <X className="h-4 w-4" />
               关闭
@@ -1178,23 +1209,37 @@ function AttachmentPreviewModal({
 function AttachmentList({
   attachments,
   canDownload = false,
+  canDelete = false,
+  canEditCaption = false,
   onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption,
   emptyMessage = '无附件'
 }: {
   attachments: Attachment[];
   canDownload?: boolean;
+  canDelete?: boolean;
+  canEditCaption?: boolean;
   onDownloadAttachment?: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment?: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption?: (attachment: Attachment, caption: string) => Promise<void>;
   emptyMessage?: string;
 }) {
   const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
+  const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
+  const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
+  const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [message, setMessage] = useState('');
   const thumbnailUrlsRef = useRef<string[]>([]);
   const imageAttachments = attachments.filter(canPreviewAttachment);
   const fileAttachments = attachments.filter(attachment => !canPreviewAttachment(attachment));
   const imageAttachmentKey = imageAttachments
     .map(attachment => `${attachment.id}:${attachment.fileName}:${attachment.createdAt ?? ''}:${attachment.fileSize ?? ''}`)
+    .join('|');
+  const attachmentCaptionKey = attachments
+    .map(attachment => `${attachment.id}:${attachmentCaption(attachment)}`)
     .join('|');
 
   const closePreview = () => {
@@ -1207,6 +1252,12 @@ function AttachmentList({
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
   }, [preview?.url]);
+
+  useEffect(() => {
+    setCaptionDrafts(Object.fromEntries(
+      attachments.map(attachment => [idOf(attachment.id), attachmentCaption(attachment)])
+    ));
+  }, [attachmentCaptionKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1280,6 +1331,78 @@ function AttachmentList({
     }
   };
 
+  const handleSaveCaption = async (attachment: Attachment) => {
+    if (!onUpdateAttachmentCaption || !canEditCaption) {
+      setMessage('当前账号没有图片说明维护权限。');
+      return;
+    }
+    const caption = captionDrafts[idOf(attachment.id)] ?? '';
+    setSavingCaptionId(attachment.id);
+    setMessage('');
+    try {
+      await onUpdateAttachmentCaption(attachment, caption);
+      setMessage('图片说明已保存。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '图片说明保存失败。'));
+    } finally {
+      setSavingCaptionId(null);
+    }
+  };
+
+  const handleDelete = async (attachment: Attachment) => {
+    if (!onDeleteAttachment || !canDelete) {
+      setMessage('当前账号没有附件删除权限。');
+      return;
+    }
+    if (!window.confirm(`确认删除附件「${attachment.fileName}」？`)) return;
+    setDeletingId(attachment.id);
+    setMessage('');
+    try {
+      await onDeleteAttachment(attachment);
+      if (preview?.attachment.id === attachment.id) {
+        closePreview();
+      }
+      setMessage('附件已删除。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '附件删除失败。'));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const renderCaptionEditor = (attachment: Attachment) => {
+    if (!canEditCaption && !attachmentCaption(attachment)) return null;
+    const key = idOf(attachment.id);
+    const draft = captionDrafts[key] ?? '';
+    const saved = attachmentCaption(attachment);
+    const changed = draft !== saved;
+    return (
+      <label className="mt-2 block px-2 pb-2">
+        <span className="field-label">{isImageAttachment(attachment) ? '图片说明' : '附件说明'}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className="input min-w-0 flex-1"
+            value={draft}
+            disabled={!canEditCaption || savingCaptionId === attachment.id}
+            onChange={event => setCaptionDrafts(current => ({ ...current, [key]: event.target.value }))}
+            placeholder="为这张图片填写说明"
+          />
+          {onUpdateAttachmentCaption ? (
+            <button
+              className="btn btn-ghost btn--sm"
+              type="button"
+              disabled={!canEditCaption || !changed || savingCaptionId === attachment.id}
+              onClick={() => void handleSaveCaption(attachment)}
+            >
+              <Save className="h-4 w-4" />
+              {savingCaptionId === attachment.id ? '保存中' : '保存'}
+            </button>
+          ) : null}
+        </div>
+      </label>
+    );
+  };
+
   if (!attachments.length) {
     return (
       <div className="rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">
@@ -1325,10 +1448,11 @@ function AttachmentList({
                     </div>
                   </div>
                 </button>
+                {renderCaptionEditor(attachment)}
                 {onDownloadAttachment ? (
-                  <div className="border-t border-outline px-2 py-2">
+                  <div className="flex flex-wrap gap-2 border-t border-outline px-2 py-2">
                     <button
-                      className="btn btn-ghost btn--sm w-full"
+                      className="btn btn-ghost btn--sm flex-1"
                       type="button"
                       disabled={!canDownload || attachment.canDownload === false || downloadingId === attachment.id}
                       onClick={() => void handleDownload(attachment)}
@@ -1336,6 +1460,31 @@ function AttachmentList({
                     >
                       <Download className="h-4 w-4" />
                       {downloadingId === attachment.id ? '获取中' : '下载'}
+                    </button>
+                    {onDeleteAttachment ? (
+                      <button
+                        className="btn btn-ghost btn--sm flex-1 text-danger"
+                        type="button"
+                        disabled={!canDelete || deletingId === attachment.id}
+                        onClick={() => void handleDelete(attachment)}
+                        title={!canDelete ? '当前账号没有附件删除权限。' : undefined}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {deletingId === attachment.id ? '删除中' : '删除'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : onDeleteAttachment ? (
+                  <div className="border-t border-outline px-2 py-2">
+                    <button
+                      className="btn btn-ghost btn--sm w-full text-danger"
+                      type="button"
+                      disabled={!canDelete || deletingId === attachment.id}
+                      onClick={() => void handleDelete(attachment)}
+                      title={!canDelete ? '当前账号没有附件删除权限。' : undefined}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {deletingId === attachment.id ? '删除中' : '删除'}
                     </button>
                   </div>
                 ) : null}
@@ -1367,17 +1516,33 @@ function AttachmentList({
                   {downloadingId === attachment.id ? '获取中' : '下载'}
                 </button>
               ) : null}
+              {onDeleteAttachment ? (
+                <button
+                  className="btn btn-ghost btn--sm text-danger"
+                  type="button"
+                  disabled={!canDelete || deletingId === attachment.id}
+                  onClick={() => void handleDelete(attachment)}
+                  title={!canDelete ? '当前账号没有附件删除权限。' : undefined}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deletingId === attachment.id ? '删除中' : '删除'}
+                </button>
+              ) : null}
             </div>
           </div>
+          {renderCaptionEditor(attachment)}
         </div>
       ))}
       {message ? <div className="text-xs text-ink-muted">{message}</div> : null}
       <AttachmentPreviewModal
         state={preview}
         canDownload={!!onDownloadAttachment && canDownload && preview?.attachment.canDownload !== false}
+        canDelete={!!onDeleteAttachment && canDelete}
         downloading={preview ? downloadingId === preview.attachment.id : false}
+        deleting={preview ? deletingId === preview.attachment.id : false}
         onClose={closePreview}
         onDownload={attachment => void handleDownload(attachment)}
+        onDelete={attachment => void handleDelete(attachment)}
       />
     </div>
   );
@@ -2987,7 +3152,9 @@ function TimelineView({
   onUpdateStatus,
   onUpdateOwner,
   onUploadAttachment,
-  onDownloadAttachment
+  onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption
 }: {
   project: Project | null;
   phases: ProjectPhase[];
@@ -2999,6 +3166,8 @@ function TimelineView({
   onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => Promise<void>;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [selectedCheckItemId, setSelectedCheckItemId] = useState('');
@@ -3378,6 +3547,8 @@ function TimelineView({
               canWrite={canWrite}
               onUploadAttachment={onUploadAttachment}
               onDownloadAttachment={onDownloadAttachment}
+              onDeleteAttachment={onDeleteAttachment}
+              onUpdateAttachmentCaption={onUpdateAttachmentCaption}
             />
             <AuditHistoryPanel
               logs={auditLogs}
@@ -3604,7 +3775,9 @@ function ChecksView({
   onUpdateOwner,
   onUpdateStatus,
   onUploadAttachment,
-  onDownloadAttachment
+  onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption
 }: {
   checkItems: CheckItem[];
   phases: ProjectPhase[];
@@ -3617,6 +3790,8 @@ function ChecksView({
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -3920,6 +4095,8 @@ function ChecksView({
                       compact
                       onUploadAttachment={onUploadAttachment}
                       onDownloadAttachment={onDownloadAttachment}
+                      onDeleteAttachment={onDeleteAttachment}
+                      onUpdateAttachmentCaption={onUpdateAttachmentCaption}
                     />
                   </td>
                   <td>
@@ -4226,11 +4403,6 @@ const collisionAttachmentSlot = (attachment: Attachment) => {
   return String(metadata.collision_slot ?? metadata.collisionSlot ?? 'problemDescription');
 };
 
-const collisionAttachmentCaption = (attachment: Attachment) => {
-  const metadata = attachment.metadata ?? {};
-  return String(metadata.caption ?? metadata.image_caption ?? '').trim();
-};
-
 const dataUrlToImageFile = async (dataUrl: string, fieldKey: string, index: number) => {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
   if (!match) return null;
@@ -4283,11 +4455,6 @@ const pastedImageFilesFromClipboard = async (clipboardData: DataTransfer, fieldK
 const issueAttachmentSlot = (attachment: Attachment) => {
   const metadata = attachment.metadata ?? {};
   return String(metadata.key_issue_slot ?? metadata.keyIssueSlot ?? 'description');
-};
-
-const issueAttachmentCaption = (attachment: Attachment) => {
-  const metadata = attachment.metadata ?? {};
-  return String(metadata.caption ?? metadata.image_caption ?? '').trim();
 };
 
 const emptyKeyIssueDraft = (phases: ProjectPhase[]): KeyIssueDraft => ({
@@ -4416,6 +4583,8 @@ function IssuesCrudView({
   onExportCsv,
   onUploadIssueAttachment,
   onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption,
   onFetchAuditLogs
 }: {
   project: Project | null;
@@ -4431,6 +4600,8 @@ function IssuesCrudView({
   onExportCsv: () => Promise<void>;
   onUploadIssueAttachment: (issue: KeyIssue, file: File, metadata?: Record<string, unknown>) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
   onFetchAuditLogs: (issue: KeyIssue) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -4458,15 +4629,6 @@ function IssuesCrudView({
   const issueAttachments = selectedIssue?.attachments ?? [];
   const attachmentsForField = (fieldKey: string) =>
     issueAttachments.filter(attachment => issueAttachmentSlot(attachment) === fieldKey);
-  const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
-  const setImageCaptionForField = (fieldKey: string, value: string) =>
-    setDraft({
-      ...draft,
-      imageCaptions: {
-        ...draft.imageCaptions,
-        [fieldKey]: value
-      }
-    });
 
   useEffect(() => {
     if (selectedIssueId !== 'new' && !issues.some(issue => idOf(issue.id) === selectedIssueId)) {
@@ -4562,7 +4724,6 @@ function IssuesCrudView({
           await onUploadIssueAttachment(targetIssue, file, {
             key_issue_slot: fieldKey,
             key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
-            caption: imageCaptionForField(fieldKey),
             source: 'clipboard_paste'
           });
         }
@@ -4573,36 +4734,19 @@ function IssuesCrudView({
 
   const renderIssueFieldAssets = (fieldKey: string, fieldLabel: string) => {
     const fieldAttachments = attachmentsForField(fieldKey);
-    const hasAttachmentCaption = fieldAttachments.some(attachment => issueAttachmentCaption(attachment));
-    const fieldCaption = imageCaptionForField(fieldKey);
-    if (!fieldAttachments.length && !fieldCaption && !hasAttachmentCaption) return null;
+    if (!fieldAttachments.length) return null;
     return (
       <div className="issue-field-assets">
-        <label>
-          <span>图片说明</span>
-          <input
-            value={fieldCaption}
-            disabled={!canWrite}
-            onChange={event => setImageCaptionForField(fieldKey, event.target.value)}
-            placeholder={`${fieldLabel}图片说明`}
-          />
-        </label>
-        {fieldAttachments.length ? (
-          <AttachmentList
-            attachments={fieldAttachments}
-            canDownload={canWrite}
-            onDownloadAttachment={onDownloadAttachment}
-            emptyMessage="暂无图片"
-          />
-        ) : null}
-        {fieldAttachments.length && hasAttachmentCaption ? (
-          <div className="issue-caption-list">
-            {fieldAttachments.map(attachment => {
-              const caption = issueAttachmentCaption(attachment);
-              return caption ? <p key={attachment.id}>{attachment.fileName}：{caption}</p> : null;
-            })}
-          </div>
-        ) : null}
+        <AttachmentList
+          attachments={fieldAttachments}
+          canDownload={canWrite}
+          canDelete={canWrite}
+          canEditCaption={canWrite}
+          onDownloadAttachment={onDownloadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+          emptyMessage="暂无图片"
+        />
       </div>
     );
   };
@@ -4800,7 +4944,11 @@ function IssuesCrudView({
               <AttachmentList
                 attachments={selectedIssue.attachments}
                 canDownload={canWrite}
+                canDelete={canWrite}
+                canEditCaption={canWrite}
                 onDownloadAttachment={onDownloadAttachment}
+                onDeleteAttachment={onDeleteAttachment}
+                onUpdateAttachmentCaption={onUpdateAttachmentCaption}
                 emptyMessage="当前重点问题暂无附件。"
               />
             </div>
@@ -4834,6 +4982,8 @@ function CollisionCrudView({
   onExportExcel,
   onUploadReportAttachment,
   onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption,
   onFetchAuditLogs
 }: {
   project: Project | null;
@@ -4849,6 +4999,8 @@ function CollisionCrudView({
   onExportExcel: (report: CollisionReport) => Promise<void>;
   onUploadReportAttachment: (report: CollisionReport, file: File, metadata?: Record<string, unknown>) => Promise<void>;
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
   onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -4875,15 +5027,6 @@ function CollisionCrudView({
   const [activeCollisionFieldKey, setActiveCollisionFieldKey] = useState('problemDescription');
   const attachmentsForField = (fieldKey: string) =>
     imageAttachments.filter(attachment => collisionAttachmentSlot(attachment) === fieldKey);
-  const imageCaptionForField = (fieldKey: string) => draft.imageCaptions[fieldKey] ?? '';
-  const setImageCaptionForField = (fieldKey: string, value: string) =>
-    setDraft({
-      ...draft,
-      imageCaptions: {
-        ...draft.imageCaptions,
-        [fieldKey]: value
-      }
-    });
 
   useEffect(() => {
     if (selectedReportId !== 'new' && !reports.some(report => idOf(report.id) === selectedReportId)) {
@@ -4979,7 +5122,6 @@ function CollisionCrudView({
           await onUploadReportAttachment(targetReport, file, {
             collision_slot: fieldKey,
             collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
-            caption: imageCaptionForField(fieldKey),
             source: 'clipboard_paste'
           });
         }
@@ -4990,35 +5132,19 @@ function CollisionCrudView({
 
   const renderCollisionFieldAssets = (fieldKey: string, fieldLabel: string, compact = false) => {
     const fieldAttachments = attachmentsForField(fieldKey);
-    const hasLegacyCaption = fieldAttachments.some(attachment => collisionAttachmentCaption(attachment));
-    if (!fieldAttachments.length && !hasLegacyCaption && !imageCaptionForField(fieldKey)) return null;
+    if (!fieldAttachments.length) return null;
     return (
       <div className={`collision-field-assets ${compact ? 'is-compact' : ''}`}>
-        <label>
-          <span>图片说明</span>
-          <input
-            value={imageCaptionForField(fieldKey)}
-            disabled={!canWrite}
-            onChange={event => setImageCaptionForField(fieldKey, event.target.value)}
-            placeholder={`${fieldLabel}图片说明`}
-          />
-        </label>
-        {fieldAttachments.length ? (
-          <AttachmentList
-            attachments={fieldAttachments}
-            canDownload={canWrite}
-            onDownloadAttachment={onDownloadAttachment}
-            emptyMessage="暂无贴图"
-          />
-        ) : null}
-        {fieldAttachments.length && hasLegacyCaption ? (
-          <div className="collision-caption-list">
-            {fieldAttachments.map(attachment => {
-              const caption = collisionAttachmentCaption(attachment);
-              return caption ? <p key={attachment.id}>{attachment.fileName}：{caption}</p> : null;
-            })}
-          </div>
-        ) : null}
+        <AttachmentList
+          attachments={fieldAttachments}
+          canDownload={canWrite}
+          canDelete={canWrite}
+          canEditCaption={canWrite}
+          onDownloadAttachment={onDownloadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+          emptyMessage="暂无贴图"
+        />
       </div>
     );
   };
@@ -7057,6 +7183,28 @@ export default function App() {
     }
   };
 
+  const handleDeleteAttachment = async (attachment: Attachment) => {
+    if (!canWrite) return;
+    try {
+      await deleteAttachment(attachment.id);
+      await loadData(workspace.selectedProject?.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '附件删除失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateAttachmentCaption = async (attachment: Attachment, caption: string) => {
+    if (!canWrite) return;
+    try {
+      await updateAttachmentMetadata(attachment.id, { caption });
+      await loadData(workspace.selectedProject?.id);
+    } catch (err) {
+      setError(mutationErrorMessage(err, '图片说明保存失败'));
+      throw err;
+    }
+  };
+
   const handleUpdateProject = async (draft: ProjectConfigDraft) => {
     if (!canWrite || !workspace.selectedProject) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === draft.factoryId);
@@ -7461,6 +7609,8 @@ export default function App() {
           onUpdateOwner={handleUpdateOwner}
           onUploadAttachment={handleUploadCheckItemAttachment}
           onDownloadAttachment={handleDownloadAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
+          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
         />
       );
     }
@@ -7482,6 +7632,8 @@ export default function App() {
           onUpdateStatus={handleUpdateCheckItemStatus}
           onUploadAttachment={handleUploadCheckItemAttachment}
           onDownloadAttachment={handleDownloadAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
+          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
         />
       );
     }
@@ -7501,6 +7653,8 @@ export default function App() {
           onExportCsv={handleExportKeyIssues}
           onUploadIssueAttachment={handleUploadKeyIssueAttachment}
           onDownloadAttachment={handleDownloadAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
+          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
           onFetchAuditLogs={issue => fetchKeyIssueAuditLogs(issue.id)}
         />
       );
@@ -7521,6 +7675,8 @@ export default function App() {
           onExportExcel={handleExportCollisionReportExcel}
           onUploadReportAttachment={handleUploadCollisionReportAttachment}
           onDownloadAttachment={handleDownloadAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
+          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
           onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
         />
       );

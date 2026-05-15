@@ -7,6 +7,12 @@
 - 重点问题描述、整改对策、当前进展和备注字段下方按 `key_issue_slot` metadata 展示附件区域；图片显示缩略图，非图片仍以文件行展示，下载按钮继续受 `canWrite/canDownload` 与后端 `can_download` 共同约束。
 - 导出任务列表不再把产物 bucket/object key 作为文件名或二级说明渲染；产物下载仍通过受控下载链接获取。
 
+## 2026-05-15 附件删除与单图说明
+
+- `AttachmentList` 支持管理员删除附件和维护单张图片说明；说明写入附件自身 `metadata.caption`，不再用栏位级 `imageCaptions` 作为新图片的主维护入口。
+- 重点问题和碰撞一页纸字段贴图区域展示每张图片自己的说明输入与保存按钮，多图场景每张图可独立说明；只读态仅展示已有说明。
+- 删除和说明保存分别调用后端 `/attachments/{id}/` 与 `/attachments/{id}/metadata/`，完成后刷新当前项目数据，保持缩略图、审计和导出读取同一份附件 metadata。
+
 ## 2026-05-15 附件共享盘配置
 
 - Auto Status 不直接读取 `SHARED_STORAGE_SMB_URL / SMB_URL / PLC_SHARE_SMB_URL` 环境变量作为业务配置入口；SPA 配置中心通过共享存储配置 API 维护 `li_bs_auto_status` scope。

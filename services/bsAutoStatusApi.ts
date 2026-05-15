@@ -1727,6 +1727,24 @@ export async function fetchAttachmentPreview(attachmentId: string | number): Pro
   };
 }
 
+export async function updateAttachmentMetadata(
+  attachmentId: string | number,
+  metadata: Record<string, unknown>
+) {
+  return normalizeAttachment(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/attachments/${attachmentId}/metadata/`, {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata })
+    })
+  ));
+}
+
+export async function deleteAttachment(attachmentId: string | number) {
+  await apiRequest<void>(`/attachments/${attachmentId}/`, {
+    method: 'DELETE'
+  });
+}
+
 export async function updateProjectPhase(phaseId: string | number, payload: UpdateProjectPhaseInput) {
   return normalizeProjectPhase(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {

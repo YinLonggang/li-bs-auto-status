@@ -10,6 +10,13 @@
 - 导出任务列表同步隐藏产物 bucket/object key 明细，仅显示文件名、错误信息或“导出产物已生成”状态。
 - 验证通过：`npm run type-check`、`npm run build`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
 
+### 附件删除与单图说明
+
+- 附件列表新增管理员删除按钮，图片 lightbox 中也保留删除入口；删除成功后刷新当前项目数据。
+- 每张图片拥有独立说明输入和保存按钮，重点问题与碰撞一页纸多图贴图不再共享同一个栏位说明。
+- 前端上传图片时只绑定业务对象和栏位槽位，说明后续写入该附件自身 `metadata.caption`，供页面展示和 Excel 导出复用。
+- 本轮前端验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
 ### Auto Status SMB 配置入口
 
 - 配置中心底部新增“附件共享盘配置”面板，维护 `li_bs_auto_status` scope 的 SMB URL、host/share、业务根路径、凭据、对象前缀、环境目录和传输参数。
