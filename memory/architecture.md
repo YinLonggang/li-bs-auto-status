@@ -13,6 +13,12 @@
 - 重点问题和碰撞一页纸字段贴图区域展示每张图片自己的说明输入与保存按钮，多图场景每张图可独立说明；只读态仅展示已有说明。
 - 删除和说明保存分别调用后端 `/attachments/{id}/` 与 `/attachments/{id}/metadata/`，完成后刷新当前项目数据，保持缩略图、审计和导出读取同一份附件 metadata。
 
+## 2026-05-15 Dashboard 项目级审计
+
+- Dashboard 首页项目卡本身作为项目审计入口：点击卡片加载该项目 `/projects/{id}/audit-logs/`，卡片内模块按钮继续负责跳转阶段、检查项、重点问题、碰撞一页纸和配置中心。
+- `AuditHistoryPanel` 从对象级历史面板扩展为可配置标题、说明、项目列和对象列的通用审计展示组件；检查项/重点问题/碰撞一页纸沿用对象级模式，项目卡使用对象列展示项目内所有业务对象。
+- `fetchProjectAuditLogs()` 会按后端分页拉取项目审计日志，默认每页 200 条并自动翻页，避免 Dashboard 只显示第一页。
+
 ## 2026-05-15 附件共享盘配置
 
 - Auto Status 不直接读取 `SHARED_STORAGE_SMB_URL / SMB_URL / PLC_SHARE_SMB_URL` 环境变量作为业务配置入口；SPA 配置中心通过共享存储配置 API 维护 `li_bs_auto_status` scope。

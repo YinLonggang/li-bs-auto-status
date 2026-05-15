@@ -295,11 +295,23 @@
   }
 
   .project-summary-card {
-    @apply grid gap-4 rounded-lg border border-outline bg-surface-soft p-4 transition duration-200;
+    @apply grid cursor-pointer gap-4 rounded-lg border border-outline bg-surface-soft p-4 transition duration-200 hover:border-primary/40 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
   }
 
   .project-summary-card.is-selected {
     @apply border-primary/50 bg-primary/10;
+  }
+
+  .project-summary-card.is-audit-selected {
+    @apply border-accent bg-accent/10 ring-1 ring-accent/40;
+  }
+
+  .project-audit-shell {
+    @apply mt-4 grid gap-4 rounded-lg border border-outline/90 bg-surface-soft p-4;
+  }
+
+  .project-audit-metrics {
+    @apply grid gap-3 sm:grid-cols-2 xl:grid-cols-4;
   }
 
   .project-card-header {

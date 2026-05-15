@@ -1676,6 +1676,36 @@ export async function fetchCollisionReportAuditLogs(reportId: string | number) {
   return fetchObjectAuditLogs('CollisionReport', reportId);
 }
 
+export async function fetchProjectAuditLogs(
+  projectId: string | number,
+  options: { keyword?: string; pageSize?: number } = {}
+) {
+  const pageSize = Math.min(Math.max(options.pageSize ?? 200, 1), 200);
+  const logs: AuditLog[] = [];
+  let page = 1;
+  for (;;) {
+    const query = new URLSearchParams({
+      page_size: String(pageSize),
+      page: String(page)
+    });
+    if (options.keyword?.trim()) {
+      query.set('q', options.keyword.trim());
+    }
+    const payload = await apiRequest<ApiEnvelope<unknown[]> | unknown[] | RawRecord>(
+      `/projects/${projectId}/audit-logs/?${query.toString()}`
+    );
+    const raw = asRecord(payload);
+    const items = asArray(raw.results ?? unwrap(payload));
+    logs.push(...items.map(normalizeAuditLog));
+    const total = firstNumber(raw, ['count'], logs.length);
+    if (!raw.next || logs.length >= total || page >= 20) {
+      break;
+    }
+    page += 1;
+  }
+  return logs;
+}
+
 async function fetchObjectAuditLogs(objectType: string, objectId: string | number) {
   const query = new URLSearchParams({
     object_type: objectType,

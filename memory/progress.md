@@ -250,3 +250,10 @@
 - 碰撞一页纸移除空栏位的粘贴提示，只在图片存在后显示图片说明和预览列表；画布容器可接收粘贴，默认归到最近聚焦栏位。
 - 重点问题编辑区补齐描述、对策、进展、备注字段的直接粘贴图片能力，上传为 `object_type=key_issue` 附件并按栏位展示受控预览。
 - 本轮验证通过：`npm run type-check`、`npm run build`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
+### Dashboard 项目级审计入口
+
+- Dashboard 首页项目卡新增审计下钻：点击卡片加载该项目下所有项目维度审计日志，模块跳转按钮继续保持原行为。
+- 通用 `AuditHistoryPanel` 支持项目/对象列、标题和说明配置，供项目级和对象级审计共用。
+- 前端 `fetchProjectAuditLogs()` 对 `/projects/{id}/audit-logs/` 自动翻页，默认每页 200 条，避免只展示第一页。
+- 本轮前端验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`（三态 cookie 缺失场景按脚本规则 SKIP，失败数 0）、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。

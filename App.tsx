@@ -53,6 +53,7 @@ import {
   fetchCollisionReportAuditLogs,
   fetchExportDownloadLink,
   fetchKeyIssueAuditLogs,
+  fetchProjectAuditLogs,
   fetchSharedStorageProfile,
   fetchOwnerCandidates,
   fetchWorkspaceData,
@@ -173,9 +174,25 @@ const CHECK_ITEM_STATUS_OPTIONS: CheckItemStatus[] = [
 ];
 
 const AUDIT_ACTION_LABEL: Record<string, string> = {
+  'project.create': '创建项目',
+  'project.update': '更新项目',
+  'project.delete': '删除项目',
+  'project.copy': '复制项目',
+  'project.archive': '归档项目',
+  'project.seed_template': '补齐阶段模板',
+  'project.seed_check_items': '补齐检查项',
+  'project_phase.create': '创建阶段',
+  'project_phase.update': '更新阶段',
+  'project_phase.delete': '删除阶段',
   'check_item.create': '创建检查项',
   'check_item.update': '更新检查项',
   'check_item.status_change': '状态变更',
+  'attachment.upload': '上传附件',
+  'attachment.preview': '预览附件',
+  'attachment.download': '下载附件',
+  'attachment.download_link': '获取附件下载链接',
+  'attachment.update_metadata': '更新附件说明',
+  'attachment.delete': '删除附件',
   'key_issue.create': '创建重点问题',
   'key_issue.update': '更新重点问题',
   'key_issue.delete': '删除重点问题',
@@ -190,6 +207,17 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'collision_report.template_download': '下载一页纸模板',
   'collision_report.submit': '提交一页纸',
   CheckItem: '检查项'
+};
+
+const AUDIT_OBJECT_TYPE_LABEL: Record<string, string> = {
+  Project: '项目',
+  ProjectPhase: '项目阶段',
+  CheckItem: '检查项',
+  KeyIssue: '重点问题',
+  CollisionReport: '碰撞一页纸',
+  Attachment: '附件',
+  ExportJob: '导出任务',
+  CollisionReportApproval: '审批/签核'
 };
 
 const phaseTone = (status: string): StatusTone => {
@@ -460,25 +488,38 @@ const auditStatusTransition = (log: AuditLog) => {
   return `${statusLabelOrDash(oldStatus)} -> ${statusLabelOrDash(newStatus)}`;
 };
 
+const auditObjectLabel = (log: AuditLog) => {
+  const objectType = AUDIT_OBJECT_TYPE_LABEL[log.objectType] ?? log.objectType;
+  return log.objectId ? `${objectType} #${log.objectId}` : objectType || '-';
+};
+
 function AuditHistoryPanel({
   logs,
   loading,
   error,
   onRefresh,
-  emptyMessage = '当前对象暂无审计记录。'
+  emptyMessage = '当前对象暂无审计记录。',
+  title = '审计历史',
+  description = '按后端审计日志倒序展示，操作者来自 IDaaS 请求上下文。',
+  showProject = false,
+  showObject = false
 }: {
   logs: AuditLog[];
   loading: boolean;
   error: string;
   onRefresh: () => void;
   emptyMessage?: string;
+  title?: string;
+  description?: string;
+  showProject?: boolean;
+  showObject?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-outline bg-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 className="text-sm font-semibold text-ink">审计历史</h4>
-          <p className="text-xs text-ink-muted">按后端审计日志倒序展示，操作者来自 IDaaS 请求上下文。</p>
+          <h4 className="text-sm font-semibold text-ink">{title}</h4>
+          <p className="text-xs text-ink-muted">{description}</p>
         </div>
         <button className="btn btn-ghost btn--sm" type="button" onClick={onRefresh} disabled={loading}>
           <RefreshCcw className="h-4 w-4" />
@@ -493,6 +534,8 @@ function AuditHistoryPanel({
             <thead>
               <tr>
                 <th>时间</th>
+                {showProject ? <th>项目</th> : null}
+                {showObject ? <th>对象</th> : null}
                 <th>动作</th>
                 <th>状态变化</th>
                 <th>操作者</th>
@@ -508,6 +551,8 @@ function AuditHistoryPanel({
                 return (
                   <tr key={log.id}>
                     <td className="whitespace-nowrap">{formatDateTime(log.createdAt)}</td>
+                    {showProject ? <td>{log.projectCode || log.projectId || '-'}</td> : null}
+                    {showObject ? <td>{auditObjectLabel(log)}</td> : null}
                     <td>{AUDIT_ACTION_LABEL[log.action] ?? log.action}</td>
                     <td>
                       <div className="font-medium text-ink">{transition || '-'}</div>
@@ -2182,24 +2227,45 @@ function ProjectSummaryCard({
   project,
   phases,
   selected,
-  onOpenProject
+  auditSelected,
+  onOpenProject,
+  onSelectProjectAudit
 }: {
   stat: ProjectStatistics;
   project?: Project;
   phases: ProjectPhaseProgress[];
   selected: boolean;
+  auditSelected: boolean;
   onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
+  onSelectProjectAudit: (projectId: string | number) => void;
 }) {
   const scopeText = [project?.plant, project?.workshopName, project?.lineName].filter(Boolean).join(' / ');
   const dateText = `${formatDate(stat.plannedStartDate || project?.plannedStartDate)} 至 ${formatDate(stat.plannedEndDate || project?.plannedEndDate)}`;
+  const handleAuditSelect = () => onSelectProjectAudit(stat.projectId);
+  const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleAuditSelect();
+    }
+  };
 
   return (
-    <article className={`project-summary-card ${selected ? 'is-selected' : ''}`}>
+    <article
+      className={`project-summary-card ${selected ? 'is-selected' : ''} ${auditSelected ? 'is-audit-selected' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-pressed={auditSelected}
+      aria-label={`查看项目 ${stat.projectName || project?.name || '未命名项目'} 审计日志`}
+      onClick={handleAuditSelect}
+      onKeyDown={handleCardKeyDown}
+    >
       <div className="project-card-header">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-base font-semibold text-ink">{stat.projectName || project?.name || '未命名项目'}</h3>
             {selected ? <span className="chip">当前项目</span> : null}
+            {auditSelected ? <span className="chip">审计查看中</span> : null}
           </div>
           <div className="mt-1 truncate text-xs text-ink-muted">
             {[stat.projectCode || project?.code, stat.ownerName || project?.ownerName].filter(Boolean).join(' · ')}
@@ -2236,7 +2302,10 @@ function ProjectSummaryCard({
               key={action.view}
               className="btn btn-ghost btn--sm project-card-action"
               type="button"
-              onClick={() => onOpenProject(stat.projectId, action.view)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenProject(stat.projectId, action.view);
+              }}
               aria-label={`${stat.projectName} 跳转到${action.label}`}
             >
               <Icon className="h-4 w-4" />
@@ -2249,24 +2318,91 @@ function ProjectSummaryCard({
   );
 }
 
+function ProjectAuditLogPanel({
+  stat,
+  logs,
+  loading,
+  error,
+  onRefresh
+}: {
+  stat?: ProjectStatistics;
+  logs: AuditLog[];
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  if (!stat) return null;
+  const latestLog = logs[0];
+  const objectTypeCount = new Set(logs.map(log => log.objectType).filter(Boolean)).size;
+  const actorCount = new Set(logs.map(log => log.actorIdaasId || log.actorName).filter(Boolean)).size;
+
+  return (
+    <div className="project-audit-shell">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Project Audit Trail</p>
+          <h3 className="text-lg font-semibold">{stat.projectName} 审计日志</h3>
+          <p className="text-sm text-ink-muted">
+            {stat.projectCode} · 聚合项目、阶段、检查项、重点问题、碰撞一页纸、附件和导出任务的审计记录。
+          </p>
+        </div>
+        <span className="chip"><Clock3 className="h-3.5 w-3.5" />{logs.length} 条</span>
+      </div>
+      <div className="project-audit-metrics">
+        <MetricCard label="审计记录" value={logs.length} detail={loading ? '正在刷新' : '当前返回最近记录'} />
+        <MetricCard label="对象类型" value={objectTypeCount} detail="按业务对象聚合" />
+        <MetricCard label="操作者" value={actorCount} detail="来自 IDaaS 请求上下文" />
+        <MetricCard
+          label="最近操作"
+          value={latestLog ? formatDateTime(latestLog.createdAt) : '-'}
+          detail={latestLog ? (AUDIT_ACTION_LABEL[latestLog.action] ?? latestLog.action) : '暂无记录'}
+        />
+      </div>
+      <AuditHistoryPanel
+        logs={logs}
+        loading={loading}
+        error={error}
+        onRefresh={onRefresh}
+        title="项目审计明细"
+        description="按项目上下文倒序展示，覆盖项目下所有已写入 project 维度的业务审计。"
+        emptyMessage="该项目暂无审计记录。"
+        showObject
+      />
+    </div>
+  );
+}
+
 function ProjectSummaryBoard({
   stats,
   projects,
   selectedProjectId,
+  auditProjectId,
+  auditLogs,
+  auditLoading,
+  auditError,
   filters,
   onFiltersChange,
   statusOptions,
-  onOpenProject
+  onOpenProject,
+  onSelectProjectAudit,
+  onRefreshProjectAudit
 }: {
   stats: ProjectStatistics[];
   projects: Project[];
   selectedProjectId?: string | number;
+  auditProjectId?: string | number;
+  auditLogs: AuditLog[];
+  auditLoading: boolean;
+  auditError: string;
   filters: SearchFilterState;
   onFiltersChange: (filters: SearchFilterState) => void;
   statusOptions: string[];
   onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
+  onSelectProjectAudit: (projectId: string | number) => void;
+  onRefreshProjectAudit: () => void;
 }) {
   const projectById = new Map(projects.map(project => [idOf(project.id), project]));
+  const auditProjectStat = stats.find(stat => idOf(stat.projectId) === idOf(auditProjectId));
 
   return (
     <section className="panel">
@@ -2295,11 +2431,20 @@ function ProjectSummaryBoard({
               project={projectById.get(projectId)}
               phases={stat.phaseProgress ?? []}
               selected={projectId === idOf(selectedProjectId)}
+              auditSelected={projectId === idOf(auditProjectId)}
               onOpenProject={onOpenProject}
+              onSelectProjectAudit={onSelectProjectAudit}
             />
           );
         })}
       </div>
+      <ProjectAuditLogPanel
+        stat={auditProjectStat}
+        logs={auditLogs}
+        loading={auditLoading}
+        error={auditError}
+        onRefresh={onRefreshProjectAudit}
+      />
     </section>
   );
 }
@@ -2898,9 +3043,34 @@ function DashboardView({
   onOpenProject: (projectId: string | number, view: DashboardJumpTarget) => void;
 }) {
   const [dashboardFilters, setDashboardFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
+  const [auditProjectId, setAuditProjectId] = useState<string | number | undefined>();
+  const [projectAuditLogs, setProjectAuditLogs] = useState<AuditLog[]>([]);
+  const [projectAuditLoading, setProjectAuditLoading] = useState(false);
+  const [projectAuditError, setProjectAuditError] = useState('');
   const projectStats = buildProjectStatistics(data);
   const filteredProjectStats = projectStats.filter(stat => projectStatMatchesFilters(stat, dashboardFilters));
   const projectStatusOptions = statusOptionValues(projectStats.map(stat => stat.projectStatus));
+  const loadProjectAuditLogs = async (projectId: string | number) => {
+    setProjectAuditLoading(true);
+    setProjectAuditError('');
+    try {
+      const logs = await fetchProjectAuditLogs(projectId);
+      setProjectAuditLogs(logs);
+    } catch (err) {
+      setProjectAuditLogs([]);
+      setProjectAuditError(err instanceof Error ? err.message : '项目审计日志加载失败。');
+    } finally {
+      setProjectAuditLoading(false);
+    }
+  };
+  const handleSelectProjectAudit = (projectId: string | number) => {
+    setAuditProjectId(projectId);
+    void loadProjectAuditLogs(projectId);
+  };
+  const handleRefreshProjectAudit = () => {
+    if (!auditProjectId) return;
+    void loadProjectAuditLogs(auditProjectId);
+  };
 
   return (
     <div className="grid gap-5">
@@ -2910,10 +3080,16 @@ function DashboardView({
         stats={filteredProjectStats}
         projects={data.projects}
         selectedProjectId={data.selectedProject?.id}
+        auditProjectId={auditProjectId}
+        auditLogs={projectAuditLogs}
+        auditLoading={projectAuditLoading}
+        auditError={projectAuditError}
         filters={dashboardFilters}
         onFiltersChange={setDashboardFilters}
         statusOptions={projectStatusOptions}
         onOpenProject={onOpenProject}
+        onSelectProjectAudit={handleSelectProjectAudit}
+        onRefreshProjectAudit={handleRefreshProjectAudit}
       />
     </div>
   );
