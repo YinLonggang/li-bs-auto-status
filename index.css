@@ -424,6 +424,23 @@
     font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
   }
 
+  .collision-sheet.is-capturing-image {
+    @apply shadow-none;
+  }
+
+  .collision-sheet.is-capturing-image .collision-block-toolbar,
+  .collision-sheet.is-capturing-image .collision-block-actions {
+    @apply hidden;
+  }
+
+  .collision-sheet.is-capturing-image input,
+  .collision-sheet.is-capturing-image textarea,
+  .collision-sheet.is-capturing-image select {
+    @apply border-0 bg-transparent opacity-100 shadow-none outline-none;
+    appearance: none;
+    resize: none;
+  }
+
   .collision-title-field {
     @apply mb-5 block;
   }

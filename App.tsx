@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
+import { toPng } from 'html-to-image';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -278,6 +279,24 @@ const downloadBlobFile = (fileName: string, blob: Blob) => {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+};
+
+const safeDownloadFileName = (value: string, fallback: string) => {
+  const normalized = (value || fallback)
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+  return normalized || fallback;
+};
+
+const downloadDataUrlFile = (fileName: string, dataUrl: string) => {
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 };
 
 const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
@@ -1156,6 +1175,13 @@ type AttachmentThumbnailState = {
   error?: string;
 };
 
+type SheetImagePreviewState = {
+  url?: string;
+  fileName: string;
+  loading: boolean;
+  error?: string;
+};
+
 function AttachmentPreviewModal({
   state,
   canDownload,
@@ -1244,6 +1270,74 @@ function AttachmentPreviewModal({
               className="max-h-[76dvh] max-w-full rounded-lg object-contain"
               src={state.url}
               alt={state.attachment.fileName}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SheetImagePreviewModal({
+  state,
+  onClose,
+  onDownload
+}: {
+  state: SheetImagePreviewState | null;
+  onClose: () => void;
+  onDownload: () => void;
+}) {
+  useEffect(() => {
+    if (!state) return undefined;
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state, onClose]);
+
+  if (!state) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label="一页纸图片预览"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-ink" title={state.fileName}>
+              {state.fileName}
+            </div>
+            <div className="mt-1 text-xs text-ink-muted">碰撞一页纸 PNG 预览</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!state.url || state.loading} onClick={onDownload}>
+              <Download className="h-4 w-4" />
+              下载图片
+            </button>
+            <button className="btn btn-ghost btn--sm" type="button" onClick={onClose} aria-label="关闭一页纸图片预览">
+              <X className="h-4 w-4" />
+              关闭
+            </button>
+          </div>
+        </div>
+        <div className="flex min-h-[320px] flex-1 items-center justify-center bg-surface-soft p-3 sm:p-5">
+          {state.loading ? <div className="text-sm text-ink-muted">图片生成中...</div> : null}
+          {state.error ? <div className="max-w-md text-center text-sm text-danger">{state.error}</div> : null}
+          {state.url && !state.loading && !state.error ? (
+            <img
+              className="max-h-[76dvh] max-w-full rounded-lg bg-white object-contain"
+              src={state.url}
+              alt="碰撞一页纸图片预览"
             />
           ) : null}
         </div>
@@ -3398,11 +3492,6 @@ function CollisionReadonlyCanvas({ report }: { report: CollisionReport }) {
             <h4>4. 制定措施</h4>
             {renderBodyCell('section_4', 'containment', '【临时/拦截措施】', report.containment)}
             {renderBodyCell('section_4', 'correctiveAction', '【长期措施/追溯】', report.correctiveAction)}
-            <div className="collision-inline-fields">
-              {renderSummaryCell('section_4', 'impact', '影响', report.impact)}
-              {renderSummaryCell('section_4', 'preventiveAction', '预防', report.preventiveAction)}
-              {renderSummaryCell('section_4', 'validation', '验证', report.validation)}
-            </div>
           </section>
           <section className="collision-section">
             <h4>其他补充说明</h4>
@@ -5641,6 +5730,8 @@ function CollisionCrudView({
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState('');
+  const [sheetImagePreview, setSheetImagePreview] = useState<SheetImagePreviewState | null>(null);
+  const collisionSheetRef = useRef<HTMLDivElement | null>(null);
   const selectedReport = reports.find(report => idOf(report.id) === selectedReportId) ?? null;
   const selectedIsNew = selectedReportId === 'new' || !selectedReport;
   const statusOptions = statusOptionValues(reports.map(report => report.status));
@@ -5849,6 +5940,35 @@ function CollisionCrudView({
     setActiveCollisionFieldKey(fieldKey);
   };
 
+  const handleGenerateSheetImage = async () => {
+    const node = collisionSheetRef.current;
+    const fileName = `${safeDownloadFileName(draft.title || selectedReport?.title || 'collision-one-pager', 'collision-one-pager')}.png`;
+    if (!node) {
+      setSheetImagePreview({ fileName, loading: false, error: '一页纸画布尚未渲染，无法生成图片。' });
+      return;
+    }
+
+    setSheetImagePreview({ fileName, loading: true });
+    node.classList.add('is-capturing-image');
+    try {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const url = await toPng(node, {
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        pixelRatio: 2
+      });
+      setSheetImagePreview({ fileName, url, loading: false });
+    } catch (err) {
+      setSheetImagePreview({
+        fileName,
+        loading: false,
+        error: mutationErrorMessage(err, '一页纸图片生成失败。')
+      });
+    } finally {
+      node.classList.remove('is-capturing-image');
+    }
+  };
+
   const renderSummaryField = (
     fieldKey: string,
     label: string,
@@ -6033,6 +6153,15 @@ function CollisionCrudView({
             <button
               className="btn btn-ghost btn--sm"
               type="button"
+              disabled={saving || sheetImagePreview?.loading}
+              onClick={() => void handleGenerateSheetImage()}
+            >
+              <ImageIcon className="h-4 w-4" />
+              预览图片
+            </button>
+            <button
+              className="btn btn-ghost btn--sm"
+              type="button"
               disabled={!canWrite || saving || selectedIsNew || !selectedReport}
               onClick={() => selectedReport && void runMutation(() => onExportExcel(selectedReport), '碰撞一页纸 Excel 已导出。')}
             >
@@ -6049,6 +6178,7 @@ function CollisionCrudView({
         </div>
         <div className="collision-sheet-scroll">
           <div
+            ref={collisionSheetRef}
             className="collision-sheet"
             aria-label="碰撞一页纸模板输入区"
             onPaste={event => {
@@ -6137,11 +6267,6 @@ function CollisionCrudView({
                 <h4>4. 制定措施</h4>
                 {renderBodyField('containment', '【临时/拦截措施】', draft.containment, value => setDraft({ ...draft, containment: value }))}
                 {renderBodyField('correctiveAction', '【长期措施/追溯】', draft.correctiveAction, value => setDraft({ ...draft, correctiveAction: value }))}
-                <div className="collision-inline-fields">
-                  {renderSummaryField('impact', '影响', draft.impact, value => setDraft({ ...draft, impact: value }), { sectionKey: 'section_4', allowImages: true })}
-                  {renderSummaryField('preventiveAction', '预防', draft.preventiveAction, value => setDraft({ ...draft, preventiveAction: value }), { sectionKey: 'section_4', allowImages: true })}
-                  {renderSummaryField('validation', '验证', draft.validation, value => setDraft({ ...draft, validation: value }), { sectionKey: 'section_4', allowImages: true })}
-                </div>
               </section>
 
               <section className="collision-section">
@@ -6157,6 +6282,15 @@ function CollisionCrudView({
           </div>
         </div>
       </div>
+      <SheetImagePreviewModal
+        state={sheetImagePreview}
+        onClose={() => setSheetImagePreview(null)}
+        onDownload={() => {
+          if (sheetImagePreview?.url) {
+            downloadDataUrlFile(sheetImagePreview.fileName, sheetImagePreview.url);
+          }
+        }}
+      />
       <div className="mt-5">
         <AuditHistoryPanel
           logs={auditLogs}

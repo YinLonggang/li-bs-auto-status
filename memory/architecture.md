@@ -202,3 +202,9 @@
 - 每个正文栏位提供多文件上传入口，上传 metadata 继续写入 `section_key`、`collision_slot`、`collision_slot_label`、`caption`、`sort_order`、`source=file_upload`，后端自动同步为 `CollisionReportBlockType.FILE` 或 `IMAGE`。
 - 前端 API fallback 在后端未返回 blocks 时，会把历史附件按 content type 转为 image/file block，避免历史非图片附件不可见。
 - 一页纸 Excel 导出对非图片附件按栏位输出 `【附件N】文件名：说明` 文本引用；图片仍按原逻辑嵌入工作表。
+
+## 2026-05-16 碰撞一页纸图片预览下载
+
+- 碰撞一页纸编辑区取消 `impact` / `preventiveAction` / `validation` 三个附加输入入口，保留后端字段兼容历史数据与旧导出逻辑。
+- 编辑画布新增客户端 PNG 预览下载能力：前端用 `html-to-image` 将当前 `.collision-sheet` 渲染成图片，先展示预览弹窗，再由用户下载 PNG。
+- 生成 PNG 时临时添加 `is-capturing-image` class，隐藏上传、下载、删除等操作控件，并把输入控件视觉降级成普通文本，避免图片中出现操作按钮。

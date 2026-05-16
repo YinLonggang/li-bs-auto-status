@@ -319,3 +319,10 @@
 - 一页纸 Excel 导出会把非图片附件按字段写入 `【附件N】文件名：说明` 文本引用，图片嵌入逻辑保持不变。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`python manage.py test li_bs_auto_status`（51 tests OK）、`manage.py check`、`makemigrations --check --dry-run`、`git diff --check`。
 - 按 dev-environment-bootstrap 重启后端和 `li-bs-auto-status` 3005，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
+### 一页纸图片预览下载
+
+- 编辑区取消影响、预防、验证三个输入框；历史字段仍保留在前端 draft/API adapter 中，避免旧数据被破坏。
+- 新增 `预览图片` 操作，使用 `html-to-image` 生成当前一页纸画布 PNG，先在弹窗预览，再点击下载图片。
+- 截图生成时隐藏附件上传、下载、删除等操作按钮，并将输入控件样式降级为普通内容，保证下载图片更接近报告版式。
+- 本轮前端验证通过：`npm run type-check`、`npm run build`、`npm audit --audit-level=high`、`npm run permission-regression`、`git diff --check`。
