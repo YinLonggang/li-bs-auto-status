@@ -189,3 +189,9 @@
 - 输入字段补齐 `source`、`processAnalysis`、`rootCauseConclusion`、`imageObjectKey`，保持写入 `content/metadata`，不改变后端模型结构。
 - 所选一页纸支持在画布“现场图片 / 附件”区域直接插入图片，上传对象固定为 `object_type=collision_report`、`object_id=<report.id>`；新增报告需先保存再插图。
 - 图片预览、下载继续复用受控附件组件，普通页面不暴露 SMB/object key。
+
+## 2026-05-16 碰撞一页纸粘贴草稿保护
+
+- 碰撞一页纸字段级粘贴图片前，前端必须先把当前字段实时文本合并进 `CollisionDraft` 并保存报告草稿，再执行附件上传，避免附件上传触发的数据刷新覆盖未保存文字。
+- 新建报告场景继续由粘贴动作自动创建草稿报告；已保存报告场景在同一链路中先调用正式 update API，再调用附件上传 API，审计来源仍由后端 IDaaS 上下文记录。
+- 正文输入区按文本长度和换行估算 textarea 行数，预览态正文使用 `white-space: pre-wrap` 和 `break-words` 完整展示长文本，避免一页纸正文在网页上被截断。

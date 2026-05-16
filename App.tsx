@@ -5152,6 +5152,27 @@ const collisionDraftFromReport = (report: CollisionReport | null, phases: Projec
       }
     : emptyCollisionDraft(phases);
 
+const collisionDraftWithLatestFieldValue = (
+  current: CollisionDraft,
+  fieldKey: string,
+  fieldValue: string
+): CollisionDraft => {
+  if (!(fieldKey in current)) return current;
+  const nextDraft = { ...current, [fieldKey]: fieldValue } as CollisionDraft;
+  if (fieldKey === 'rootCauseConclusion') {
+    nextDraft.rootCause = fieldValue;
+  }
+  return nextDraft;
+};
+
+const collisionTextareaRows = (value: string, large = false) => {
+  const minRows = large ? 14 : 5;
+  const estimatedRows = (value || '')
+    .split('\n')
+    .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / 38)), 0);
+  return Math.max(minRows, estimatedRows + 1);
+};
+
 function IssuesCrudView({
   project,
   issues,
@@ -5695,13 +5716,13 @@ function CollisionCrudView({
     await runMutation(() => onImportCsv(file), '碰撞一页纸 CSV 已导入。');
   };
 
-  const ensureReportForImagePaste = async () => {
+  const ensureReportForImagePaste = async (draftSnapshot: CollisionDraft) => {
     if (selectedReport && !selectedIsNew) return { report: selectedReport, created: false };
-    if (!draft.title.trim()) {
+    if (!draftSnapshot.title.trim()) {
       setMessage('请先填写标题；粘贴图片时会自动创建草稿报告并绑定图片。');
       return null;
     }
-    const createdReport = await onCreateReport(draft);
+    const createdReport = await onCreateReport(draftSnapshot);
     if (createdReport) {
       setSelectedReportId(idOf(createdReport.id));
     }
@@ -5712,13 +5733,17 @@ function CollisionCrudView({
     sectionKey: string,
     fieldKey: string,
     fieldLabel: string,
-    event: ClipboardEvent<HTMLElement>
+    event: ClipboardEvent<HTMLElement>,
+    fieldValue?: string
   ) => {
     if (!canWrite || !clipboardHasImagePayload(event.clipboardData)) return;
     event.preventDefault();
     const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
     if (!files.length) return;
-    if (!selectedReport && !draft.title.trim()) {
+    const draftSnapshot = fieldValue === undefined
+      ? draft
+      : collisionDraftWithLatestFieldValue(draft, fieldKey, fieldValue);
+    if (!selectedReport && !draftSnapshot.title.trim()) {
       setMessage('请先填写标题；粘贴图片时会自动创建草稿报告并绑定图片。');
       return;
     }
@@ -5739,12 +5764,15 @@ function CollisionCrudView({
     });
     setPendingCollisionImages(current => [...current, ...pendingImages]);
     setSaving(true);
-    setMessage(`${fieldLabel}图片正在上传...`);
+    setMessage(`${fieldLabel}文字正在保存，图片正在上传...`);
     try {
-      const target = await ensureReportForImagePaste();
+      const target = await ensureReportForImagePaste(draftSnapshot);
       if (!target) {
         clearPendingImages(pendingImages.map(image => image.id));
         return;
+      }
+      if (!target.created) {
+        await onUpdateReport(target.report, draftSnapshot);
       }
       for (const [index, file] of files.entries()) {
         await onUploadReportAttachment(target.report, file, {
@@ -5800,7 +5828,7 @@ function CollisionCrudView({
           return;
         }
         if (allowImages) {
-          void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+          void handleCollisionFieldPaste(sectionKey, fieldKey, label, event, event.currentTarget.value);
         }
       }
     };
@@ -5846,12 +5874,13 @@ function CollisionCrudView({
         <span>{label}</span>
         <textarea
           value={value}
+          rows={collisionTextareaRows(value, options.large)}
           disabled={!canWrite}
           onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
           onChange={event => onChange(event.target.value)}
           onPaste={event => {
             event.stopPropagation();
-            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event, event.currentTarget.value);
           }}
         />
         <CollisionBlockGallery

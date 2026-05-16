@@ -562,7 +562,7 @@
   }
 
   .collision-field textarea {
-    @apply min-h-24 resize-y leading-relaxed;
+    @apply min-h-32 resize-y leading-relaxed;
   }
 
   .collision-field.is-large textarea {
@@ -570,7 +570,7 @@
   }
 
   .collision-readonly-text {
-    @apply min-h-24 whitespace-pre-wrap px-3 py-2 text-sm leading-relaxed text-slate-950;
+    @apply min-h-32 whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed text-slate-950;
   }
 
   .collision-field.is-large .collision-readonly-text {

@@ -282,3 +282,32 @@
 - 通用 `AuditHistoryPanel` 支持项目/对象列、标题和说明配置，供项目级和对象级审计共用。
 - 前端 `fetchProjectAuditLogs()` 对 `/projects/{id}/audit-logs/` 自动翻页，默认每页 200 条，避免只展示第一页。
 - 本轮前端验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`（三态 cookie 缺失场景按脚本规则 SKIP，失败数 0）、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后 `GET http://127.0.0.1:3005/` 返回 HTTP 200。
+
+## 2026-05-16
+
+### 今日目标
+
+- 修复碰撞一页纸字段先输入文字再粘贴图片后，未保存文字被刷新覆盖的问题。
+- 让一页纸正文在网页编辑和预览中尽量完整显示，减少滚动框内截断。
+
+### 完成事项
+
+- 粘贴图片时会把当前输入框实时值合并到 `CollisionDraft`，已保存报告先执行 update 再上传附件，新建报告仍按现有链路自动创建草稿后绑定附件。
+- 正文 textarea 按内容估算行数自动扩展；只读预览正文增加长文本换行，保证网页上能完整看到输入内容。
+- 按 dev-environment-bootstrap 重启 `li-bs-auto-status` 3005，后端 8000 保持运行。
+
+### 验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过。
+- `npm run permission-regression` 通过，权限三态 cookie 缺失场景按脚本规则 SKIP，失败数 0。
+- `git diff --check` 通过。
+- `GET http://127.0.0.1:8000/api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
+### 问题与风险
+
+- 本次修复为前端草稿保护与展示优化，真实粘贴图片闭环仍依赖当前登录态、SMB 配置和后端附件上传接口可用。
+
+### 下一步
+
+- 在用户真实浏览器中复测：问题描述输入文字后直接粘贴图片，确认文字不丢失、图片归档到对应栏位、保存/导出链路保持正常。
