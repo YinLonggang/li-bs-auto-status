@@ -610,6 +610,10 @@
     @apply ring-2 ring-teal-600 ring-offset-1 ring-offset-white;
   }
 
+  .collision-block-toolbar {
+    @apply mb-2 flex flex-wrap justify-end gap-2;
+  }
+
   .collision-block-empty {
     @apply flex min-h-20 items-center justify-center gap-2 rounded border border-dashed border-slate-300 bg-white px-2 py-3 text-center text-xs font-semibold text-slate-500;
   }
@@ -654,6 +658,10 @@
 
   .collision-block-thumb:disabled {
     @apply cursor-not-allowed;
+  }
+
+  .collision-block-file {
+    @apply flex h-28 flex-col items-center justify-center gap-2 bg-slate-100 px-3 text-center text-xs font-semibold text-slate-600;
   }
 
   .collision-block-meta {

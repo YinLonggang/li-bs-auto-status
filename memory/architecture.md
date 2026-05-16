@@ -195,3 +195,10 @@
 - 碰撞一页纸字段级粘贴图片前，前端必须先把当前字段实时文本合并进 `CollisionDraft` 并保存报告草稿，再执行附件上传，避免附件上传触发的数据刷新覆盖未保存文字。
 - 新建报告场景继续由粘贴动作自动创建草稿报告；已保存报告场景在同一链路中先调用正式 update API，再调用附件上传 API，审计来源仍由后端 IDaaS 上下文记录。
 - 正文输入区按文本长度和换行估算 textarea 行数，预览态正文使用 `white-space: pre-wrap` 和 `break-words` 完整展示长文本，避免一页纸正文在网页上被截断。
+
+## 2026-05-16 碰撞一页纸字段级通用附件
+
+- 碰撞一页纸正文栏位的附件区不再只展示图片 block；前端按 `CollisionReportBlock.blockType=image/file` 同源展示，图片走缩略图和受控预览，Excel/PPT/PDF 等非图片文件走文件卡片、说明、下载和删除。
+- 每个正文栏位提供多文件上传入口，上传 metadata 继续写入 `section_key`、`collision_slot`、`collision_slot_label`、`caption`、`sort_order`、`source=file_upload`，后端自动同步为 `CollisionReportBlockType.FILE` 或 `IMAGE`。
+- 前端 API fallback 在后端未返回 blocks 时，会把历史附件按 content type 转为 image/file block，避免历史非图片附件不可见。
+- 一页纸 Excel 导出对非图片附件按栏位输出 `【附件N】文件名：说明` 文本引用；图片仍按原逻辑嵌入工作表。

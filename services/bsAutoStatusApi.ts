@@ -408,7 +408,11 @@ const normalizeCollisionReportBlock = (
   const sectionKey =
     firstString(raw, ['sectionKey', 'section_key']) ||
     firstString(metadata, ['section_key', 'sectionKey'], collisionDefaultSectionKey(slotKey));
-  const blockType = firstString(raw, ['blockType', 'block_type'], attachmentDetail ? 'image' : 'text').toLowerCase();
+  const blockType = firstString(
+    raw,
+    ['blockType', 'block_type'],
+    attachmentDetail ? (isImageAttachmentForBlocks(attachmentDetail) ? 'image' : 'file') : 'text'
+  ).toLowerCase();
   const rawSortOrder = firstNumber(raw, ['sortOrder', 'sort_order'], Number.NaN);
   const metadataSortOrder = firstNumber(metadata, ['sortOrder', 'sort_order'], fallbackIndex);
 
@@ -432,12 +436,11 @@ const normalizeCollisionReportBlock = (
   };
 };
 
-const fallbackCollisionImageBlocksFromAttachments = (
+const fallbackCollisionAttachmentBlocksFromAttachments = (
   attachments: Attachment[],
   fallbackReportId: string | number
 ): CollisionReportBlock[] =>
   attachments
-    .filter(isImageAttachmentForBlocks)
     .map((attachment, index) => {
       const metadata = asRecord(attachment.metadata);
       const slotKey = firstString(metadata, ['collision_slot', 'collisionSlot', 'slot_key', 'slotKey'], 'problemDescription');
@@ -448,7 +451,7 @@ const fallbackCollisionImageBlocksFromAttachments = (
         sectionKey,
         slotKey,
         slotLabel: firstString(metadata, ['collision_slot_label', 'collisionSlotLabel', 'slot_label', 'slotLabel'], slotKey),
-        blockType: 'image',
+        blockType: isImageAttachmentForBlocks(attachment) ? 'image' : 'file',
         text: '',
         attachment: attachment.id,
         attachmentDetail: attachment,
@@ -467,7 +470,7 @@ const normalizeCollisionReportBlocks = (
   const rawBlocks = asArray(input);
   const blocks = rawBlocks.length
     ? rawBlocks.map((block, index) => normalizeCollisionReportBlock(block, attachmentById, fallbackReportId, index))
-    : fallbackCollisionImageBlocksFromAttachments(attachments, fallbackReportId);
+    : fallbackCollisionAttachmentBlocksFromAttachments(attachments, fallbackReportId);
   return blocks.sort((left, right) => left.sortOrder - right.sortOrder);
 };
 

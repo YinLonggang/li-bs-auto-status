@@ -311,3 +311,11 @@
 ### 下一步
 
 - 在用户真实浏览器中复测：问题描述输入文字后直接粘贴图片，确认文字不丢失、图片归档到对应栏位、保存/导出链路保持正常。
+
+### 字段级通用附件
+
+- 碰撞一页纸字段附件区支持 `image/file` block 同源展示：图片缩略图可直接预览，Excel/PPT/PDF 等非图片附件以文件卡片展示。
+- 每个正文栏位新增多文件上传入口，上传 Excel/PPT 等普通附件时仍按当前字段写入 `collision_slot` metadata，由后端同步为 `CollisionReportBlockType.FILE`。
+- 一页纸 Excel 导出会把非图片附件按字段写入 `【附件N】文件名：说明` 文本引用，图片嵌入逻辑保持不变。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`python manage.py test li_bs_auto_status`（51 tests OK）、`manage.py check`、`makemigrations --check --dry-run`、`git diff --check`。
+- 按 dev-environment-bootstrap 重启后端和 `li-bs-auto-status` 3005，`GET /api/auth/csrf/` 与 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。

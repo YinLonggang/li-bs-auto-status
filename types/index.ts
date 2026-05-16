@@ -301,7 +301,7 @@ export type KeyIssue = {
   attachments: Attachment[];
 };
 
-export type CollisionBlockType = 'text' | 'image' | string;
+export type CollisionBlockType = 'text' | 'image' | 'file' | string;
 
 export type CollisionReportBlock = {
   id: string | number;
