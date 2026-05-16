@@ -9,6 +9,7 @@ import type {
   CheckItemOwner,
   CheckItemStatus,
   ChecklistTemplate,
+  CollisionReportBlock,
   CollisionReport,
   DashboardProgressRow,
   DashboardSummary,
@@ -365,6 +366,111 @@ const normalizeAttachment = (input: unknown): Attachment => {
   };
 };
 
+const IMAGE_ATTACHMENT_PATTERN = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+
+const isImageAttachmentForBlocks = (attachment: Attachment) =>
+  attachment.isImage === true ||
+  attachment.contentType?.toLowerCase().startsWith('image/') ||
+  IMAGE_ATTACHMENT_PATTERN.test(attachment.fileName);
+
+const collisionDefaultSectionKey = (slotKey: string) => {
+  if (['problemDescription', 'vehicleModel', 'source'].includes(slotKey)) return 'section_1';
+  if (slotKey === 'diagnosisRepair') return 'section_2';
+  if (['processAnalysis', 'rootCause', 'rootCauseConclusion', 'summary'].includes(slotKey)) return 'section_3';
+  if (['containment', 'correctiveAction', 'impact', 'preventiveAction', 'validation'].includes(slotKey)) return 'section_4';
+  if (slotKey === 'supportNeeded') return 'section_5';
+  if (slotKey === 'approvalSignoff') return 'signoff';
+  return 'summary';
+};
+
+const normalizeCollisionReportBlock = (
+  input: unknown,
+  attachmentById: Map<string, Attachment>,
+  fallbackReportId: string | number,
+  fallbackIndex: number
+): CollisionReportBlock => {
+  const raw = asRecord(input);
+  const metadata = metadataOf(raw);
+  const detailPayload = raw.attachmentDetail ?? raw.attachment_detail;
+  const attachmentPayload = raw.attachment;
+  const embeddedAttachment = isRecord(detailPayload)
+    ? normalizeAttachment(detailPayload)
+    : isRecord(attachmentPayload)
+      ? normalizeAttachment(attachmentPayload)
+      : null;
+  const attachmentId =
+    (isRecord(attachmentPayload) ? null : firstOptionalId(raw, ['attachment'])) ??
+    (embeddedAttachment ? embeddedAttachment.id : null);
+  const attachmentDetail = embeddedAttachment ?? (attachmentId !== null ? attachmentById.get(String(attachmentId)) ?? null : null);
+  const slotKey =
+    firstString(raw, ['slotKey', 'slot_key']) ||
+    firstString(metadata, ['collision_slot', 'collisionSlot', 'slot_key', 'slotKey'], 'problemDescription');
+  const sectionKey =
+    firstString(raw, ['sectionKey', 'section_key']) ||
+    firstString(metadata, ['section_key', 'sectionKey'], collisionDefaultSectionKey(slotKey));
+  const blockType = firstString(raw, ['blockType', 'block_type'], attachmentDetail ? 'image' : 'text').toLowerCase();
+  const rawSortOrder = firstNumber(raw, ['sortOrder', 'sort_order'], Number.NaN);
+  const metadataSortOrder = firstNumber(metadata, ['sortOrder', 'sort_order'], fallbackIndex);
+
+  return {
+    id: firstId(raw, ['id'], attachmentDetail ? `attachment-${attachmentDetail.id}` : `block-${fallbackIndex}`),
+    report: firstOptionalId(raw, ['report']) ?? fallbackReportId,
+    sectionKey,
+    slotKey,
+    slotLabel:
+      firstString(raw, ['slotLabel', 'slot_label']) ||
+      firstString(metadata, ['collision_slot_label', 'collisionSlotLabel', 'slot_label', 'slotLabel'], slotKey),
+    blockType,
+    text: firstString(raw, ['text']),
+    attachment: attachmentId,
+    attachmentDetail,
+    caption:
+      firstString(raw, ['caption']) ||
+      firstString(metadata, ['caption', 'image_caption']),
+    sortOrder: Number.isFinite(rawSortOrder) ? rawSortOrder : metadataSortOrder,
+    metadata
+  };
+};
+
+const fallbackCollisionImageBlocksFromAttachments = (
+  attachments: Attachment[],
+  fallbackReportId: string | number
+): CollisionReportBlock[] =>
+  attachments
+    .filter(isImageAttachmentForBlocks)
+    .map((attachment, index) => {
+      const metadata = asRecord(attachment.metadata);
+      const slotKey = firstString(metadata, ['collision_slot', 'collisionSlot', 'slot_key', 'slotKey'], 'problemDescription');
+      const sectionKey = firstString(metadata, ['section_key', 'sectionKey'], collisionDefaultSectionKey(slotKey));
+      return {
+        id: `attachment-${attachment.id}`,
+        report: fallbackReportId,
+        sectionKey,
+        slotKey,
+        slotLabel: firstString(metadata, ['collision_slot_label', 'collisionSlotLabel', 'slot_label', 'slotLabel'], slotKey),
+        blockType: 'image',
+        text: '',
+        attachment: attachment.id,
+        attachmentDetail: attachment,
+        caption: firstString(metadata, ['caption', 'image_caption']),
+        sortOrder: firstNumber(metadata, ['sortOrder', 'sort_order'], index),
+        metadata
+      };
+    });
+
+const normalizeCollisionReportBlocks = (
+  input: unknown,
+  attachments: Attachment[],
+  fallbackReportId: string | number
+) => {
+  const attachmentById = new Map(attachments.map(attachment => [String(attachment.id), attachment]));
+  const rawBlocks = asArray(input);
+  const blocks = rawBlocks.length
+    ? rawBlocks.map((block, index) => normalizeCollisionReportBlock(block, attachmentById, fallbackReportId, index))
+    : fallbackCollisionImageBlocksFromAttachments(attachments, fallbackReportId);
+  return blocks.sort((left, right) => left.sortOrder - right.sortOrder);
+};
+
 const normalizeAuditLog = (input: unknown): AuditLog => {
   const raw = asRecord(input);
   return {
@@ -600,8 +706,10 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
   const content = asRecord(raw.content);
   const metadata = metadataOf(raw);
   const approvals = asArray(raw.approvals).map(asRecord);
+  const reportId = firstId(raw, ['id']);
+  const attachments = asArray(raw.attachments).map(normalizeAttachment);
   return {
-    id: firstId(raw, ['id']),
+    id: reportId,
     projectId: firstId(raw, ['projectId', 'project']),
     projectPhaseId: firstId(raw, ['projectPhaseId', 'phase', 'project_phase', 'project_phase_id']) || null,
     phaseName: firstString(raw, ['phaseName', 'phase_name']),
@@ -638,7 +746,8 @@ const normalizeCollisionReport = (input: unknown): CollisionReport => {
     imageObjectKey: firstString(content, ['imageObjectKey', 'image_object_key', 'photo', 'problemPhotoObjectKey', 'problem_photo_object_key']),
     imageCaptions: asStringRecord(content.imageCaptions ?? content.image_captions),
     metadata,
-    attachments: asArray(raw.attachments).map(normalizeAttachment),
+    attachments,
+    blocks: normalizeCollisionReportBlocks(raw.blocks ?? raw.collisionBlocks ?? raw.collision_blocks, attachments, reportId),
     updatedAt: firstString(raw, ['updatedAt', 'updated_at'])
   };
 };

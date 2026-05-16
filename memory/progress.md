@@ -1,5 +1,29 @@
 # li-bs-auto-status 进度记录
 
+## 2026-05-16
+
+### 今日目标
+
+- 将碰撞一页纸前端输入体验从字段下方附件列表升级为结构化 block 画布，支持 1/2/3/4/5 分区字段直接粘贴图片、预览、说明和删除。
+
+### 完成事项
+
+- 前端类型新增 `CollisionReportBlock` / `CollisionBlockType`，`CollisionReport` 增加 `blocks`；API adapter 兼容 block snake_case/camelCase 字段，并在后端未返回 blocks 时从历史附件 metadata 生成 image blocks。
+- 碰撞一页纸编辑画布新增 `CollisionBlockGallery`：每个摘要/正文槽位都有可聚焦贴图区，粘贴后先展示本地上传中缩略图，后端刷新后按 report blocks 展示真实图片。
+- 上传 `/attachments/upload/` metadata 增加 `section_key`、`collision_slot`、`collision_slot_label`、`caption`、`sort_order`、`source=clipboard_paste`；新增态粘贴会明确提示并自动创建草稿报告。
+- 图片说明继续复用 `/attachments/{id}/metadata/`，保存时合并原 metadata，避免丢失槽位信息；图片删除/下载继续沿用现有附件动作和权限。
+- Dashboard 碰撞一页纸摘要改为只读 Excel 画布，图片使用同一 block gallery 预览；编辑画布移除用户可见“图片对象引用”输入。
+
+### 验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过。
+- `git diff --check` 通过。
+
+### 问题与风险
+
+- 结构化 blocks 依赖后端新字段发布；后端暂未返回 blocks 时前端仅能基于历史图片附件 metadata 生成展示用 image blocks。
+
 ## 2026-05-15
 
 ### 重点问题图片缩略图返修

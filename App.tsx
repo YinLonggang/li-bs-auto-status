@@ -80,6 +80,7 @@ import type {
   CheckItemOwner,
   CheckItemStatus,
   CollisionReport,
+  CollisionReportBlock,
   DashboardSummary,
   ExportTask,
   InspectionModule,
@@ -1593,6 +1594,318 @@ function AttachmentList({
   );
 }
 
+type CollisionPendingImage = {
+  id: string;
+  fileName: string;
+  previewUrl: string;
+  sortOrder: number;
+  error?: string;
+};
+
+function CollisionBlockGallery({
+  blocks,
+  pendingImages = [],
+  canWrite,
+  canDownload,
+  onDownloadAttachment,
+  onDeleteAttachment,
+  onUpdateAttachmentCaption,
+  onFocus,
+  onPaste,
+  emptyMessage = '待粘贴图片'
+}: {
+  blocks: CollisionReportBlock[];
+  pendingImages?: CollisionPendingImage[];
+  canWrite: boolean;
+  canDownload: boolean;
+  onDownloadAttachment?: (attachment: Attachment) => Promise<void>;
+  onDeleteAttachment?: (attachment: Attachment) => Promise<void>;
+  onUpdateAttachmentCaption?: (attachment: Attachment, caption: string) => Promise<void>;
+  onFocus?: () => void;
+  onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  emptyMessage?: string;
+}) {
+  const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
+  const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
+  const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
+  const [deletingId, setDeletingId] = useState<string | number | null>(null);
+  const [message, setMessage] = useState('');
+  const thumbnailUrlsRef = useRef<string[]>([]);
+  const sortedBlocks = [...blocks].sort((left, right) => left.sortOrder - right.sortOrder);
+  const blockItems = sortedBlocks.map(block => {
+    const attachment = block.attachmentDetail ?? null;
+    return {
+      block,
+      attachment,
+      key: idOf(block.id),
+      caption: collisionBlockCaption(block, attachment)
+    };
+  });
+  const imageAttachmentKey = blockItems
+    .map(item => item.attachment ? `${item.key}:${item.attachment.id}:${item.attachment.fileName}:${item.attachment.createdAt ?? ''}:${item.attachment.fileSize ?? ''}` : item.key)
+    .join('|');
+  const captionKey = blockItems.map(item => `${item.key}:${item.caption}`).join('|');
+  const isEmpty = !blockItems.length && !pendingImages.length;
+
+  const closePreview = () => {
+    setPreview(current => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  };
+
+  useEffect(() => () => {
+    if (preview?.url) URL.revokeObjectURL(preview.url);
+  }, [preview?.url]);
+
+  useEffect(() => {
+    setCaptionDrafts(Object.fromEntries(blockItems.map(item => [item.key, item.caption])));
+  }, [captionKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    thumbnailUrlsRef.current = [];
+    setThumbnails({});
+
+    blockItems.forEach(item => {
+      if (!item.attachment || !canPreviewAttachment(item.attachment)) return;
+      setThumbnails(current => ({ ...current, [item.key]: { loading: true } }));
+      void fetchAttachmentPreview(item.attachment.id)
+        .then(result => {
+          const url = URL.createObjectURL(result.blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          thumbnailUrlsRef.current.push(url);
+          setThumbnails(current => ({ ...current, [item.key]: { url, loading: false } }));
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setThumbnails(current => ({
+            ...current,
+            [item.key]: {
+              loading: false,
+              error: mutationErrorMessage(err, '缩略图加载失败。')
+            }
+          }));
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      thumbnailUrlsRef.current = [];
+    };
+  }, [imageAttachmentKey]);
+
+  const openPreview = async (attachment: Attachment) => {
+    if (!canPreviewAttachment(attachment)) return;
+    setMessage('');
+    closePreview();
+    setPreview({ attachment, loading: true });
+    try {
+      const result = await fetchAttachmentPreview(attachment.id);
+      const url = URL.createObjectURL(result.blob);
+      setPreview({ attachment, url, loading: false });
+    } catch (err) {
+      setPreview({
+        attachment,
+        loading: false,
+        error: mutationErrorMessage(err, '附件预览加载失败。')
+      });
+    }
+  };
+
+  const handleDownload = async (attachment: Attachment) => {
+    if (!onDownloadAttachment || !canDownload || attachment.canDownload === false) {
+      setMessage('当前账号没有附件下载权限。');
+      return;
+    }
+    setDownloadingId(attachment.id);
+    setMessage('');
+    try {
+      await onDownloadAttachment(attachment);
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const handleDelete = async (attachment: Attachment) => {
+    if (!onDeleteAttachment || !canWrite) {
+      setMessage('当前账号没有附件删除权限。');
+      return;
+    }
+    if (!window.confirm(`确认删除图片「${attachment.fileName}」？`)) return;
+    setDeletingId(attachment.id);
+    setMessage('');
+    try {
+      await onDeleteAttachment(attachment);
+      if (preview?.attachment.id === attachment.id) closePreview();
+      setMessage('图片已删除。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '图片删除失败。'));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleSaveCaption = async (blockKey: string, attachment: Attachment) => {
+    if (!onUpdateAttachmentCaption || !canWrite) {
+      setMessage('当前账号没有图片说明维护权限。');
+      return;
+    }
+    setSavingCaptionId(attachment.id);
+    setMessage('');
+    try {
+      await onUpdateAttachmentCaption(attachment, captionDrafts[blockKey] ?? '');
+      setMessage('图片说明已保存。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '图片说明保存失败。'));
+    } finally {
+      setSavingCaptionId(null);
+    }
+  };
+
+  if (isEmpty && !canWrite) return null;
+
+  return (
+    <div
+      className={`collision-block-gallery ${canWrite ? 'is-editable' : ''}`}
+      tabIndex={canWrite ? 0 : -1}
+      onFocus={onFocus}
+      onPaste={onPaste}
+      aria-label={emptyMessage}
+    >
+      {isEmpty ? (
+        <div className="collision-block-empty">
+          <ImageIcon className="h-4 w-4" />
+          <span>{emptyMessage}</span>
+        </div>
+      ) : (
+        <div className="collision-block-grid">
+          {[...pendingImages]
+            .sort((left, right) => left.sortOrder - right.sortOrder)
+            .map(image => (
+              <div key={image.id} className={`collision-block-card is-pending ${image.error ? 'is-error' : ''}`}>
+                <div className="collision-block-thumb">
+                  <img src={image.previewUrl} alt={image.fileName} />
+                </div>
+                <div className="collision-block-meta">
+                  <div className="truncate text-xs font-semibold" title={image.fileName}>{image.fileName}</div>
+                  <div className={image.error ? 'text-xs text-danger' : 'text-xs text-ink-muted'}>
+                    {image.error || '上传中...'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          {blockItems.map(item => {
+            const thumbnail = thumbnails[item.key];
+            const attachment = item.attachment;
+            const draft = captionDrafts[item.key] ?? '';
+            const changed = draft !== item.caption;
+            return (
+              <div key={item.key} className="collision-block-card">
+                <button
+                  className="collision-block-thumb"
+                  type="button"
+                  disabled={!attachment}
+                  onClick={() => attachment && void openPreview(attachment)}
+                  aria-label={attachment ? `放大预览 ${attachment.fileName}` : '图片未返回附件详情'}
+                >
+                  {thumbnail?.url ? (
+                    <img src={thumbnail.url} alt={attachment?.fileName ?? item.block.slotLabel} loading="lazy" />
+                  ) : (
+                    <span>{thumbnail?.error ? '缩略图加载失败' : attachment ? '图片加载中...' : '缺少附件详情'}</span>
+                  )}
+                </button>
+                <div className="collision-block-meta">
+                  <div className="truncate text-xs font-semibold" title={attachment?.fileName ?? item.block.slotLabel}>
+                    {attachment?.fileName ?? item.block.slotLabel}
+                  </div>
+                  {attachment ? (
+                    <div className="text-[11px] text-ink-muted">
+                      {formatFileSize(attachment.fileSize)} · {formatDateTime(attachment.createdAt)}
+                    </div>
+                  ) : null}
+                  {canWrite && attachment && onUpdateAttachmentCaption ? (
+                    <label className="collision-block-caption">
+                      <span>图片说明</span>
+                      <div className="flex gap-2">
+                        <input
+                          value={draft}
+                          disabled={savingCaptionId === attachment.id}
+                          onChange={event => setCaptionDrafts(current => ({ ...current, [item.key]: event.target.value }))}
+                          placeholder="填写说明"
+                        />
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={!changed || savingCaptionId === attachment.id}
+                          onClick={() => void handleSaveCaption(item.key, attachment)}
+                        >
+                          <Save className="h-4 w-4" />
+                          {savingCaptionId === attachment.id ? '保存中' : '保存'}
+                        </button>
+                      </div>
+                    </label>
+                  ) : item.caption ? (
+                    <p className="collision-block-caption-text">{item.caption}</p>
+                  ) : null}
+                  {attachment && (onDownloadAttachment || onDeleteAttachment) ? (
+                    <div className="collision-block-actions">
+                      {onDownloadAttachment ? (
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={!canDownload || attachment.canDownload === false || downloadingId === attachment.id}
+                          onClick={() => void handleDownload(attachment)}
+                          title={!canDownload || attachment.canDownload === false ? '当前账号没有附件下载权限。' : undefined}
+                        >
+                          <Download className="h-4 w-4" />
+                          {downloadingId === attachment.id ? '获取中' : '下载'}
+                        </button>
+                      ) : null}
+                      {onDeleteAttachment ? (
+                        <button
+                          className="btn btn-ghost btn--sm text-danger"
+                          type="button"
+                          disabled={!canWrite || deletingId === attachment.id}
+                          onClick={() => void handleDelete(attachment)}
+                          title={!canWrite ? '当前账号没有附件删除权限。' : undefined}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          {deletingId === attachment.id ? '删除中' : '删除'}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {message ? <div className="mt-2 text-xs text-ink-muted">{message}</div> : null}
+      <AttachmentPreviewModal
+        state={preview}
+        canDownload={!!onDownloadAttachment && canDownload && preview?.attachment.canDownload !== false}
+        canDelete={!!onDeleteAttachment && canWrite}
+        downloading={preview ? downloadingId === preview.attachment.id : false}
+        deleting={preview ? deletingId === preview.attachment.id : false}
+        onClose={closePreview}
+        onDownload={attachment => void handleDownload(attachment)}
+        onDelete={attachment => void handleDelete(attachment)}
+      />
+    </div>
+  );
+}
+
 function PhaseRail({ phases }: { phases: ProjectPhase[] }) {
   const sorted = bySequence(phases);
   const activeIndex = sorted.findIndex(phase => ['in_progress', 'active', 'blocked'].includes(phase.status));
@@ -2970,6 +3283,114 @@ function ApprovalStatusList({ value }: { value: string }) {
   );
 }
 
+function CollisionReadonlyCanvas({ report }: { report: CollisionReport }) {
+  const renderBlockGallery = (sectionKey: string, slotKey: string, label: string) => (
+    <CollisionBlockGallery
+      blocks={collisionImageBlocksForSlot(report, sectionKey, slotKey)}
+      canWrite={false}
+      canDownload={false}
+      emptyMessage={`${label}图片`}
+    />
+  );
+  const renderSummaryCell = (
+    sectionKey: string,
+    slotKey: string,
+    label: string,
+    value?: string,
+    wide = false
+  ) => (
+    <div className={`${wide ? 'is-wide' : ''} collision-readonly-summary-cell`}>
+      <span>{label}</span>
+      <p>{value || '-'}</p>
+      {renderBlockGallery(sectionKey, slotKey, label)}
+    </div>
+  );
+  const renderBodyCell = (
+    sectionKey: string,
+    slotKey: string,
+    label: string,
+    value?: string,
+    large = false
+  ) => (
+    <div className={`collision-field ${large ? 'is-large' : ''}`}>
+      <span>{label}</span>
+      <p className="collision-readonly-text">{value || '-'}</p>
+      {renderBlockGallery(sectionKey, slotKey, label)}
+    </div>
+  );
+
+  return (
+    <div className="collision-sheet-scroll">
+      <div className="collision-sheet collision-sheet-readonly" aria-label="碰撞一页纸预览">
+        <div className="collision-title-display">{report.title || '重点问题一页纸'}</div>
+        <div className="collision-sheet-head">
+          <div className="collision-brand-cell">
+            <strong>LI AUTO</strong>
+            <span>理想汽车</span>
+          </div>
+          <div className="collision-report-title">重点问题一页纸</div>
+          <div className="collision-meta-table">
+            <label><span>编制</span><p>{report.owner || '-'}</p></label>
+            <label><span>问题状态</span><p>{STATUS_LABEL[report.status] ?? report.status}</p></label>
+            <label><span>提出日期</span><p>{formatDate(report.reportDate)}</p></label>
+          </div>
+        </div>
+        <div className="collision-summary-table">
+          {renderSummaryCell('summary', 'problemDefinition', '问题定义', report.problemDefinition, true)}
+          {renderSummaryCell('summary', 'parts', '涉及零件', report.parts)}
+          {renderSummaryCell('summary', 'vehicleModel', '车型', report.vehicleModel)}
+          {renderSummaryCell('summary', 'failureFrequency', '故障频次', report.failureFrequency)}
+          {renderSummaryCell('summary', 'responsibilityArea', '责任区域', report.responsibilityArea)}
+          {renderSummaryCell('summary', 'owner', '负责人', report.owner)}
+          {renderSummaryCell('summary', 'progress', '问题进展', report.progress)}
+          {renderSummaryCell('summary', 'remark', '备注', report.remark)}
+        </div>
+        <div className="collision-sheet-toolbar is-readonly">
+          <div><span className="field-label">风险等级</span><p>{STATUS_LABEL[report.riskLevel] ?? report.riskLevel}</p></div>
+          <div><span className="field-label">断点计划</span><p>{formatDate(report.dueDate)}</p></div>
+          <div><span className="field-label">签核</span><ApprovalStatusList value={report.approvalSignoff} /></div>
+        </div>
+        <div className="collision-body-grid">
+          <section className="collision-section">
+            <h4>1. 问题描述</h4>
+            {renderBodyCell('section_1', 'problemDescription', '【失效模式&工况】', report.problemDescription)}
+            {renderBodyCell('section_1', 'vehicleModel', '【涉及车辆】', report.vehicleModel)}
+            {renderBodyCell('section_1', 'source', '【信息来源】', report.source)}
+          </section>
+          <section className="collision-section">
+            <h4>3. 原因分析</h4>
+            {renderBodyCell('section_3', 'processAnalysis', '【过程分析】', report.processAnalysis)}
+            {renderBodyCell('section_3', 'rootCauseConclusion', '【根本原因】', report.rootCauseConclusion || report.rootCause)}
+            {renderBodyCell('section_3', 'summary', '【摘要】', report.summary)}
+          </section>
+          <section className="collision-section">
+            <h4>2. 诊断维修</h4>
+            {renderBodyCell('section_2', 'diagnosisRepair', '诊断维修记录', report.diagnosisRepair, true)}
+          </section>
+          <section className="collision-section">
+            <h4>4. 制定措施</h4>
+            {renderBodyCell('section_4', 'containment', '【临时/拦截措施】', report.containment)}
+            {renderBodyCell('section_4', 'correctiveAction', '【长期措施/追溯】', report.correctiveAction)}
+            <div className="collision-inline-fields">
+              {renderSummaryCell('section_4', 'impact', '影响', report.impact)}
+              {renderSummaryCell('section_4', 'preventiveAction', '预防', report.preventiveAction)}
+              {renderSummaryCell('section_4', 'validation', '验证', report.validation)}
+            </div>
+          </section>
+          <section className="collision-section">
+            <h4>其他补充说明</h4>
+            {renderBodyCell('signoff', 'approvalSignoff', '备注 / 签核', report.approvalSignoff)}
+          </section>
+          <section className="collision-section">
+            <h4>5. 所需支持</h4>
+            {renderBodyCell('section_5', 'supportNeeded', '支持事项', report.supportNeeded)}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CollisionOnePager({ reports }: { reports: CollisionReport[] }) {
   const report = reports[0];
 
@@ -2991,45 +3412,8 @@ function CollisionOnePager({ reports }: { reports: CollisionReport[] }) {
         </div>
         <StatusPill status={report.riskLevel} />
       </div>
-      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr]">
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="grid gap-3 text-sm sm:grid-cols-2">
-            <span><strong className="text-ink">问题定义：</strong>{report.problemDefinition}</span>
-            <span><strong className="text-ink">涉及零件：</strong>{report.parts || '-'}</span>
-            <span><strong className="text-ink">车型：</strong>{report.vehicleModel || '-'}</span>
-            <span><strong className="text-ink">故障频次：</strong>{report.failureFrequency || '-'}</span>
-            <span><strong className="text-ink">责任区域：</strong>{report.responsibilityArea || '-'}</span>
-            <span><strong className="text-ink">负责人：</strong>{report.owner}</span>
-          </div>
-        </div>
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="text-xs font-semibold uppercase text-ink-muted">审批 / 签核状态</div>
-          <div className="mt-3">
-            <ApprovalStatusList value={report.approvalSignoff} />
-          </div>
-          <div className="mt-4">
-            <AttachmentList attachments={report.attachments} />
-          </div>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="text-sm font-semibold text-primary">1. 问题描述</div>
-          <p className="mt-2 text-sm text-ink-muted">{report.problemDescription || report.impact}</p>
-        </div>
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="text-sm font-semibold text-primary">3. 原因分析</div>
-          <p className="mt-2 text-sm text-ink-muted">{report.rootCause}</p>
-        </div>
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="text-sm font-semibold text-primary">2. 诊断维修</div>
-          <p className="mt-2 text-sm text-ink-muted">{report.diagnosisRepair || report.containment}</p>
-        </div>
-        <div className="rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="text-sm font-semibold text-primary">4/5. 措施与支持</div>
-          <p className="mt-2 text-sm text-ink-muted">{report.correctiveAction}</p>
-          <p className="mt-2 text-sm text-ink-muted">{report.supportNeeded || report.preventiveAction}</p>
-        </div>
+      <div className="mt-4">
+        <CollisionReadonlyCanvas report={report} />
       </div>
     </section>
   );
@@ -4383,21 +4767,6 @@ function IssuesView({ issues, phases }: { issues: KeyIssue[]; phases: ProjectPha
 
 function CollisionView({ reports, phases }: { reports: CollisionReport[]; phases: ProjectPhase[] }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const fields: Array<[keyof CollisionReport, string]> = [
-    ['problemDefinition', '问题定义'],
-    ['parts', '涉及零件'],
-    ['vehicleModel', '车型'],
-    ['failureFrequency', '故障频次'],
-    ['responsibilityArea', '责任区域'],
-    ['progress', '问题进展'],
-    ['remark', '备注'],
-    ['problemDescription', '1 问题描述'],
-    ['diagnosisRepair', '2 诊断维修'],
-    ['rootCause', '3 原因分析'],
-    ['correctiveAction', '4 制定措施'],
-    ['supportNeeded', '5 所需支持'],
-    ['approvalSignoff', '签核槽位']
-  ];
   const filteredReports = reports.filter(report => {
     if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
     if (filters.status && report.status !== filters.status) return false;
@@ -4468,21 +4837,13 @@ function CollisionView({ reports, phases }: { reports: CollisionReport[]; phases
             </div>
             <StatusPill status={report.riskLevel} />
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {fields.map(([key, label]) => (
-              <div key={key} className="rounded-lg border border-outline bg-surface-soft p-4">
-                <div className="text-xs font-semibold uppercase text-ink-muted">{label}</div>
-                <p className="mt-2 text-sm text-ink">{String(report[key] ?? '-')}</p>
-              </div>
-            ))}
-          </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <MetricCard label="Owner" value={report.owner} detail="责任人" />
             <MetricCard label="Due date" value={formatDate(report.dueDate)} detail="关闭日期" />
             <MetricCard label="Status" value={report.status} detail={`更新于 ${formatDate(report.updatedAt)}`} />
           </div>
           <div className="mt-4">
-            <AttachmentList attachments={report.attachments} />
+            <CollisionReadonlyCanvas report={report} />
           </div>
         </section>
       ))}
@@ -4570,14 +4931,59 @@ const COLLISION_FIELD_LABELS: Record<string, string> = {
   preventiveAction: '预防',
   validation: '验证',
   approvalSignoff: '备注 / 签核',
-  supportNeeded: '所需支持',
-  imageObjectKey: '图片对象引用'
+  supportNeeded: '所需支持'
 };
 
-const collisionAttachmentSlot = (attachment: Attachment) => {
-  const metadata = attachment.metadata ?? {};
-  return String(metadata.collision_slot ?? metadata.collisionSlot ?? 'problemDescription');
+const COLLISION_SLOT_SECTION_KEYS: Record<string, string> = {
+  problemDefinition: 'summary',
+  parts: 'summary',
+  vehicleModel: 'summary',
+  failureFrequency: 'summary',
+  responsibilityArea: 'summary',
+  owner: 'summary',
+  progress: 'summary',
+  remark: 'summary',
+  source: 'section_1',
+  problemDescription: 'section_1',
+  diagnosisRepair: 'section_2',
+  processAnalysis: 'section_3',
+  rootCause: 'section_3',
+  rootCauseConclusion: 'section_3',
+  summary: 'section_3',
+  containment: 'section_4',
+  correctiveAction: 'section_4',
+  impact: 'section_4',
+  preventiveAction: 'section_4',
+  validation: 'section_4',
+  approvalSignoff: 'signoff',
+  supportNeeded: 'section_5'
 };
+
+const collisionSectionKey = (slotKey: string, fallback = 'summary') =>
+  COLLISION_SLOT_SECTION_KEYS[slotKey] ?? fallback;
+
+const collisionBlockCaption = (block: CollisionReportBlock, attachment?: Attachment | null) =>
+  (attachment ? attachmentCaption(attachment) : '') || String(block.caption ?? '').trim();
+
+const collisionImageBlocksForSlot = (
+  report: CollisionReport | null,
+  sectionKey: string,
+  slotKey: string
+) =>
+  (report?.blocks ?? [])
+    .filter(block =>
+      block.blockType === 'image' &&
+      block.slotKey === slotKey &&
+      (!block.sectionKey || block.sectionKey === sectionKey)
+    )
+    .map(block => ({
+      ...block,
+      attachmentDetail:
+        block.attachmentDetail ??
+        report?.attachments.find(attachment => idOf(attachment.id) === idOf(block.attachment)) ??
+        null
+    }))
+    .sort((left, right) => left.sortOrder - right.sortOrder);
 
 const dataUrlToImageFile = async (dataUrl: string, fieldKey: string, index: number) => {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
@@ -5191,7 +5597,8 @@ function CollisionCrudView({
   const selectedIsNew = selectedReportId === 'new' || !selectedReport;
   const statusOptions = statusOptionValues(reports.map(report => report.status));
   const riskOptions = statusOptionValues(reports.map(report => report.riskLevel));
-  const imageAttachments = (selectedReport?.attachments ?? []).filter(canPreviewAttachment);
+  const [pendingCollisionImages, setPendingCollisionImages] = useState<Array<CollisionPendingImage & { sectionKey: string; slotKey: string }>>([]);
+  const pendingCollisionImageUrlsRef = useRef<Record<string, string>>({});
   const filteredReports = reports.filter(report => {
     if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
     if (filters.status && report.status !== filters.status) return false;
@@ -5201,14 +5608,37 @@ function CollisionCrudView({
     return dateRangeMatches(report.reportDate || report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
   });
   const [activeCollisionFieldKey, setActiveCollisionFieldKey] = useState('problemDescription');
-  const attachmentsForField = (fieldKey: string) =>
-    imageAttachments.filter(attachment => collisionAttachmentSlot(attachment) === fieldKey);
+  const [activeCollisionSectionKey, setActiveCollisionSectionKey] = useState('section_1');
+  const blocksForField = (sectionKey: string, fieldKey: string) =>
+    collisionImageBlocksForSlot(selectedReport, sectionKey, fieldKey);
+  const pendingImagesForField = (sectionKey: string, fieldKey: string) =>
+    pendingCollisionImages.filter(image => image.sectionKey === sectionKey && image.slotKey === fieldKey);
+  const nextSortOrderForField = (sectionKey: string, fieldKey: string) => {
+    const currentOrders = [
+      ...blocksForField(sectionKey, fieldKey).map(block => block.sortOrder),
+      ...pendingImagesForField(sectionKey, fieldKey).map(image => image.sortOrder)
+    ];
+    return currentOrders.length ? Math.max(...currentOrders) + 1 : 0;
+  };
+  const clearPendingImages = (ids: string[]) => {
+    ids.forEach(id => {
+      const url = pendingCollisionImageUrlsRef.current[id];
+      if (url) URL.revokeObjectURL(url);
+      delete pendingCollisionImageUrlsRef.current[id];
+    });
+    setPendingCollisionImages(current => current.filter(image => !ids.includes(image.id)));
+  };
 
   useEffect(() => {
     if (selectedReportId !== 'new' && !reports.some(report => idOf(report.id) === selectedReportId)) {
       setSelectedReportId(reports[0] ? idOf(reports[0].id) : 'new');
     }
   }, [reports, selectedReportId]);
+
+  useEffect(() => () => {
+    Object.values(pendingCollisionImageUrlsRef.current).forEach(url => URL.revokeObjectURL(url));
+    pendingCollisionImageUrlsRef.current = {};
+  }, []);
 
   useEffect(() => {
     setDraft(collisionDraftFromReport(selectedReport, phases));
@@ -5265,19 +5695,20 @@ function CollisionCrudView({
   };
 
   const ensureReportForImagePaste = async () => {
-    if (selectedReport && !selectedIsNew) return selectedReport;
+    if (selectedReport && !selectedIsNew) return { report: selectedReport, created: false };
     if (!draft.title.trim()) {
-      setMessage('填写标题后可粘贴图片。');
+      setMessage('请先填写标题；粘贴图片时会自动创建草稿报告并绑定图片。');
       return null;
     }
     const createdReport = await onCreateReport(draft);
     if (createdReport) {
       setSelectedReportId(idOf(createdReport.id));
     }
-    return createdReport;
+    return createdReport ? { report: createdReport, created: true } : null;
   };
 
   const handleCollisionFieldPaste = async (
+    sectionKey: string,
     fieldKey: string,
     fieldLabel: string,
     event: ClipboardEvent<HTMLElement>
@@ -5287,42 +5718,65 @@ function CollisionCrudView({
     const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
     if (!files.length) return;
     if (!selectedReport && !draft.title.trim()) {
-      setMessage('填写标题后可粘贴图片。');
+      setMessage('请先填写标题；粘贴图片时会自动创建草稿报告并绑定图片。');
       return;
     }
-    await runMutation(
-      async () => {
-        const targetReport = await ensureReportForImagePaste();
-        if (!targetReport) return;
-        for (const file of files) {
-          await onUploadReportAttachment(targetReport, file, {
-            collision_slot: fieldKey,
-            collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
-            source: 'clipboard_paste'
-          });
-        }
-      },
-      `${fieldLabel}已粘贴 ${files.length} 张图片。`
-    );
+    const baseSortOrder = nextSortOrderForField(sectionKey, fieldKey);
+    const uploadBatchId = Date.now();
+    const pendingImages = files.map((file, index) => {
+      const id = `${sectionKey}-${fieldKey}-${uploadBatchId}-${index}`;
+      const previewUrl = URL.createObjectURL(file);
+      pendingCollisionImageUrlsRef.current[id] = previewUrl;
+      return {
+        id,
+        sectionKey,
+        slotKey: fieldKey,
+        fileName: file.name,
+        previewUrl,
+        sortOrder: baseSortOrder + index
+      };
+    });
+    setPendingCollisionImages(current => [...current, ...pendingImages]);
+    setSaving(true);
+    setMessage(`${fieldLabel}图片正在上传...`);
+    try {
+      const target = await ensureReportForImagePaste();
+      if (!target) {
+        clearPendingImages(pendingImages.map(image => image.id));
+        return;
+      }
+      for (const [index, file] of files.entries()) {
+        await onUploadReportAttachment(target.report, file, {
+          section_key: sectionKey,
+          collision_slot: fieldKey,
+          collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
+          caption: '',
+          sort_order: baseSortOrder + index,
+          source: 'clipboard_paste'
+        });
+      }
+      clearPendingImages(pendingImages.map(image => image.id));
+      setMessage(`${target.created ? '已先创建草稿报告，' : ''}${fieldLabel}已上传 ${files.length} 张图片。`);
+      if (target.report && !target.created) {
+        await loadAuditLogs(target.report);
+      }
+    } catch (err) {
+      setPendingCollisionImages(current =>
+        current.map(image =>
+          pendingImages.some(item => item.id === image.id)
+            ? { ...image, error: mutationErrorMessage(err, '上传失败') }
+            : image
+        )
+      );
+      setMessage(mutationErrorMessage(err, '一页纸图片上传失败。'));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const renderCollisionFieldAssets = (fieldKey: string, fieldLabel: string, compact = false) => {
-    const fieldAttachments = attachmentsForField(fieldKey);
-    if (!fieldAttachments.length) return null;
-    return (
-      <div className={`collision-field-assets ${compact ? 'is-compact' : ''}`}>
-        <AttachmentList
-          attachments={fieldAttachments}
-          canDownload={canWrite}
-          canDelete={canWrite}
-          canEditCaption={canWrite}
-          onDownloadAttachment={onDownloadAttachment}
-          onDeleteAttachment={onDeleteAttachment}
-          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
-          emptyMessage="暂无贴图"
-        />
-      </div>
-    );
+  const focusCollisionSlot = (sectionKey: string, fieldKey: string) => {
+    setActiveCollisionSectionKey(sectionKey);
+    setActiveCollisionFieldKey(fieldKey);
   };
 
   const renderSummaryField = (
@@ -5330,27 +5784,42 @@ function CollisionCrudView({
     label: string,
     value: string,
     onChange: (value: string) => void,
-    options: { wide?: boolean; multiline?: boolean } = {}
+    options: { wide?: boolean; multiline?: boolean; sectionKey?: string } = {}
   ) => {
+    const sectionKey = options.sectionKey ?? 'summary';
     const inputProps = {
       value,
       disabled: !canWrite,
-      onFocus: () => setActiveCollisionFieldKey(fieldKey),
+      onFocus: () => focusCollisionSlot(sectionKey, fieldKey),
       onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         event.stopPropagation();
-        void handleCollisionFieldPaste(fieldKey, label, event);
+        void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
       }
     };
     return (
-      <label className={`${options.wide ? 'is-wide' : ''} has-paste-assets`}>
+      <div className={`${options.wide ? 'is-wide' : ''} has-paste-assets collision-summary-field`}>
         <span>{label}</span>
         {options.multiline ? (
           <textarea {...inputProps} onChange={event => onChange(event.target.value)} />
         ) : (
           <input {...inputProps} onChange={event => onChange(event.target.value)} />
         )}
-        {renderCollisionFieldAssets(fieldKey, label, true)}
-      </label>
+        <CollisionBlockGallery
+          blocks={blocksForField(sectionKey, fieldKey)}
+          pendingImages={pendingImagesForField(sectionKey, fieldKey)}
+          canWrite={canWrite}
+          canDownload={canWrite}
+          onDownloadAttachment={onDownloadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+          onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
+          onPaste={event => {
+            event.stopPropagation();
+            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+          }}
+          emptyMessage={`${label}图片`}
+        />
+      </div>
     );
   };
 
@@ -5359,23 +5828,40 @@ function CollisionCrudView({
     label: string,
     value: string,
     onChange: (value: string) => void,
-    options: { large?: boolean } = {}
-  ) => (
-    <div className={`collision-field ${options.large ? 'is-large' : ''}`}>
-      <span>{label}</span>
-      <textarea
-        value={value}
-        disabled={!canWrite}
-        onFocus={() => setActiveCollisionFieldKey(fieldKey)}
-        onChange={event => onChange(event.target.value)}
-        onPaste={event => {
-          event.stopPropagation();
-          void handleCollisionFieldPaste(fieldKey, label, event);
-        }}
-      />
-      {renderCollisionFieldAssets(fieldKey, label)}
-    </div>
-  );
+    options: { large?: boolean; sectionKey?: string } = {}
+  ) => {
+    const sectionKey = options.sectionKey ?? collisionSectionKey(fieldKey, activeCollisionSectionKey);
+    return (
+      <div className={`collision-field ${options.large ? 'is-large' : ''}`}>
+        <span>{label}</span>
+        <textarea
+          value={value}
+          disabled={!canWrite}
+          onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
+          onChange={event => onChange(event.target.value)}
+          onPaste={event => {
+            event.stopPropagation();
+            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+          }}
+        />
+        <CollisionBlockGallery
+          blocks={blocksForField(sectionKey, fieldKey)}
+          pendingImages={pendingImagesForField(sectionKey, fieldKey)}
+          canWrite={canWrite}
+          canDownload={canWrite}
+          onDownloadAttachment={onDownloadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+          onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
+          onPaste={event => {
+            event.stopPropagation();
+            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+          }}
+          emptyMessage={`${label}图片`}
+        />
+      </div>
+    );
+  };
 
   return (
     <section className="panel">
@@ -5486,7 +5972,8 @@ function CollisionCrudView({
             onPaste={event => {
               if (!event.defaultPrevented) {
                 const fieldKey = activeCollisionFieldKey || 'problemDescription';
-                void handleCollisionFieldPaste(fieldKey, COLLISION_FIELD_LABELS[fieldKey] ?? '问题描述', event);
+                const sectionKey = activeCollisionSectionKey || collisionSectionKey(fieldKey, 'section_1');
+                void handleCollisionFieldPaste(sectionKey, fieldKey, COLLISION_FIELD_LABELS[fieldKey] ?? '问题描述', event);
               }
             }}
           >
@@ -5545,7 +6032,7 @@ function CollisionCrudView({
               <section className="collision-section">
                 <h4>1. 问题描述</h4>
                 {renderBodyField('problemDescription', '【失效模式&工况】', draft.problemDescription, value => setDraft({ ...draft, problemDescription: value }))}
-                {renderBodyField('vehicleModel', '【涉及车辆】', draft.vehicleModel, value => setDraft({ ...draft, vehicleModel: value }))}
+                {renderBodyField('vehicleModel', '【涉及车辆】', draft.vehicleModel, value => setDraft({ ...draft, vehicleModel: value }), { sectionKey: 'section_1' })}
                 {renderBodyField('source', '【信息来源】', draft.source, value => setDraft({ ...draft, source: value }))}
               </section>
 
@@ -5580,7 +6067,6 @@ function CollisionCrudView({
               <section className="collision-section">
                 <h4>5. 所需支持</h4>
                 {renderBodyField('supportNeeded', '支持事项', draft.supportNeeded, value => setDraft({ ...draft, supportNeeded: value }))}
-                {renderSummaryField('imageObjectKey', '图片对象引用', draft.imageObjectKey, value => setDraft({ ...draft, imageObjectKey: value }))}
               </section>
             </div>
           </div>
@@ -7373,7 +7859,7 @@ export default function App() {
   const handleUpdateAttachmentCaption = async (attachment: Attachment, caption: string) => {
     if (!canWrite) return;
     try {
-      await updateAttachmentMetadata(attachment.id, { caption });
+      await updateAttachmentMetadata(attachment.id, { ...(attachment.metadata ?? {}), caption });
       await loadData(workspace.selectedProject?.id);
     } catch (err) {
       setError(mutationErrorMessage(err, '图片说明保存失败'));

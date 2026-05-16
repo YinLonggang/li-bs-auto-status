@@ -301,6 +301,23 @@ export type KeyIssue = {
   attachments: Attachment[];
 };
 
+export type CollisionBlockType = 'text' | 'image' | string;
+
+export type CollisionReportBlock = {
+  id: string | number;
+  report?: string | number | null;
+  sectionKey: string;
+  slotKey: string;
+  slotLabel: string;
+  blockType: CollisionBlockType;
+  text?: string;
+  attachment?: string | number | null;
+  attachmentDetail?: Attachment | null;
+  caption?: string;
+  sortOrder: number;
+  metadata?: Record<string, unknown>;
+};
+
 export type CollisionReport = {
   id: string | number;
   projectId: string | number;
@@ -338,6 +355,7 @@ export type CollisionReport = {
   imageCaptions?: Record<string, string>;
   metadata?: Record<string, unknown>;
   attachments: Attachment[];
+  blocks: CollisionReportBlock[];
   updatedAt: string;
 };
 
