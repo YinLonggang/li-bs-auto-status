@@ -326,3 +326,10 @@
 - 新增 `预览图片` 操作，使用 `html-to-image` 生成当前一页纸画布 PNG，先在弹窗预览，再点击下载图片。
 - 截图生成时隐藏附件上传、下载、删除等操作按钮，并将输入控件样式降级为普通内容，保证下载图片更接近报告版式。
 - 本轮前端验证通过：`npm run type-check`、`npm run build`、`npm audit --audit-level=high`、`npm run permission-regression`、`git diff --check`。
+
+### dev-test 一页纸图片预览修复
+
+- 定位 dev-test 预览失败主因：画布中的图片缩略图来自受控 `/attachments/{id}/preview/` Blob URL，`html-to-image` 追加 cache bust 查询串后会让 Blob URL 失效；同时长报告固定 `pixelRatio=2` 存在 canvas 过大风险。
+- 前端 PNG 捕获改为 `cacheBust=false`，并增加字体/图片等待、`scrollWidth/scrollHeight` 尺寸捕获、动态像素比和 1x 降级重试；filter 增加节点类型保护，避免文本节点触发 `node.closest is not a function`。
+- Chrome headless 真实浏览器回归通过：打开 3005，进入碰撞一页纸，选择 `dev-test`，点击 `预览图片` 后生成 PNG，尺寸 `2235 x 10736`。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm audit --audit-level=high`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 与 `GET /api/auth/csrf/` 均返回 HTTP 200。

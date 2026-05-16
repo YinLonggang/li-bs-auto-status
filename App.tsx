@@ -299,6 +299,65 @@ const downloadDataUrlFile = (fileName: string, dataUrl: string) => {
   link.remove();
 };
 
+const SHEET_IMAGE_PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const SHEET_IMAGE_MAX_DIMENSION = 12000;
+const SHEET_IMAGE_MAX_PIXELS = 24000000;
+
+const waitForNextPaint = () =>
+  new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+
+const waitForImageReady = async (image: HTMLImageElement) => {
+  if (!image.currentSrc && !image.src) return;
+  if (!image.complete) {
+    await new Promise<void>(resolve => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        image.removeEventListener('load', finish);
+        image.removeEventListener('error', finish);
+        resolve();
+      };
+      const timeout = window.setTimeout(finish, 2500);
+      image.addEventListener('load', finish);
+      image.addEventListener('error', finish);
+    });
+  }
+  if (image.complete && image.naturalWidth > 0 && image.decode) {
+    await image.decode().catch(() => undefined);
+  }
+};
+
+const waitForSheetCaptureAssets = async (node: HTMLElement) => {
+  await document.fonts?.ready.catch(() => undefined);
+  const images = Array.from(node.querySelectorAll('img'));
+  await Promise.all(images.map(waitForImageReady));
+  await waitForNextPaint();
+};
+
+const sheetImagePixelRatio = (width: number, height: number) => {
+  const area = Math.max(1, width * height);
+  const dimensionLimit = Math.min(SHEET_IMAGE_MAX_DIMENSION / Math.max(width, 1), SHEET_IMAGE_MAX_DIMENSION / Math.max(height, 1));
+  const areaLimit = Math.sqrt(SHEET_IMAGE_MAX_PIXELS / area);
+  const ratio = Math.min(2, dimensionLimit, areaLimit);
+  return Math.max(1, Number.isFinite(ratio) ? ratio : 1);
+};
+
+const sheetCaptureSize = (node: HTMLElement) => {
+  const rect = node.getBoundingClientRect();
+  return {
+    width: Math.ceil(Math.max(node.scrollWidth, node.clientWidth, rect.width, 1)),
+    height: Math.ceil(Math.max(node.scrollHeight, node.clientHeight, rect.height, 1))
+  };
+};
+
+const shouldCaptureCollisionSheetNode = (node: HTMLElement) =>
+  !(node instanceof HTMLElement && node.closest('.collision-block-toolbar, .collision-block-actions'));
+
 const dateInputValue = (value?: string | null) => (value ? value.slice(0, 10) : '');
 
 const formatLocalDate = (date: Date) => {
@@ -5951,12 +6010,35 @@ function CollisionCrudView({
     setSheetImagePreview({ fileName, loading: true });
     node.classList.add('is-capturing-image');
     try {
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      const url = await toPng(node, {
+      await waitForSheetCaptureAssets(node);
+      const { width, height } = sheetCaptureSize(node);
+      const baseOptions = {
         backgroundColor: '#ffffff',
-        cacheBust: true,
-        pixelRatio: 2
-      });
+        cacheBust: false,
+        imagePlaceholder: SHEET_IMAGE_PLACEHOLDER,
+        width,
+        height,
+        style: {
+          width: `${width}px`,
+          height: `${height}px`,
+          maxWidth: 'none',
+          transform: 'none'
+        },
+        filter: shouldCaptureCollisionSheetNode
+      };
+      const capture = async (pixelRatio: number) => {
+        const dataUrl = await toPng(node, { ...baseOptions, pixelRatio });
+        if (!dataUrl || dataUrl === 'data:,') {
+          throw new Error('浏览器返回空图片，请稍后重试。');
+        }
+        return dataUrl;
+      };
+      let url: string;
+      try {
+        url = await capture(sheetImagePixelRatio(width, height));
+      } catch {
+        url = await capture(1);
+      }
       setSheetImagePreview({ fileName, url, loading: false });
     } catch (err) {
       setSheetImagePreview({

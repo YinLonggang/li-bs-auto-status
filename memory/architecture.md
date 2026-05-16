@@ -208,3 +208,4 @@
 - 碰撞一页纸编辑区取消 `impact` / `preventiveAction` / `validation` 三个附加输入入口，保留后端字段兼容历史数据与旧导出逻辑。
 - 编辑画布新增客户端 PNG 预览下载能力：前端用 `html-to-image` 将当前 `.collision-sheet` 渲染成图片，先展示预览弹窗，再由用户下载 PNG。
 - 生成 PNG 时临时添加 `is-capturing-image` class，隐藏上传、下载、删除等操作控件，并把输入控件视觉降级成普通文本，避免图片中出现操作按钮。
+- PNG 捕获对附件缩略图的 Blob URL 使用 `cacheBust=false`，捕获前等待字体和图片解码完成；画布尺寸取 `scrollWidth/scrollHeight`，按尺寸动态限制 `pixelRatio`，失败时自动降级到 1x 重试，避免 dev-test 长报告、多图片附件场景预览失败。
