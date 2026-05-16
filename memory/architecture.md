@@ -3,7 +3,8 @@
 ## 2026-05-16 碰撞一页纸结构化 block 画布
 
 - `CollisionReport` 前端模型新增 `blocks: CollisionReportBlock[]`，adapter 兼容后端 snake_case/camelCase block 字段；后端未返回 blocks 时，前端按历史附件 `metadata.collision_slot/section_key/sort_order` 生成只读 image blocks，避免旧报告图片空白。
-- 碰撞一页纸编辑区改为基于结构化 image block 的 Excel 风格画布：1/2/3/4/5 分区字段和摘要字段均有可聚焦贴图区，粘贴图片先用本地 Blob URL 即时预览，再通过 `/attachments/upload/` 上传并等待刷新后的 report blocks 接管展示。
+- 碰撞一页纸编辑区改为基于结构化 image block 的 Excel 风格画布：1/2/3/4/5 正文分区字段有可聚焦贴图区，粘贴图片先用本地 Blob URL 即时预览，再通过 `/attachments/upload/` 上传并等待刷新后的 report blocks 接管展示。
+- 顶部摘要表仅维护问题定义、涉及零件、车型、故障频次、责任区域、负责人、问题进展和备注等纯字段，不渲染图片占位，也不接受图片粘贴上传；图片能力收口到 1/2/3/4/5 正文分区。
 - 上传 metadata 固定写入 `section_key`、`collision_slot`、`collision_slot_label`、`caption`、`sort_order`、`source=clipboard_paste`；新增态粘贴仍可自动创建草稿报告，随后绑定附件。
 - 图片展示优先读取 `selectedReport.blocks` 中对应 `section_key/slot_key` 的 image block，预览附件取 `attachment_detail`，缺省时按 report attachments fallback；图片说明读取附件 metadata caption 或 block caption，保存继续调用 `/attachments/{id}/metadata/`。
 - Dashboard 一页纸摘要改为复用同一只读 Excel 画布，不再以独立卡片风格展示图片；用户可看受控预览，说明、删除、下载等写操作继续受 `canWrite`/附件 `can_download` 约束。

@@ -3297,12 +3297,13 @@ function CollisionReadonlyCanvas({ report }: { report: CollisionReport }) {
     slotKey: string,
     label: string,
     value?: string,
-    wide = false
+    wide = false,
+    showImages = true
   ) => (
     <div className={`${wide ? 'is-wide' : ''} collision-readonly-summary-cell`}>
       <span>{label}</span>
       <p>{value || '-'}</p>
-      {renderBlockGallery(sectionKey, slotKey, label)}
+      {showImages ? renderBlockGallery(sectionKey, slotKey, label) : null}
     </div>
   );
   const renderBodyCell = (
@@ -3336,14 +3337,14 @@ function CollisionReadonlyCanvas({ report }: { report: CollisionReport }) {
           </div>
         </div>
         <div className="collision-summary-table">
-          {renderSummaryCell('summary', 'problemDefinition', '问题定义', report.problemDefinition, true)}
-          {renderSummaryCell('summary', 'parts', '涉及零件', report.parts)}
-          {renderSummaryCell('summary', 'vehicleModel', '车型', report.vehicleModel)}
-          {renderSummaryCell('summary', 'failureFrequency', '故障频次', report.failureFrequency)}
-          {renderSummaryCell('summary', 'responsibilityArea', '责任区域', report.responsibilityArea)}
-          {renderSummaryCell('summary', 'owner', '负责人', report.owner)}
-          {renderSummaryCell('summary', 'progress', '问题进展', report.progress)}
-          {renderSummaryCell('summary', 'remark', '备注', report.remark)}
+          {renderSummaryCell('summary', 'problemDefinition', '问题定义', report.problemDefinition, true, false)}
+          {renderSummaryCell('summary', 'parts', '涉及零件', report.parts, false, false)}
+          {renderSummaryCell('summary', 'vehicleModel', '车型', report.vehicleModel, false, false)}
+          {renderSummaryCell('summary', 'failureFrequency', '故障频次', report.failureFrequency, false, false)}
+          {renderSummaryCell('summary', 'responsibilityArea', '责任区域', report.responsibilityArea, false, false)}
+          {renderSummaryCell('summary', 'owner', '负责人', report.owner, false, false)}
+          {renderSummaryCell('summary', 'progress', '问题进展', report.progress, false, false)}
+          {renderSummaryCell('summary', 'remark', '备注', report.remark, false, false)}
         </div>
         <div className="collision-sheet-toolbar is-readonly">
           <div><span className="field-label">风险等级</span><p>{STATUS_LABEL[report.riskLevel] ?? report.riskLevel}</p></div>
@@ -5784,41 +5785,50 @@ function CollisionCrudView({
     label: string,
     value: string,
     onChange: (value: string) => void,
-    options: { wide?: boolean; multiline?: boolean; sectionKey?: string } = {}
+    options: { wide?: boolean; multiline?: boolean; sectionKey?: string; allowImages?: boolean } = {}
   ) => {
     const sectionKey = options.sectionKey ?? 'summary';
+    const allowImages = options.allowImages === true;
     const inputProps = {
       value,
       disabled: !canWrite,
       onFocus: () => focusCollisionSlot(sectionKey, fieldKey),
       onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         event.stopPropagation();
-        void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+        if (!allowImages && clipboardHasImagePayload(event.clipboardData)) {
+          event.preventDefault();
+          return;
+        }
+        if (allowImages) {
+          void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+        }
       }
     };
     return (
-      <div className={`${options.wide ? 'is-wide' : ''} has-paste-assets collision-summary-field`}>
+      <div className={`${options.wide ? 'is-wide' : ''} ${allowImages ? 'has-paste-assets' : ''} collision-summary-field`}>
         <span>{label}</span>
         {options.multiline ? (
           <textarea {...inputProps} onChange={event => onChange(event.target.value)} />
         ) : (
           <input {...inputProps} onChange={event => onChange(event.target.value)} />
         )}
-        <CollisionBlockGallery
-          blocks={blocksForField(sectionKey, fieldKey)}
-          pendingImages={pendingImagesForField(sectionKey, fieldKey)}
-          canWrite={canWrite}
-          canDownload={canWrite}
-          onDownloadAttachment={onDownloadAttachment}
-          onDeleteAttachment={onDeleteAttachment}
-          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
-          onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
-          onPaste={event => {
-            event.stopPropagation();
-            void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
-          }}
-          emptyMessage={`${label}图片`}
-        />
+        {allowImages ? (
+          <CollisionBlockGallery
+            blocks={blocksForField(sectionKey, fieldKey)}
+            pendingImages={pendingImagesForField(sectionKey, fieldKey)}
+            canWrite={canWrite}
+            canDownload={canWrite}
+            onDownloadAttachment={onDownloadAttachment}
+            onDeleteAttachment={onDeleteAttachment}
+            onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+            onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
+            onPaste={event => {
+              event.stopPropagation();
+              void handleCollisionFieldPaste(sectionKey, fieldKey, label, event);
+            }}
+            emptyMessage={`${label}图片`}
+          />
+        ) : null}
       </div>
     );
   };
@@ -5973,6 +5983,9 @@ function CollisionCrudView({
               if (!event.defaultPrevented) {
                 const fieldKey = activeCollisionFieldKey || 'problemDescription';
                 const sectionKey = activeCollisionSectionKey || collisionSectionKey(fieldKey, 'section_1');
+                if (sectionKey === 'summary') {
+                  return;
+                }
                 void handleCollisionFieldPaste(sectionKey, fieldKey, COLLISION_FIELD_LABELS[fieldKey] ?? '问题描述', event);
               }
             }}
@@ -6053,9 +6066,9 @@ function CollisionCrudView({
                 {renderBodyField('containment', '【临时/拦截措施】', draft.containment, value => setDraft({ ...draft, containment: value }))}
                 {renderBodyField('correctiveAction', '【长期措施/追溯】', draft.correctiveAction, value => setDraft({ ...draft, correctiveAction: value }))}
                 <div className="collision-inline-fields">
-                  {renderSummaryField('impact', '影响', draft.impact, value => setDraft({ ...draft, impact: value }))}
-                  {renderSummaryField('preventiveAction', '预防', draft.preventiveAction, value => setDraft({ ...draft, preventiveAction: value }))}
-                  {renderSummaryField('validation', '验证', draft.validation, value => setDraft({ ...draft, validation: value }))}
+                  {renderSummaryField('impact', '影响', draft.impact, value => setDraft({ ...draft, impact: value }), { sectionKey: 'section_4', allowImages: true })}
+                  {renderSummaryField('preventiveAction', '预防', draft.preventiveAction, value => setDraft({ ...draft, preventiveAction: value }), { sectionKey: 'section_4', allowImages: true })}
+                  {renderSummaryField('validation', '验证', draft.validation, value => setDraft({ ...draft, validation: value }), { sectionKey: 'section_4', allowImages: true })}
                 </div>
               </section>
 

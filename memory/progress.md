@@ -13,6 +13,7 @@
 - 上传 `/attachments/upload/` metadata 增加 `section_key`、`collision_slot`、`collision_slot_label`、`caption`、`sort_order`、`source=clipboard_paste`；新增态粘贴会明确提示并自动创建草稿报告。
 - 图片说明继续复用 `/attachments/{id}/metadata/`，保存时合并原 metadata，避免丢失槽位信息；图片删除/下载继续沿用现有附件动作和权限。
 - Dashboard 碰撞一页纸摘要改为只读 Excel 画布，图片使用同一 block gallery 预览；编辑画布移除用户可见“图片对象引用”输入。
+- 顶部摘要表不再渲染图片粘贴/上传占位；摘要字段粘贴图片会被前端拦截，1/2/3/4/5 正文分区继续保留图片粘贴、预览、说明、删除和下载能力。
 
 ### 验证
 
