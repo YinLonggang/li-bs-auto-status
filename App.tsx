@@ -1584,7 +1584,7 @@ function AttachmentList({
             value={draft}
             disabled={!canEditCaption || savingCaptionId === attachment.id}
             onChange={event => setCaptionDrafts(current => ({ ...current, [key]: event.target.value }))}
-            placeholder="为这张图片填写说明"
+            placeholder={isImageAttachment(attachment) ? '为这张图片填写说明' : '为附件填写说明'}
           />
           {onUpdateAttachmentCaption ? (
             <button
@@ -5468,10 +5468,10 @@ function IssuesCrudView({
     await runMutation(() => onImportCsv(file), '重点问题 CSV 已导入。');
   };
 
-  const ensureIssueForImagePaste = async () => {
+  const ensureIssueForAttachmentUpload = async () => {
     if (selectedIssue && !selectedIsNew) return selectedIssue;
     if (!draft.title.trim()) {
-      setMessage('填写标题后可粘贴图片。');
+      setMessage('填写标题后可上传附件。');
       return null;
     }
     const createdIssue = await onCreateIssue(draft);
@@ -5479,6 +5479,33 @@ function IssuesCrudView({
       setSelectedIssueId(idOf(createdIssue.id));
     }
     return createdIssue;
+  };
+
+  const uploadIssueFieldAttachments = async (
+    fieldKey: string,
+    fieldLabel: string,
+    files: File[],
+    source: string
+  ) => {
+    if (!canWrite || !files.length) return;
+    if (!selectedIssue && !draft.title.trim()) {
+      setMessage('填写标题后可上传附件。');
+      return;
+    }
+    await runMutation(
+      async () => {
+        const targetIssue = await ensureIssueForAttachmentUpload();
+        if (!targetIssue) return;
+        for (const file of files) {
+          await onUploadIssueAttachment(targetIssue, file, {
+            key_issue_slot: fieldKey,
+            key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
+            source
+          });
+        }
+      },
+      `${fieldLabel}已上传 ${files.length} 个附件。`
+    );
   };
 
   const handleIssueFieldPaste = async (
@@ -5494,37 +5521,49 @@ function IssuesCrudView({
       setMessage('填写标题后可粘贴图片。');
       return;
     }
-    await runMutation(
-      async () => {
-        const targetIssue = await ensureIssueForImagePaste();
-        if (!targetIssue) return;
-        for (const file of files) {
-          await onUploadIssueAttachment(targetIssue, file, {
-            key_issue_slot: fieldKey,
-            key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
-            source: 'clipboard_paste'
-          });
-        }
-      },
-      `${fieldLabel}已粘贴 ${files.length} 张图片。`
-    );
+    await uploadIssueFieldAttachments(fieldKey, fieldLabel, files, 'clipboard_paste');
   };
 
   const renderIssueFieldAssets = (fieldKey: string, fieldLabel: string) => {
     const fieldAttachments = attachmentsForField(fieldKey);
-    if (!fieldAttachments.length) return null;
+    if (!fieldAttachments.length && !canWrite) return null;
+    const uploadDisabled = !canWrite || saving || (!selectedIssue && !draft.title.trim());
     return (
       <div className="issue-field-assets">
-        <AttachmentList
-          attachments={fieldAttachments}
-          canDownload={canWrite}
-          canDelete={canWrite}
-          canEditCaption={canWrite}
-          onDownloadAttachment={onDownloadAttachment}
-          onDeleteAttachment={onDeleteAttachment}
-          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
-          emptyMessage="暂无图片"
-        />
+        {canWrite ? (
+          <div className="issue-field-toolbar">
+            <label className={`btn btn-ghost btn--sm ${uploadDisabled ? 'pointer-events-none opacity-60' : ''}`}>
+              <Paperclip className="h-4 w-4" />
+              上传附件
+              <input
+                className="hidden"
+                type="file"
+                multiple
+                disabled={uploadDisabled}
+                onChange={event => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = '';
+                  void uploadIssueFieldAttachments(fieldKey, fieldLabel, files, 'file_upload');
+                }}
+              />
+            </label>
+            {uploadDisabled && !selectedIssue && !draft.title.trim() ? (
+              <span className="text-xs text-ink-muted">填写标题后可上传附件</span>
+            ) : null}
+          </div>
+        ) : null}
+        {fieldAttachments.length ? (
+          <AttachmentList
+            attachments={fieldAttachments}
+            canDownload={canWrite}
+            canDelete={canWrite}
+            canEditCaption={canWrite}
+            onDownloadAttachment={onDownloadAttachment}
+            onDeleteAttachment={onDeleteAttachment}
+            onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+            emptyMessage={`${fieldLabel}暂无附件`}
+          />
+        ) : null}
       </div>
     );
   };
@@ -5635,8 +5674,8 @@ function IssuesCrudView({
                 <th>供应商</th>
                 <th>负责人/确认人</th>
                 <th>截止</th>
-	                <th>进展</th>
-	                <th>照片</th>
+                <th>进展</th>
+                <th>附件</th>
               </tr>
             </thead>
             <tbody>
@@ -5659,8 +5698,8 @@ function IssuesCrudView({
                     <td>{issue.supplier || '-'}</td>
                     <td><div>{issue.ownerName || '-'}</div><div className="text-xs text-ink-muted">{issue.confirmer || '-'}</div></td>
                     <td>{formatDate(issue.dueDate)}</td>
-	                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
-	                    <td>{(issue.attachments ?? []).some(canPreviewAttachment) || issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'}</td>
+                    <td className="max-w-[180px]">{issue.currentProgress || issue.status}</td>
+                    <td>{(issue.attachments ?? []).length ? `${issue.attachments.length} 个` : issue.problemPhotoObjectKey || issue.problemPhoto ? '已配置' : '-'}</td>
                   </tr>
                 );
               })}
@@ -8106,7 +8145,7 @@ export default function App() {
       });
       await loadData(workspace.selectedProject?.id);
     } catch (err) {
-      setError(mutationErrorMessage(err, '重点问题图片上传失败'));
+      setError(mutationErrorMessage(err, '重点问题附件上传失败'));
       throw err;
     }
   };

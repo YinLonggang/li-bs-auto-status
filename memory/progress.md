@@ -1,5 +1,14 @@
 # li-bs-auto-status 进度记录
 
+## 2026-05-17
+
+### 重点问题字段级通用附件上传
+
+- 重点问题描述、对策、进展、备注四个字段新增多文件上传入口，支持图片、Excel、PPT、PDF 等普通附件。
+- 上传前若是新增重点问题，填写标题后会先创建重点问题，再以 `object_type=key_issue` 绑定附件；上传 metadata 写入字段槽位和 `source=file_upload`。
+- 重点问题附件列表继续复用受控图片缩略图、普通文件卡片、说明、下载和删除能力；列表列名从“照片”改为“附件”并显示附件数量。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 返回 HTTP 200，后端 `/api/auth/csrf/` 返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标

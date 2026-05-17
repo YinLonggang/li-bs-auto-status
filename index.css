@@ -743,6 +743,10 @@
     @apply mt-2 rounded-lg border border-dashed border-outline bg-surface p-2;
   }
 
+  .issue-field-toolbar {
+    @apply mb-2 flex flex-wrap items-center justify-end gap-2;
+  }
+
   .issue-field-assets > label {
     @apply grid gap-1;
   }

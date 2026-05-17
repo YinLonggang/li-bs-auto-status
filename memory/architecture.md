@@ -1,5 +1,12 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-17 重点问题字段级通用附件
+
+- 重点问题编辑区的描述、对策、进展和备注字段下方统一提供多文件上传入口，上传仍走 `/attachments/upload/`，对象绑定 `object_type=key_issue`、`object_id=<issue.id>`。
+- 上传 metadata 固定写入 `key_issue_slot`、`key_issue_slot_label` 和 `source=file_upload`；粘贴图片继续使用同一入口但标记 `source=clipboard_paste`，因此图片和 Excel/PPT/PDF 等普通文件使用同一归档口径。
+- 新建重点问题时，用户填写标题后上传附件会先创建重点问题记录，再绑定附件；只读态不展示上传入口，已有附件仍可按后端权限预览图片。
+- 重点问题列表的“照片”列收口为“附件”列，显示附件数量，避免把普通文件误归为图片状态。
+
 ## 2026-05-16 碰撞一页纸结构化 block 画布
 
 - `CollisionReport` 前端模型新增 `blocks: CollisionReportBlock[]`，adapter 兼容后端 snake_case/camelCase block 字段；后端未返回 blocks 时，前端按历史附件 `metadata.collision_slot/section_key/sort_order` 生成只读 image blocks，避免旧报告图片空白。
