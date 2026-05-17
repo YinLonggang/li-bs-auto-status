@@ -19,6 +19,7 @@ import type {
   FactoryOption,
   HierarchyOptions,
   InspectionModule,
+  InspectionModuleInput,
   KeyIssue,
   OwnerCandidate,
   PhaseDefinition,
@@ -1890,6 +1891,33 @@ const serializeChecklistTemplateInput = (input: ChecklistTemplateInput) => ({
   metadata: input.metadata
 });
 
+const serializeInspectionModuleInput = (input: InspectionModuleInput) => {
+  const hasOwners = input.owners !== undefined;
+  const owners = hasOwners ? serializeCheckItemOwners(input.owners) : undefined;
+  const primaryOwner = owners?.[0];
+  return {
+    code: input.code,
+    name: input.name,
+    description: input.description,
+    sort_order: input.sequence ?? input.sortOrder,
+    is_active: input.isActive,
+    ...(hasOwners
+      ? {
+          owner_display_name: primaryOwner?.display_name ?? '',
+          owner_name: primaryOwner?.display_name ?? '',
+          owner_idaas_id: primaryOwner?.idaas_id ?? '',
+          owner_email: primaryOwner?.email ?? ''
+        }
+      : {}),
+    metadata: input.metadata === undefined && !hasOwners
+      ? undefined
+      : {
+          ...(input.metadata ?? {}),
+          ...(hasOwners ? { owners } : {})
+        }
+  };
+};
+
 export async function createPhaseTemplate(input: CreatePhaseTemplateInput) {
   return normalizePhaseTemplate(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>('/phase-templates/', {
@@ -1944,27 +1972,41 @@ export async function deleteChecklistTemplate(templateId: string | number) {
   });
 }
 
+export async function createInspectionModule(input: InspectionModuleInput) {
+  return normalizeInspectionModule(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>('/inspection-modules/', {
+      method: 'POST',
+      body: JSON.stringify(serializeInspectionModuleInput(input))
+    })
+  ));
+}
+
+export async function updateInspectionModule(
+  moduleId: string | number,
+  input: InspectionModuleInput
+) {
+  return normalizeInspectionModule(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/inspection-modules/${moduleId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(serializeInspectionModuleInput(input))
+    })
+  ));
+}
+
+export async function deleteInspectionModule(moduleId: string | number) {
+  await apiRequest(`/inspection-modules/${moduleId}/`, {
+    method: 'DELETE'
+  });
+}
+
 export async function updateInspectionModuleOwner(
   moduleId: string | number,
   payload: { owners: CheckItemOwner[]; metadata?: Record<string, unknown> }
 ) {
-  const owners = serializeCheckItemOwners(payload.owners);
-  const primaryOwner = owners[0];
-  return normalizeInspectionModule(unwrap(
-    await apiRequest<ApiEnvelope<unknown> | unknown>(`/inspection-modules/${moduleId}/`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        owner_display_name: primaryOwner?.display_name ?? '',
-        owner_name: primaryOwner?.display_name ?? '',
-        owner_idaas_id: primaryOwner?.idaas_id ?? '',
-        owner_email: primaryOwner?.email ?? '',
-        metadata: {
-          ...(payload.metadata ?? {}),
-          owners
-        }
-      })
-    })
-  ));
+  return updateInspectionModule(moduleId, {
+    owners: payload.owners,
+    metadata: payload.metadata
+  });
 }
 
 export async function updateCheckItemOwner(

@@ -243,6 +243,17 @@ export type InspectionModule = {
   metadata?: Record<string, unknown>;
 };
 
+export type InspectionModuleInput = {
+  code?: string;
+  name?: string;
+  description?: string;
+  sequence?: number;
+  sortOrder?: number;
+  isActive?: boolean;
+  owners?: CheckItemOwner[];
+  metadata?: Record<string, unknown>;
+};
+
 export type ChecklistTemplate = {
   id: string | number;
   moduleId: string | number;

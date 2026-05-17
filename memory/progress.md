@@ -34,6 +34,14 @@
 - 配置中心按范围创建项目新增项目模板下拉，且只列出启用模板；草稿模板需启用后才能用于创建项目。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check -- App.tsx services/bsAutoStatusApi.ts types/index.ts`；按 dev-environment-bootstrap 重启 3005 后，`GET /api/auth/csrf/`、`GET /phase-templates/`、`GET /checklist-templates/` 和 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
 
+### 检查模块可编辑
+
+- 项目模板页新增“检查模块维护”区，模块矩阵行可在同页完成新增、编辑和删除。
+- 模块字段覆盖编码、名称、说明、排序、启用状态和 IDaaS 负责人；负责人继续写入 `metadata.owners` 并同步第一负责人快照。
+- 前端服务层新增 `createInspectionModule`、`updateInspectionModule`、`deleteInspectionModule`，并让原模块负责人保存复用同一 update 入口。
+- 模板矩阵和清单模板模块下拉使用最新模块列表；保存模块后刷新 workspace 数据。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check -- App.tsx services/bsAutoStatusApi.ts types/index.ts`；按 dev-environment-bootstrap 重启 3005 后，`GET /api/auth/csrf/`、`GET /inspection-modules/` 和 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标

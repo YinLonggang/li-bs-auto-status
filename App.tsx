@@ -37,6 +37,7 @@ import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
 import {
   createChecklistTemplate,
+  createInspectionModule,
   createPhaseTemplate,
   createCheckItem,
   createCollisionReport,
@@ -47,6 +48,7 @@ import {
   deleteChecklistTemplate,
   deleteCollisionReport,
   deleteCheckItem,
+  deleteInspectionModule,
   deleteKeyIssue,
   deletePhaseTemplate,
   deleteProjectPhase,
@@ -73,6 +75,7 @@ import {
   updateCheckItemOwner,
   updateCheckItemStatus,
   updateChecklistTemplate,
+  updateInspectionModule,
   updateInspectionModuleOwner,
   updateKeyIssue,
   updatePhaseTemplate,
@@ -102,6 +105,7 @@ import type {
   DashboardSummary,
   ExportTask,
   InspectionModule,
+  InspectionModuleInput,
   KeyIssue,
   OwnerCandidate,
   PhaseDefinition,
@@ -946,6 +950,16 @@ type ChecklistTemplateDraft = {
   metadata: Record<string, unknown>;
 };
 
+type InspectionModuleDraft = {
+  code: string;
+  name: string;
+  description: string;
+  sequence: string;
+  isActive: boolean;
+  owners: CheckItemOwner[];
+  metadata: Record<string, unknown>;
+};
+
 type TemplateCellTarget = {
   module: InspectionModule;
   phase: PhaseDefinition;
@@ -1010,6 +1024,29 @@ const checklistTemplateDraftFrom = (template: ChecklistTemplate): ChecklistTempl
   isActive: template.isActive !== false,
   itemTemplates: normalizeTemplateItemsForDraft(checklistItemsOf(template)),
   metadata: template.metadata ?? {}
+});
+
+const inspectionModuleDraftFrom = (module: InspectionModule): InspectionModuleDraft => ({
+  code: module.code,
+  name: module.name,
+  description: module.description ?? '',
+  sequence: String(module.sequence ?? 0),
+  isActive: module.isActive !== false,
+  owners: ownersOfModule(module),
+  metadata: module.metadata ?? {}
+});
+
+const emptyInspectionModuleDraft = (
+  existingCodes: string[] = [],
+  nextSequence = 10
+): InspectionModuleDraft => ({
+  code: makeUniqueTemplateCode(`inspection-module-${formatLocalDate(new Date())}`, existingCodes),
+  name: '',
+  description: '',
+  sequence: String(nextSequence),
+  isActive: true,
+  owners: [],
+  metadata: {}
 });
 
 const makeChecklistTemplateDraft = (
@@ -7074,7 +7111,10 @@ function ProjectTemplateView({
   onCopyPhaseTemplate,
   onCreateChecklistTemplate,
   onDeleteChecklistTemplate,
-  onUpdateChecklistTemplate
+  onUpdateChecklistTemplate,
+  onCreateInspectionModule,
+  onUpdateInspectionModule,
+  onDeleteInspectionModule
 }: {
   data: WorkspaceData;
   canWrite: boolean;
@@ -7085,24 +7125,42 @@ function ProjectTemplateView({
   onCreateChecklistTemplate: (input: CreateChecklistTemplateInput) => Promise<ChecklistTemplate>;
   onDeleteChecklistTemplate: (template: ChecklistTemplate) => Promise<void>;
   onUpdateChecklistTemplate: (template: ChecklistTemplate, input: UpdateChecklistTemplateInput) => Promise<ChecklistTemplate>;
+  onCreateInspectionModule: (input: InspectionModuleInput) => Promise<InspectionModule>;
+  onUpdateInspectionModule: (module: InspectionModule, input: InspectionModuleInput) => Promise<InspectionModule>;
+  onDeleteInspectionModule: (module: InspectionModule) => Promise<void>;
 }) {
   const [selectedPhaseTemplateId, setSelectedPhaseTemplateId] = useState('');
   const [phaseEditorMode, setPhaseEditorMode] = useState<'edit' | 'create'>('edit');
   const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseTemplateDraft>>({});
   const [newPhaseDraft, setNewPhaseDraft] = useState<PhaseTemplateDraft>(() => emptyPhaseTemplateDraft());
+  const [selectedInspectionModuleId, setSelectedInspectionModuleId] = useState('');
+  const [moduleEditorMode, setModuleEditorMode] = useState<'edit' | 'create'>('edit');
+  const [moduleDrafts, setModuleDrafts] = useState<Record<string, InspectionModuleDraft>>({});
+  const [newModuleDraft, setNewModuleDraft] = useState<InspectionModuleDraft>(() => emptyInspectionModuleDraft());
   const [selectedChecklistTemplateId, setSelectedChecklistTemplateId] = useState('');
   const [checklistDrafts, setChecklistDrafts] = useState<Record<string, ChecklistTemplateDraft>>({});
   const [creatingCell, setCreatingCell] = useState<TemplateCellTarget | null>(null);
   const [newChecklistDraft, setNewChecklistDraft] = useState<ChecklistTemplateDraft | null>(null);
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
+  const [moduleMessage, setModuleMessage] = useState('');
   const sortedPhaseTemplates = bySequence(data.phaseTemplates);
+  const sortedInspectionModules = bySequence(data.inspectionModules);
   const phaseTemplateKey = sortedPhaseTemplates.map(template => idOf(template.id)).join('|');
   const checklistTemplateKey = data.checklistTemplates.map(template => `${idOf(template.id)}:${template.code}:${template.version ?? ''}`).join('|');
+  const inspectionModuleKey = sortedInspectionModules.map(module => `${idOf(module.id)}:${module.code}:${module.sequence}:${module.isActive}`).join('|');
   const selectedPhaseTemplate = sortedPhaseTemplates.find(template => idOf(template.id) === selectedPhaseTemplateId) ?? sortedPhaseTemplates[0];
   const selectedPhaseTemplateIdValue = idOf(selectedPhaseTemplate?.id);
+  const selectedInspectionModule =
+    sortedInspectionModules.find(module => idOf(module.id) === selectedInspectionModuleId) ??
+    sortedInspectionModules[0];
+  const selectedInspectionModuleIdValue = idOf(selectedInspectionModule?.id);
   const existingPhaseTemplateCodes = data.phaseTemplates.map(template => template.code);
   const existingChecklistTemplateCodes = data.checklistTemplates.map(template => template.code);
+  const existingInspectionModuleCodes = data.inspectionModules.map(module => module.code);
+  const nextInspectionModuleSequence = sortedInspectionModules.length
+    ? Math.max(...sortedInspectionModules.map(module => module.sequence ?? 0)) + 10
+    : 10;
   const selectedTemplateChecklists = data.checklistTemplates.filter(template =>
     selectedPhaseTemplateIdValue && idOf(template.phaseTemplateId) === selectedPhaseTemplateIdValue
   );
@@ -7119,6 +7177,10 @@ function ProjectTemplateView({
   const selectedPhaseDraft = selectedPhaseTemplate
     ? phaseDrafts[selectedPhaseTemplateIdValue] ?? phaseTemplateDraftFrom(selectedPhaseTemplate)
     : undefined;
+  const selectedModuleDraft = selectedInspectionModule
+    ? moduleDrafts[selectedInspectionModuleIdValue] ?? inspectionModuleDraftFrom(selectedInspectionModule)
+    : undefined;
+  const activeModuleDraft = moduleEditorMode === 'create' ? newModuleDraft : selectedModuleDraft;
   const activePhaseDraft = phaseEditorMode === 'create' ? newPhaseDraft : selectedPhaseDraft;
   const selectedChecklistPhase = activeChecklistDraft?.phaseKey
     ? selectedTemplateDefinitions.find(phase => phase.key === activeChecklistDraft.phaseKey)
@@ -7129,6 +7191,12 @@ function ProjectTemplateView({
     !Number.isFinite(toPositiveInteger(activePhaseDraft.version)) ||
     !activePhaseDraft.phaseDefinitions.length ||
     activePhaseDraft.phaseDefinitions.some(phase => !phase.key.trim() || !phase.name.trim());
+  const moduleSequenceValue = Number(activeModuleDraft?.sequence ?? 0);
+  const invalidModuleDraft =
+    !activeModuleDraft?.code.trim() ||
+    !activeModuleDraft.name.trim() ||
+    !Number.isFinite(moduleSequenceValue) ||
+    moduleSequenceValue < 0;
   const invalidChecklistDraft =
     !activeChecklistDraft?.code.trim() ||
     !activeChecklistDraft.name.trim() ||
@@ -7146,6 +7214,15 @@ function ProjectTemplateView({
   }, [phaseTemplateKey]);
 
   useEffect(() => {
+    if (moduleEditorMode === 'create') return;
+    setSelectedInspectionModuleId(current =>
+      sortedInspectionModules.some(module => idOf(module.id) === current)
+        ? current
+        : idOf(sortedInspectionModules[0]?.id)
+    );
+  }, [inspectionModuleKey, moduleEditorMode]);
+
+  useEffect(() => {
     if (creatingCell) return;
     setSelectedChecklistTemplateId(current =>
       selectedTemplateChecklists.some(template => idOf(template.id) === current)
@@ -7161,6 +7238,14 @@ function ProjectTemplateView({
       )
     );
   }, [data.phaseTemplates]);
+
+  useEffect(() => {
+    setModuleDrafts(
+      Object.fromEntries(
+        data.inspectionModules.map(module => [idOf(module.id), inspectionModuleDraftFrom(module)])
+      )
+    );
+  }, [data.inspectionModules]);
 
   useEffect(() => {
     setChecklistDrafts(
@@ -7292,6 +7377,87 @@ function ProjectTemplateView({
       setMessage('已复制为草稿模板，并复制关联清单模板与模板检查项。');
     } catch (err) {
       setMessage(mutationErrorMessage(err, '创建项目模板复制失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const updateActiveModuleDraft = (patch: Partial<InspectionModuleDraft>) => {
+    if (moduleEditorMode === 'create') {
+      setNewModuleDraft(current => ({ ...current, ...patch }));
+      return;
+    }
+    if (!selectedInspectionModuleIdValue || !selectedInspectionModule) return;
+    setModuleDrafts(current => ({
+      ...current,
+      [selectedInspectionModuleIdValue]: {
+        ...(current[selectedInspectionModuleIdValue] ?? inspectionModuleDraftFrom(selectedInspectionModule)),
+        ...patch
+      }
+    }));
+  };
+
+  const openCreateInspectionModule = () => {
+    setModuleEditorMode('create');
+    setNewModuleDraft(emptyInspectionModuleDraft(existingInspectionModuleCodes, nextInspectionModuleSequence));
+    setModuleMessage('');
+  };
+
+  const selectInspectionModule = (module: InspectionModule) => {
+    setModuleEditorMode('edit');
+    setSelectedInspectionModuleId(idOf(module.id));
+    setModuleMessage('');
+  };
+
+  const inspectionModuleDraftInput = (draft: InspectionModuleDraft): InspectionModuleInput => ({
+    code: draft.code.trim(),
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    sequence: Math.max(0, Math.trunc(Number(draft.sequence) || 0)),
+    isActive: draft.isActive,
+    owners: normalizeOwners(draft.owners),
+    metadata: draft.metadata
+  });
+
+  const saveInspectionModule = async () => {
+    if (!canWrite || !activeModuleDraft || invalidModuleDraft) return;
+    const key = moduleEditorMode === 'create' ? 'inspection-module-new' : `inspection-module-${selectedInspectionModule?.id}`;
+    setSavingKey(key);
+    setModuleMessage('');
+    try {
+      if (moduleEditorMode === 'create') {
+        const created = await onCreateInspectionModule(inspectionModuleDraftInput(activeModuleDraft));
+        setSelectedInspectionModuleId(idOf(created.id));
+        setModuleEditorMode('edit');
+        setModuleMessage('检查模块已新增，矩阵和清单模板模块下拉已使用最新列表。');
+      } else if (selectedInspectionModule) {
+        const updated = await onUpdateInspectionModule(
+          selectedInspectionModule,
+          inspectionModuleDraftInput(activeModuleDraft)
+        );
+        setSelectedInspectionModuleId(idOf(updated.id));
+        setModuleMessage('检查模块已保存，矩阵行已刷新。');
+      }
+    } catch (err) {
+      setModuleMessage(mutationErrorMessage(err, '检查模块保存失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const deleteSelectedInspectionModule = async () => {
+    if (!canWrite || !selectedInspectionModule) return;
+    const confirmed = window.confirm(`确认删除检查模块「${selectedInspectionModule.name}」？若已有清单模板或检查项引用，后端会拒绝删除。`);
+    if (!confirmed) return;
+    setSavingKey(`inspection-module-delete-${selectedInspectionModule.id}`);
+    setModuleMessage('');
+    try {
+      await onDeleteInspectionModule(selectedInspectionModule);
+      setSelectedInspectionModuleId('');
+      setModuleEditorMode('edit');
+      setModuleMessage('检查模块已删除。');
+    } catch (err) {
+      setModuleMessage(mutationErrorMessage(err, '检查模块删除失败。'));
     } finally {
       setSavingKey('');
     }
@@ -7614,6 +7780,165 @@ function ProjectTemplateView({
       <section className="panel">
         <div className="panel-header">
           <div>
+            <p className="kicker">Inspection Modules</p>
+            <h2 className="text-xl font-semibold">检查模块维护</h2>
+            <p className="text-sm text-ink-muted">维护模块编码、名称、排序、启用状态和 IDaaS 负责人；保存后立即影响下方矩阵行与新建清单模板模块选项。</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <ReadOnlyNotice canWrite={canWrite} />
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={openCreateInspectionModule}>
+              <Plus className="h-4 w-4" />
+              新增模块
+            </button>
+          </div>
+        </div>
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[1120px]">
+            <thead>
+              <tr>
+                <th>排序</th>
+                <th>模块</th>
+                <th>负责人</th>
+                <th>清单模板</th>
+                <th>项目检查项</th>
+                <th>状态</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedInspectionModules.map(module => {
+                const active = moduleEditorMode === 'edit' && idOf(module.id) === selectedInspectionModuleIdValue;
+                const moduleOwners = ownersOfModule(module);
+                const moduleChecklistCount = data.checklistTemplates.filter(template => idOf(template.moduleId) === idOf(module.id)).length;
+                const moduleCheckItemCount = data.checkItems.filter(item => idOf(item.moduleId) === idOf(module.id)).length;
+                return (
+                  <tr
+                    key={module.id}
+                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    tabIndex={0}
+                    aria-selected={active}
+                    onClick={() => selectInspectionModule(module)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectInspectionModule(module);
+                      }
+                    }}
+                  >
+                    <td>{module.sequence}</td>
+                    <td className="min-w-[240px]">
+                      <div className="font-semibold text-ink">{module.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{module.code}</div>
+                    </td>
+                    <td className="min-w-[220px]">
+                      {moduleOwners.length ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {moduleOwners.map(owner => (
+                            <span key={ownerKeyOf(owner)} className="chip gap-1.5">
+                              <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} size="xs" />
+                              <span>{ownerDisplayName(owner)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-ink-muted">未设置</span>
+                      )}
+                    </td>
+                    <td>{moduleChecklistCount} 组</td>
+                    <td>{moduleCheckItemCount} 项</td>
+                    <td><StatusPill status={module.isActive ? 'active' : 'disabled'} /></td>
+                    <td className="max-w-[280px]">{module.description || '-'}</td>
+                  </tr>
+                );
+              })}
+              {!sortedInspectionModules.length ? (
+                <tr>
+                  <td colSpan={7} className="text-center text-ink-muted">暂无检查模块，可新增后保存。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        {activeModuleDraft ? (
+          <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-ink">
+                  {moduleEditorMode === 'create' ? '新增检查模块' : '模块属性'}
+                </h3>
+                <p className="text-xs text-ink-muted">
+                  {moduleEditorMode === 'create'
+                    ? '保存后可在矩阵中维护该模块的阶段清单模板。'
+                    : `${selectedInspectionModule?.code ?? ''} · 排序 ${selectedInspectionModule?.sequence ?? 0}`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {moduleEditorMode === 'edit' && selectedInspectionModule ? (
+                  <button
+                    className="btn btn-ghost btn--sm"
+                    type="button"
+                    disabled={!canWrite || savingKey === `inspection-module-delete-${selectedInspectionModule.id}`}
+                    onClick={() => void deleteSelectedInspectionModule()}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    删除模块
+                  </button>
+                ) : null}
+                <button
+                  className="btn btn-primary btn--sm"
+                  type="button"
+                  disabled={!canWrite || invalidModuleDraft || savingKey.startsWith('inspection-module')}
+                  onClick={() => void saveInspectionModule()}
+                >
+                  <Save className="h-4 w-4" />
+                  {savingKey === 'inspection-module-new' || savingKey === `inspection-module-${selectedInspectionModule?.id}` ? '保存中' : '保存模块'}
+                </button>
+              </div>
+            </div>
+            {moduleMessage ? <div className="mt-3 text-sm text-ink-muted">{moduleMessage}</div> : null}
+            <div className="mt-4 grid gap-3 lg:grid-cols-6">
+              <label>
+                <span className="field-label">模块编码</span>
+                <input className="input" value={activeModuleDraft.code} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ code: event.target.value })} />
+              </label>
+              <label className="lg:col-span-2">
+                <span className="field-label">模块名称</span>
+                <input className="input" value={activeModuleDraft.name} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ name: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">排序</span>
+                <input className="input" type="number" min={0} value={activeModuleDraft.sequence} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ sequence: event.target.value })} />
+              </label>
+              <label className="flex items-end gap-2 text-sm text-ink-muted">
+                <input type="checkbox" checked={activeModuleDraft.isActive} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ isActive: event.target.checked })} />
+                启用
+              </label>
+              <label className="lg:col-span-6">
+                <span className="field-label">说明</span>
+                <textarea className="input min-h-20" value={activeModuleDraft.description} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ description: event.target.value })} />
+              </label>
+              <div className="lg:col-span-6">
+                <span className="field-label">负责人</span>
+                <OwnerListEditor
+                  owners={activeModuleDraft.owners}
+                  ownerCandidates={data.ownerCandidates}
+                  canWrite={canWrite}
+                  candidateLabel={`检查模块 ${activeModuleDraft.name || activeModuleDraft.code || '新增模块'} IDaaS 负责人`}
+                  onChange={next => updateActiveModuleDraft({ owners: next.owners })}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5">
+            <EmptyState message="请选择检查模块，或点击新增模块开始维护。" />
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
             <p className="kicker">Module Phase Matrix</p>
             <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
             <p className="text-sm text-ink-muted">{selectedPhaseTemplate && phaseEditorMode === 'edit' ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择已保存的创建项目模板'}</p>
@@ -7635,7 +7960,7 @@ function ProjectTemplateView({
                 </tr>
               </thead>
               <tbody>
-                {bySequence(data.inspectionModules).map(module => (
+                {sortedInspectionModules.map(module => (
                   <tr key={module.id}>
                     <td className="sticky left-0 z-10 min-w-[220px] bg-surface">
                       <div className="font-semibold text-ink">{module.name}</div>
@@ -7702,7 +8027,7 @@ function ProjectTemplateView({
                     })}
                   </tr>
                 ))}
-                {!data.inspectionModules.length ? (
+                {!sortedInspectionModules.length ? (
                   <tr>
                     <td colSpan={selectedTemplateDefinitions.length + 1} className="text-center text-ink-muted">暂无检查模块。</td>
                   </tr>
@@ -7725,7 +8050,7 @@ function ProjectTemplateView({
                   {creatingCell ? '新增清单模板' : activeChecklistDraft.name}
                 </div>
                 <div className="text-xs text-ink-muted">
-                  {selectedChecklistPhase?.name || activeChecklistDraft.phaseKey || '未设置阶段'} · {data.inspectionModules.find(module => idOf(module.id) === activeChecklistDraft.moduleId)?.name || '未设置模块'}
+                  {selectedChecklistPhase?.name || activeChecklistDraft.phaseKey || '未设置阶段'} · {sortedInspectionModules.find(module => idOf(module.id) === activeChecklistDraft.moduleId)?.name || '未设置模块'}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -7774,7 +8099,7 @@ function ProjectTemplateView({
                 <span className="field-label">模块</span>
                 <select className="select" value={activeChecklistDraft.moduleId} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ moduleId: event.target.value })}>
                   <option value="">选择模块</option>
-                  {bySequence(data.inspectionModules).map(module => (
+                  {sortedInspectionModules.map(module => (
                     <option key={module.id} value={idOf(module.id)}>{module.name}</option>
                   ))}
                 </select>
@@ -9458,6 +9783,44 @@ export default function App() {
     }
   };
 
+  const handleCreateInspectionModuleConfig = async (input: InspectionModuleInput) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const created = await createInspectionModule(input);
+      await loadData();
+      return created;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查模块新增失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateInspectionModuleConfig = async (
+    module: InspectionModule,
+    input: InspectionModuleInput
+  ) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const updated = await updateInspectionModule(module.id, input);
+      await loadData();
+      return updated;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查模块保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeleteInspectionModuleConfig = async (module: InspectionModule) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      await deleteInspectionModule(module.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查模块删除失败'));
+      throw err;
+    }
+  };
+
   const handleUpdateCheckItemStatus = async (item: CheckItem, status: CheckItemStatus, source: string) => {
     if (!canWrite) return;
     try {
@@ -9943,6 +10306,9 @@ export default function App() {
           onCreateChecklistTemplate={handleCreateChecklistTemplateConfig}
           onDeleteChecklistTemplate={handleDeleteChecklistTemplateConfig}
           onUpdateChecklistTemplate={handleUpdateChecklistTemplateConfig}
+          onCreateInspectionModule={handleCreateInspectionModuleConfig}
+          onUpdateInspectionModule={handleUpdateInspectionModuleConfig}
+          onDeleteInspectionModule={handleDeleteInspectionModuleConfig}
         />
       );
     }

@@ -241,3 +241,11 @@
 - 复制模板由前端编排：先创建 `is_active=false` 的阶段模板草稿，再复制源模板下所有关联清单模板与模板检查项，并在阶段模板和清单模板 metadata 写入 `copied_from`。
 - 删除阶段模板时前端先删除其关联清单模板，再删除阶段模板，避免后端 `SET_NULL` 造成孤儿清单模板。
 - 配置中心创建项目新增项目模板选择，但只列出启用模板；草稿/停用模板必须先在项目模板模块启用后才能用于创建项目。
+
+## 2026-05-17 检查模块维护矩阵联动
+
+- 项目模板页新增 `InspectionModule` 维护区，位于模块 × 阶段矩阵前，采用“横向表格选行 + 下方编辑表单”的配置页交互。
+- 模块维护字段覆盖 `code/name/description/sort_order/is_active` 和 IDaaS 负责人；负责人保存到模块 `owner_*` 快照，并把完整负责人数组写入 `metadata.owners`。
+- 前端 API adapter 新增 `createInspectionModule()`、`updateInspectionModule()`、`deleteInspectionModule()`；旧的 `updateInspectionModuleOwner()` 收敛为调用 `updateInspectionModule()` 的负责人子集。
+- 模板矩阵行、清单模板模块下拉和新建清单模板默认模块都读取最新 `data.inspectionModules`，模块保存后通过 `loadData()` 刷新全局基础数据。
+- 模块删除不做前端级强删规避，直接调用后端 DELETE；后端 `InspectionModule` 被 `ChecklistTemplate` 或 `CheckItem` 引用时按 PROTECT 拒绝，前端展示错误提示。
