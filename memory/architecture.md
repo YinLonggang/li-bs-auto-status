@@ -232,3 +232,12 @@
 - 项目模板页下半部分按所选 `PhaseTemplate` 展示对应 `ChecklistTemplate` 清单模板，用户选择清单后用横向表格维护其 `item_templates`。
 - 模板检查项编辑支持新增、删除、修改排序、标题、描述/验收口径、优先级、计划开始、计划结束和启用状态；保存调用 `PATCH /checklist-templates/{id}/`，只更新模板源数据，不自动覆盖已有项目实例检查项。
 - `ChecklistTemplate` 前端模型补齐 `moduleCode/moduleName/phaseTemplateCode/phaseKey/version/isActive/itemTemplates/metadata`；`PhaseTemplate` 补齐 `version/description/phaseDefinitions/metadata`。
+
+## 2026-05-17 项目模板矩阵 CRUD
+
+- 项目模板页以“检查模块 × 项目阶段”矩阵作为模板覆盖主视图：行来自 `InspectionModule`，列来自所选 `PhaseTemplate.phaseDefinitions`，单元格映射 `ChecklistTemplate(module, phase_template, phase_key)`。
+- `PhaseTemplate` 前端支持新建、编辑、删除和复制草稿；阶段定义可在模板属性区维护 key、名称、排序、计划窗口、持续天数和说明。
+- `ChecklistTemplate` 前端支持矩阵单元格新增、编辑、删除和 `item_templates` 横向表格维护；保存时统一走正式 `/checklist-templates/` CRUD，不产生 mock 或本地填充数据。
+- 复制模板由前端编排：先创建 `is_active=false` 的阶段模板草稿，再复制源模板下所有关联清单模板与模板检查项，并在阶段模板和清单模板 metadata 写入 `copied_from`。
+- 删除阶段模板时前端先删除其关联清单模板，再删除阶段模板，避免后端 `SET_NULL` 造成孤儿清单模板。
+- 配置中心创建项目新增项目模板选择，但只列出启用模板；草稿/停用模板必须先在项目模板模块启用后才能用于创建项目。

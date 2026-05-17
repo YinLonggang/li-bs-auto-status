@@ -196,6 +196,16 @@ export type PhaseDefinition = {
   metadata?: Record<string, unknown>;
 };
 
+export type PhaseTemplateInput = {
+  code?: string;
+  name?: string;
+  version?: number;
+  description?: string;
+  isActive?: boolean;
+  phaseDefinitions?: PhaseDefinition[];
+  metadata?: Record<string, unknown>;
+};
+
 export type ProjectPhase = {
   id: string | number;
   projectId: string | number;
@@ -250,6 +260,18 @@ export type ChecklistTemplate = {
   defaultDurationDays?: number;
   requiredAttachment?: boolean;
   severity: Severity;
+  itemTemplates?: ChecklistTemplateItem[];
+  metadata?: Record<string, unknown>;
+};
+
+export type ChecklistTemplateInput = {
+  code?: string;
+  name?: string;
+  moduleId?: string | number;
+  phaseTemplateId?: string | number | null;
+  phaseKey?: string;
+  version?: number;
+  isActive?: boolean;
   itemTemplates?: ChecklistTemplateItem[];
   metadata?: Record<string, unknown>;
 };

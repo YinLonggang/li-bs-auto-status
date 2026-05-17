@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   Clock3,
+  Copy,
   Download,
   Factory as FactoryIcon,
   FileDown,
@@ -15,6 +16,7 @@ import {
   Lock,
   Moon,
   Paperclip,
+  Pencil,
   Plus,
   RefreshCcw,
   Save,
@@ -34,15 +36,19 @@ import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollap
 import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
 import {
+  createChecklistTemplate,
+  createPhaseTemplate,
   createCheckItem,
   createCollisionReport,
   createExportTask,
   createKeyIssue,
   createProject,
   deleteAttachment,
+  deleteChecklistTemplate,
   deleteCollisionReport,
   deleteCheckItem,
   deleteKeyIssue,
+  deletePhaseTemplate,
   deleteProjectPhase,
   downloadCollisionReportTemplateExcel,
   exportCollisionReportExcel,
@@ -69,11 +75,18 @@ import {
   updateChecklistTemplate,
   updateInspectionModuleOwner,
   updateKeyIssue,
+  updatePhaseTemplate,
   updateProject,
   updateProjectPhase,
   updateSharedStorageProfile,
   testSharedStorageProfile,
   uploadAttachment
+} from './services/bsAutoStatusApi';
+import type {
+  CreateChecklistTemplateInput,
+  CreatePhaseTemplateInput,
+  UpdateChecklistTemplateInput,
+  UpdatePhaseTemplateInput
 } from './services/bsAutoStatusApi';
 import { ApiError } from './services/http';
 import type {
@@ -91,6 +104,7 @@ import type {
   InspectionModule,
   KeyIssue,
   OwnerCandidate,
+  PhaseDefinition,
   PhaseTemplate,
   Project,
   ProjectPhaseProgress,
@@ -910,6 +924,153 @@ const normalizeTemplateItemsForDraft = (items: ChecklistTemplateItem[]) =>
     metadata: item.metadata ?? {}
   }));
 
+type PhaseTemplateDraft = {
+  code: string;
+  name: string;
+  version: string;
+  description: string;
+  isActive: boolean;
+  phaseDefinitions: PhaseDefinition[];
+  metadata: Record<string, unknown>;
+};
+
+type ChecklistTemplateDraft = {
+  code: string;
+  name: string;
+  moduleId: string;
+  phaseTemplateId: string;
+  phaseKey: string;
+  version: string;
+  isActive: boolean;
+  itemTemplates: ChecklistTemplateItem[];
+  metadata: Record<string, unknown>;
+};
+
+type TemplateCellTarget = {
+  module: InspectionModule;
+  phase: PhaseDefinition;
+};
+
+const emptyPhaseDefinition = (sortOrder: number): PhaseDefinition => ({
+  key: '',
+  name: '',
+  description: '',
+  sortOrder,
+  plannedStart: null,
+  plannedEnd: null,
+  durationDays: null,
+  metadata: {}
+});
+
+const normalizePhaseDefinitionsForDraft = (definitions: PhaseDefinition[]) =>
+  definitions.map((definition, index) => ({
+    ...definition,
+    key: definition.key ?? '',
+    name: definition.name ?? '',
+    description: definition.description ?? '',
+    sortOrder: definition.sortOrder ?? (index + 1) * 10,
+    plannedStart: definition.plannedStart ?? null,
+    plannedEnd: definition.plannedEnd ?? null,
+    durationDays: definition.durationDays ?? null,
+    metadata: definition.metadata ?? {}
+  }));
+
+const phaseTemplateDraftFrom = (template: PhaseTemplate): PhaseTemplateDraft => {
+  const definitions = phaseDefinitionsOf(template);
+  return {
+    code: template.code,
+    name: template.name,
+    version: String(template.version ?? 1),
+    description: template.description ?? '',
+    isActive: template.isActive !== false,
+    phaseDefinitions: normalizePhaseDefinitionsForDraft(
+      definitions.length ? definitions : [emptyPhaseDefinition(10)]
+    ),
+    metadata: template.metadata ?? {}
+  };
+};
+
+const emptyPhaseTemplateDraft = (existingCodes: string[] = []): PhaseTemplateDraft => ({
+  code: makeUniqueTemplateCode(`bs-auto-status-template-${formatLocalDate(new Date())}`, existingCodes),
+  name: '',
+  version: '1',
+  description: '',
+  isActive: false,
+  phaseDefinitions: [emptyPhaseDefinition(10)],
+  metadata: {}
+});
+
+const checklistTemplateDraftFrom = (template: ChecklistTemplate): ChecklistTemplateDraft => ({
+  code: template.code,
+  name: template.name || template.title,
+  moduleId: idOf(template.moduleId),
+  phaseTemplateId: idOf(template.phaseTemplateId),
+  phaseKey: template.phaseKey ?? '',
+  version: String(template.version ?? 1),
+  isActive: template.isActive !== false,
+  itemTemplates: normalizeTemplateItemsForDraft(checklistItemsOf(template)),
+  metadata: template.metadata ?? {}
+});
+
+const makeChecklistTemplateDraft = (
+  phaseTemplate: PhaseTemplate,
+  module: InspectionModule,
+  phase: PhaseDefinition,
+  existingCodes: string[]
+): ChecklistTemplateDraft => ({
+  code: makeUniqueTemplateCode(
+    `${phaseTemplate.code}-${module.code || module.id}-${phase.key || phase.name}`,
+    existingCodes
+  ),
+  name: `${module.name || module.code} · ${phase.name || phase.key}`,
+  moduleId: idOf(module.id),
+  phaseTemplateId: idOf(phaseTemplate.id),
+  phaseKey: phase.key,
+  version: '1',
+  isActive: true,
+  itemTemplates: [emptyChecklistTemplateItem(10)],
+  metadata: {}
+});
+
+const toPositiveInteger = (value: string, fallback = 1) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const makeUniqueTemplateCode = (base: string, existingCodes: string[], maxLength = 64) => {
+  const existing = new Set(existingCodes.map(code => normalizeText(code)));
+  const normalized = (base || 'template')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLength) || 'template';
+  if (!existing.has(normalizeText(normalized))) return normalized;
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = `-${index}`;
+    const candidate = `${normalized.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+    if (!existing.has(normalizeText(candidate))) return candidate;
+  }
+  return `${normalized.slice(0, Math.max(1, maxLength - 14))}-${Date.now()}`;
+};
+
+const checklistTemplatesForCell = (
+  templates: ChecklistTemplate[],
+  phaseTemplateId: string,
+  module: InspectionModule,
+  phase: PhaseDefinition
+) =>
+  templates
+    .filter(template =>
+      idOf(template.phaseTemplateId) === phaseTemplateId &&
+      idOf(template.moduleId) === idOf(module.id) &&
+      (template.phaseKey || '') === phase.key
+    )
+    .sort((left, right) =>
+      Number(right.isActive !== false) - Number(left.isActive !== false) ||
+      (right.version ?? 0) - (left.version ?? 0) ||
+      left.code.localeCompare(right.code)
+    );
+
 const ownersForSearch = (owners?: CheckItemOwner[]) =>
   (owners ?? []).flatMap(owner => [
     owner.displayName,
@@ -1188,16 +1349,22 @@ function HorizontalBarChart({
 
 function ScopeToolbar({
   hierarchy,
+  phaseTemplates,
   scope,
+  selectedPhaseTemplateId,
   canWrite,
   onChange,
+  onTemplateChange,
   onCreateProject
 }: {
   hierarchy: WorkspaceData['hierarchy'];
+  phaseTemplates: PhaseTemplate[];
   scope: ScopeState;
+  selectedPhaseTemplateId: string;
   canWrite: boolean;
   onChange: (scope: ScopeState) => void;
-  onCreateProject: () => void;
+  onTemplateChange: (templateId: string) => void;
+  onCreateProject: (phaseTemplateId: string) => void;
 }) {
   const workshops = hierarchy.workshops.filter(
     workshop => !scope.factoryId || idOf(workshop.factoryId) === scope.factoryId
@@ -1205,10 +1372,14 @@ function ScopeToolbar({
   const productionLines = hierarchy.productionLines.filter(
     line => !scope.workshopId || idOf(line.workshopId) === scope.workshopId
   );
+  const sortedPhaseTemplates = bySequence(phaseTemplates).filter(template => template.isActive !== false);
+  const selectedPhaseTemplate = sortedPhaseTemplates.find(
+    template => idOf(template.id) === selectedPhaseTemplateId && template.isActive !== false
+  );
 
   return (
     <section className="panel">
-      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
+      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_auto]">
         <label>
           <span className="field-label">工厂</span>
           <select
@@ -1255,12 +1426,28 @@ function ScopeToolbar({
             ))}
           </select>
         </label>
+        <label>
+          <span className="field-label">项目模板</span>
+          <select
+            className="select"
+            value={selectedPhaseTemplateId}
+            onChange={event => onTemplateChange(event.target.value)}
+            disabled={!sortedPhaseTemplates.length}
+          >
+            <option value="">{sortedPhaseTemplates.length ? '选择项目模板' : '暂无启用项目模板'}</option>
+            {sortedPhaseTemplates.map(template => (
+              <option key={template.id} value={idOf(template.id)}>
+                {template.name} · v{template.version ?? 1}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="flex items-end">
           <button
             className="btn btn-primary w-full lg:w-auto"
             type="button"
-            disabled={!canWrite || !scope.factoryId || !scope.workshopId}
-            onClick={onCreateProject}
+            disabled={!canWrite || !scope.factoryId || !scope.workshopId || !selectedPhaseTemplate}
+            onClick={() => onCreateProject(selectedPhaseTemplateId)}
           >
             <Plus className="h-4 w-4" />
             按范围创建
@@ -6881,39 +7068,74 @@ function SharedStorageSettingsPanel({ canWrite }: { canWrite: boolean }) {
 function ProjectTemplateView({
   data,
   canWrite,
+  onCreatePhaseTemplate,
+  onUpdatePhaseTemplate,
+  onDeletePhaseTemplate,
+  onCopyPhaseTemplate,
+  onCreateChecklistTemplate,
+  onDeleteChecklistTemplate,
   onUpdateChecklistTemplate
 }: {
   data: WorkspaceData;
   canWrite: boolean;
-  onUpdateChecklistTemplate: (template: ChecklistTemplate, itemTemplates: ChecklistTemplateItem[]) => Promise<void>;
+  onCreatePhaseTemplate: (input: CreatePhaseTemplateInput) => Promise<PhaseTemplate>;
+  onUpdatePhaseTemplate: (template: PhaseTemplate, input: UpdatePhaseTemplateInput) => Promise<PhaseTemplate>;
+  onDeletePhaseTemplate: (template: PhaseTemplate) => Promise<void>;
+  onCopyPhaseTemplate: (template: PhaseTemplate) => Promise<PhaseTemplate>;
+  onCreateChecklistTemplate: (input: CreateChecklistTemplateInput) => Promise<ChecklistTemplate>;
+  onDeleteChecklistTemplate: (template: ChecklistTemplate) => Promise<void>;
+  onUpdateChecklistTemplate: (template: ChecklistTemplate, input: UpdateChecklistTemplateInput) => Promise<ChecklistTemplate>;
 }) {
   const [selectedPhaseTemplateId, setSelectedPhaseTemplateId] = useState('');
+  const [phaseEditorMode, setPhaseEditorMode] = useState<'edit' | 'create'>('edit');
+  const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseTemplateDraft>>({});
+  const [newPhaseDraft, setNewPhaseDraft] = useState<PhaseTemplateDraft>(() => emptyPhaseTemplateDraft());
   const [selectedChecklistTemplateId, setSelectedChecklistTemplateId] = useState('');
-  const [itemDrafts, setItemDrafts] = useState<Record<string, ChecklistTemplateItem[]>>({});
+  const [checklistDrafts, setChecklistDrafts] = useState<Record<string, ChecklistTemplateDraft>>({});
+  const [creatingCell, setCreatingCell] = useState<TemplateCellTarget | null>(null);
+  const [newChecklistDraft, setNewChecklistDraft] = useState<ChecklistTemplateDraft | null>(null);
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
   const sortedPhaseTemplates = bySequence(data.phaseTemplates);
   const phaseTemplateKey = sortedPhaseTemplates.map(template => idOf(template.id)).join('|');
-  const checklistTemplateKey = data.checklistTemplates.map(template => idOf(template.id)).join('|');
+  const checklistTemplateKey = data.checklistTemplates.map(template => `${idOf(template.id)}:${template.code}:${template.version ?? ''}`).join('|');
   const selectedPhaseTemplate = sortedPhaseTemplates.find(template => idOf(template.id) === selectedPhaseTemplateId) ?? sortedPhaseTemplates[0];
   const selectedPhaseTemplateIdValue = idOf(selectedPhaseTemplate?.id);
+  const existingPhaseTemplateCodes = data.phaseTemplates.map(template => template.code);
+  const existingChecklistTemplateCodes = data.checklistTemplates.map(template => template.code);
   const selectedTemplateChecklists = data.checklistTemplates.filter(template =>
-    !selectedPhaseTemplateIdValue ||
-    !template.phaseTemplateId ||
-    idOf(template.phaseTemplateId) === selectedPhaseTemplateIdValue
+    selectedPhaseTemplateIdValue && idOf(template.phaseTemplateId) === selectedPhaseTemplateIdValue
   );
   const selectedChecklistTemplate =
     selectedTemplateChecklists.find(template => idOf(template.id) === selectedChecklistTemplateId) ??
     selectedTemplateChecklists[0];
   const selectedChecklistTemplateIdValue = idOf(selectedChecklistTemplate?.id);
-  const selectedDraftItems = selectedChecklistTemplate
-    ? itemDrafts[selectedChecklistTemplateIdValue] ?? normalizeTemplateItemsForDraft(checklistItemsOf(selectedChecklistTemplate))
-    : [];
-  const selectedTemplateDefinitions = selectedPhaseTemplate ? phaseDefinitionsOf(selectedPhaseTemplate) : [];
-  const selectedChecklistPhase = selectedChecklistTemplate?.phaseKey
-    ? selectedTemplateDefinitions.find(phase => phase.key === selectedChecklistTemplate.phaseKey)
+  const selectedChecklistDraft = selectedChecklistTemplate
+    ? checklistDrafts[selectedChecklistTemplateIdValue] ?? checklistTemplateDraftFrom(selectedChecklistTemplate)
     : undefined;
-  const invalidDraft = selectedDraftItems.some(item => !item.title.trim());
+  const activeChecklistDraft = creatingCell ? newChecklistDraft : selectedChecklistDraft;
+  const selectedDraftItems = activeChecklistDraft?.itemTemplates ?? [];
+  const selectedTemplateDefinitions = selectedPhaseTemplate ? phaseDefinitionsOf(selectedPhaseTemplate) : [];
+  const selectedPhaseDraft = selectedPhaseTemplate
+    ? phaseDrafts[selectedPhaseTemplateIdValue] ?? phaseTemplateDraftFrom(selectedPhaseTemplate)
+    : undefined;
+  const activePhaseDraft = phaseEditorMode === 'create' ? newPhaseDraft : selectedPhaseDraft;
+  const selectedChecklistPhase = activeChecklistDraft?.phaseKey
+    ? selectedTemplateDefinitions.find(phase => phase.key === activeChecklistDraft.phaseKey)
+    : undefined;
+  const invalidPhaseDraft =
+    !activePhaseDraft?.code.trim() ||
+    !activePhaseDraft.name.trim() ||
+    !Number.isFinite(toPositiveInteger(activePhaseDraft.version)) ||
+    !activePhaseDraft.phaseDefinitions.length ||
+    activePhaseDraft.phaseDefinitions.some(phase => !phase.key.trim() || !phase.name.trim());
+  const invalidChecklistDraft =
+    !activeChecklistDraft?.code.trim() ||
+    !activeChecklistDraft.name.trim() ||
+    !activeChecklistDraft.moduleId ||
+    !activeChecklistDraft.phaseTemplateId ||
+    !activeChecklistDraft.phaseKey ||
+    selectedDraftItems.some(item => !item.title.trim());
 
   useEffect(() => {
     setSelectedPhaseTemplateId(current =>
@@ -6924,69 +7146,265 @@ function ProjectTemplateView({
   }, [phaseTemplateKey]);
 
   useEffect(() => {
+    if (creatingCell) return;
     setSelectedChecklistTemplateId(current =>
       selectedTemplateChecklists.some(template => idOf(template.id) === current)
         ? current
         : idOf(selectedTemplateChecklists[0]?.id)
     );
-  }, [selectedPhaseTemplateIdValue, checklistTemplateKey]);
+  }, [selectedPhaseTemplateIdValue, checklistTemplateKey, creatingCell]);
 
   useEffect(() => {
-    setItemDrafts(
+    setPhaseDrafts(
       Object.fromEntries(
-        data.checklistTemplates.map(template => [
-          idOf(template.id),
-          normalizeTemplateItemsForDraft(checklistItemsOf(template))
-        ])
+        data.phaseTemplates.map(template => [idOf(template.id), phaseTemplateDraftFrom(template)])
+      )
+    );
+  }, [data.phaseTemplates]);
+
+  useEffect(() => {
+    setChecklistDrafts(
+      Object.fromEntries(
+        data.checklistTemplates.map(template => [idOf(template.id), checklistTemplateDraftFrom(template)])
       )
     );
   }, [data.checklistTemplates]);
 
-  const updateDraftItem = (index: number, patch: Partial<ChecklistTemplateItem>) => {
-    if (!selectedChecklistTemplateIdValue) return;
-    setItemDrafts(current => {
-      const nextItems = [...(current[selectedChecklistTemplateIdValue] ?? selectedDraftItems)];
-      nextItems[index] = { ...nextItems[index], ...patch };
-      return { ...current, [selectedChecklistTemplateIdValue]: nextItems };
+  const updateActivePhaseDraft = (patch: Partial<PhaseTemplateDraft>) => {
+    if (phaseEditorMode === 'create') {
+      setNewPhaseDraft(current => ({ ...current, ...patch }));
+      return;
+    }
+    if (!selectedPhaseTemplateIdValue || !selectedPhaseTemplate) return;
+    setPhaseDrafts(current => ({
+      ...current,
+      [selectedPhaseTemplateIdValue]: {
+        ...(current[selectedPhaseTemplateIdValue] ?? phaseTemplateDraftFrom(selectedPhaseTemplate)),
+        ...patch
+      }
+    }));
+  };
+
+  const updatePhaseDefinition = (index: number, patch: Partial<PhaseDefinition>) => {
+    if (!activePhaseDraft) return;
+    const nextDefinitions = [...activePhaseDraft.phaseDefinitions];
+    nextDefinitions[index] = { ...nextDefinitions[index], ...patch };
+    updateActivePhaseDraft({ phaseDefinitions: nextDefinitions });
+  };
+
+  const addPhaseDefinition = () => {
+    const nextSortOrder = activePhaseDraft?.phaseDefinitions.length
+      ? Math.max(...activePhaseDraft.phaseDefinitions.map(phase => phase.sortOrder ?? 0)) + 10
+      : 10;
+    updateActivePhaseDraft({
+      phaseDefinitions: [
+        ...(activePhaseDraft?.phaseDefinitions ?? []),
+        emptyPhaseDefinition(nextSortOrder)
+      ]
     });
   };
 
+  const removePhaseDefinition = (index: number) => {
+    if (!activePhaseDraft) return;
+    updateActivePhaseDraft({
+      phaseDefinitions: activePhaseDraft.phaseDefinitions.filter((_, phaseIndex) => phaseIndex !== index)
+    });
+  };
+
+  const openCreatePhaseTemplate = () => {
+    setPhaseEditorMode('create');
+    setNewPhaseDraft(emptyPhaseTemplateDraft(existingPhaseTemplateCodes));
+    setCreatingCell(null);
+    setNewChecklistDraft(null);
+    setMessage('');
+  };
+
+  const selectPhaseTemplate = (template: PhaseTemplate) => {
+    setPhaseEditorMode('edit');
+    setSelectedPhaseTemplateId(idOf(template.id));
+    setCreatingCell(null);
+    setNewChecklistDraft(null);
+    setMessage('');
+  };
+
+  const phaseDraftInput = (draft: PhaseTemplateDraft): CreatePhaseTemplateInput => ({
+    code: draft.code.trim(),
+    name: draft.name.trim(),
+    version: toPositiveInteger(draft.version),
+    description: draft.description.trim(),
+    isActive: draft.isActive,
+    phaseDefinitions: normalizePhaseDefinitionsForDraft(draft.phaseDefinitions),
+    metadata: draft.metadata
+  });
+
+  const savePhaseTemplate = async () => {
+    if (!canWrite || !activePhaseDraft || invalidPhaseDraft) return;
+    const key = phaseEditorMode === 'create' ? 'phase-template-new' : `phase-template-${selectedPhaseTemplate?.id}`;
+    setSavingKey(key);
+    setMessage('');
+    try {
+      if (phaseEditorMode === 'create') {
+        const created = await onCreatePhaseTemplate(phaseDraftInput(activePhaseDraft));
+        setSelectedPhaseTemplateId(idOf(created.id));
+        setPhaseEditorMode('edit');
+        setMessage('创建项目模板已新增。');
+      } else if (selectedPhaseTemplate) {
+        const updated = await onUpdatePhaseTemplate(selectedPhaseTemplate, phaseDraftInput(activePhaseDraft));
+        setSelectedPhaseTemplateId(idOf(updated.id));
+        setMessage('创建项目模板已保存。');
+      }
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '创建项目模板保存失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const deleteSelectedPhaseTemplate = async () => {
+    if (!canWrite || !selectedPhaseTemplate) return;
+    const confirmed = window.confirm(`确认删除创建项目模板「${selectedPhaseTemplate.name}」？将同步删除该模板下的关联清单模板。`);
+    if (!confirmed) return;
+    setSavingKey(`phase-template-delete-${selectedPhaseTemplate.id}`);
+    setMessage('');
+    try {
+      await onDeletePhaseTemplate(selectedPhaseTemplate);
+      setSelectedPhaseTemplateId('');
+      setSelectedChecklistTemplateId('');
+      setMessage('创建项目模板已删除。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '创建项目模板删除失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const copySelectedPhaseTemplate = async () => {
+    if (!canWrite || !selectedPhaseTemplate) return;
+    setSavingKey(`phase-template-copy-${selectedPhaseTemplate.id}`);
+    setMessage('');
+    try {
+      const copied = await onCopyPhaseTemplate(selectedPhaseTemplate);
+      setSelectedPhaseTemplateId(idOf(copied.id));
+      setSelectedChecklistTemplateId('');
+      setPhaseEditorMode('edit');
+      setCreatingCell(null);
+      setNewChecklistDraft(null);
+      setMessage('已复制为草稿模板，并复制关联清单模板与模板检查项。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '创建项目模板复制失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const updateActiveChecklistDraft = (patch: Partial<ChecklistTemplateDraft>) => {
+    if (creatingCell) {
+      setNewChecklistDraft(current => current ? { ...current, ...patch } : current);
+      return;
+    }
+    if (!selectedChecklistTemplateIdValue || !selectedChecklistTemplate) return;
+    setChecklistDrafts(current => ({
+      ...current,
+      [selectedChecklistTemplateIdValue]: {
+        ...(current[selectedChecklistTemplateIdValue] ?? checklistTemplateDraftFrom(selectedChecklistTemplate)),
+        ...patch
+      }
+    }));
+  };
+
+  const updateDraftItem = (index: number, patch: Partial<ChecklistTemplateItem>) => {
+    if (!activeChecklistDraft) return;
+    const nextItems = [...selectedDraftItems];
+    nextItems[index] = { ...nextItems[index], ...patch };
+    updateActiveChecklistDraft({ itemTemplates: nextItems });
+  };
+
   const addDraftItem = () => {
-    if (!selectedChecklistTemplateIdValue) return;
     const nextSortOrder = selectedDraftItems.length
       ? Math.max(...selectedDraftItems.map(item => item.sortOrder ?? 0)) + 10
       : 10;
-    setItemDrafts(current => ({
-      ...current,
-      [selectedChecklistTemplateIdValue]: [
-        ...(current[selectedChecklistTemplateIdValue] ?? selectedDraftItems),
-        emptyChecklistTemplateItem(nextSortOrder)
-      ]
-    }));
+    updateActiveChecklistDraft({
+      itemTemplates: [...selectedDraftItems, emptyChecklistTemplateItem(nextSortOrder)]
+    });
   };
 
   const removeDraftItem = (index: number) => {
-    if (!selectedChecklistTemplateIdValue) return;
-    setItemDrafts(current => ({
-      ...current,
-      [selectedChecklistTemplateIdValue]: (current[selectedChecklistTemplateIdValue] ?? selectedDraftItems)
-        .filter((_, itemIndex) => itemIndex !== index)
-    }));
+    updateActiveChecklistDraft({
+      itemTemplates: selectedDraftItems.filter((_, itemIndex) => itemIndex !== index)
+    });
   };
 
-  const saveChecklistTemplate = async () => {
-    if (!canWrite || !selectedChecklistTemplate) return;
-    if (invalidDraft) {
-      setMessage('模板检查项标题不能为空。');
-      return;
+  const startCreateChecklistTemplate = (target: TemplateCellTarget) => {
+    if (!selectedPhaseTemplate) return;
+    setCreatingCell(target);
+    setSelectedChecklistTemplateId('');
+    setNewChecklistDraft(makeChecklistTemplateDraft(
+      selectedPhaseTemplate,
+      target.module,
+      target.phase,
+      existingChecklistTemplateCodes
+    ));
+    setMessage('');
+  };
+
+  const selectChecklistTemplate = (template: ChecklistTemplate) => {
+    setCreatingCell(null);
+    setNewChecklistDraft(null);
+    setSelectedChecklistTemplateId(idOf(template.id));
+    setMessage('');
+  };
+
+  const checklistDraftInput = (draft: ChecklistTemplateDraft): CreateChecklistTemplateInput => ({
+    code: draft.code.trim(),
+    name: draft.name.trim(),
+    moduleId: draft.moduleId,
+    phaseTemplateId: draft.phaseTemplateId,
+    phaseKey: draft.phaseKey,
+    version: toPositiveInteger(draft.version),
+    isActive: draft.isActive,
+    itemTemplates: normalizeTemplateItemsForDraft(draft.itemTemplates),
+    metadata: {
+      ...draft.metadata,
+      item_count: draft.itemTemplates.filter(item => item.title.trim()).length
     }
-    setSavingKey(`checklist-template-${selectedChecklistTemplate.id}`);
+  });
+
+  const saveChecklistTemplate = async () => {
+    if (!canWrite || !activeChecklistDraft || invalidChecklistDraft) return;
+    const key = creatingCell ? 'checklist-template-new' : `checklist-template-${selectedChecklistTemplate?.id}`;
+    setSavingKey(key);
     setMessage('');
     try {
-      await onUpdateChecklistTemplate(selectedChecklistTemplate, selectedDraftItems);
-      setMessage('模板检查项已保存。新创建或补齐模板的项目会使用最新模板，已有项目实例不自动覆盖。');
+      if (creatingCell) {
+        const created = await onCreateChecklistTemplate(checklistDraftInput(activeChecklistDraft));
+        setCreatingCell(null);
+        setNewChecklistDraft(null);
+        setSelectedChecklistTemplateId(idOf(created.id));
+        setMessage('清单模板已新增。');
+      } else if (selectedChecklistTemplate) {
+        const updated = await onUpdateChecklistTemplate(selectedChecklistTemplate, checklistDraftInput(activeChecklistDraft));
+        setSelectedChecklistTemplateId(idOf(updated.id));
+        setMessage('清单模板已保存。新创建或补齐模板的项目会使用最新模板，已有项目实例不自动覆盖。');
+      }
     } catch (err) {
-      setMessage(mutationErrorMessage(err, '模板检查项保存失败。'));
+      setMessage(mutationErrorMessage(err, '清单模板保存失败。'));
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const deleteSelectedChecklistTemplate = async () => {
+    if (!canWrite || !selectedChecklistTemplate) return;
+    const confirmed = window.confirm(`确认删除清单模板「${selectedChecklistTemplate.title}」？`);
+    if (!confirmed) return;
+    setSavingKey(`checklist-template-delete-${selectedChecklistTemplate.id}`);
+    setMessage('');
+    try {
+      await onDeleteChecklistTemplate(selectedChecklistTemplate);
+      setSelectedChecklistTemplateId('');
+      setMessage('清单模板已删除。');
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '清单模板删除失败。'));
     } finally {
       setSavingKey('');
     }
@@ -7001,7 +7419,13 @@ function ProjectTemplateView({
             <h2 className="text-xl font-semibold">创建项目模板</h2>
             <p className="text-sm text-ink-muted">模板作为创建项目和补齐默认阶段/检查项的源数据，不和项目实例配置混在一起。</p>
           </div>
-          <ReadOnlyNotice canWrite={canWrite} />
+          <div className="flex flex-wrap items-center gap-2">
+            <ReadOnlyNotice canWrite={canWrite} />
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={openCreatePhaseTemplate}>
+              <Plus className="h-4 w-4" />
+              新建模板
+            </button>
+          </div>
         </div>
         <div className="table-shell mt-4">
           <table className="data-table min-w-[1120px]">
@@ -7025,14 +7449,14 @@ function ProjectTemplateView({
                 return (
                   <tr
                     key={template.id}
-                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    className={`cursor-pointer transition ${active && phaseEditorMode === 'edit' ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
                     tabIndex={0}
-                    aria-selected={active}
-                    onClick={() => setSelectedPhaseTemplateId(idOf(template.id))}
+                    aria-selected={active && phaseEditorMode === 'edit'}
+                    onClick={() => selectPhaseTemplate(template)}
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
-                        setSelectedPhaseTemplateId(idOf(template.id));
+                        selectPhaseTemplate(template);
                       }
                     }}
                   >
@@ -7057,96 +7481,269 @@ function ProjectTemplateView({
             </tbody>
           </table>
         </div>
+        {activePhaseDraft ? (
+          <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-ink">
+                  {phaseEditorMode === 'create' ? '新建创建项目模板' : '模板属性'}
+                </h3>
+                <p className="text-xs text-ink-muted">
+                  {phaseEditorMode === 'create' ? '保存后可在矩阵中维护模块阶段清单模板。' : `${selectedPhaseTemplate?.code ?? ''} · ${selectedTemplateDefinitions.length} 阶段`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {phaseEditorMode === 'edit' && selectedPhaseTemplate ? (
+                  <>
+                    <button
+                      className="btn btn-ghost btn--sm"
+                      type="button"
+                      disabled={!canWrite || savingKey === `phase-template-copy-${selectedPhaseTemplate.id}`}
+                      onClick={() => void copySelectedPhaseTemplate()}
+                    >
+                      <Copy className="h-4 w-4" />
+                      {savingKey === `phase-template-copy-${selectedPhaseTemplate.id}` ? '复制中' : '复制草稿'}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn--sm"
+                      type="button"
+                      disabled={!canWrite || savingKey === `phase-template-delete-${selectedPhaseTemplate.id}`}
+                      onClick={() => void deleteSelectedPhaseTemplate()}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      删除模板
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  className="btn btn-primary btn--sm"
+                  type="button"
+                  disabled={!canWrite || invalidPhaseDraft || savingKey.startsWith('phase-template')}
+                  onClick={() => void savePhaseTemplate()}
+                >
+                  <Save className="h-4 w-4" />
+                  {savingKey === 'phase-template-new' || savingKey === `phase-template-${selectedPhaseTemplate?.id}` ? '保存中' : '保存模板'}
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-5">
+              <label>
+                <span className="field-label">模板编码</span>
+                <input className="input" value={activePhaseDraft.code} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ code: event.target.value })} />
+              </label>
+              <label className="lg:col-span-2">
+                <span className="field-label">模板名称</span>
+                <input className="input" value={activePhaseDraft.name} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ name: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">版本</span>
+                <input className="input" type="number" min={1} value={activePhaseDraft.version} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ version: event.target.value })} />
+              </label>
+              <label className="flex items-end gap-2 text-sm text-ink-muted">
+                <input type="checkbox" checked={activePhaseDraft.isActive} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ isActive: event.target.checked })} />
+                启用
+              </label>
+              <label className="lg:col-span-5">
+                <span className="field-label">说明</span>
+                <textarea className="input min-h-20" value={activePhaseDraft.description} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ description: event.target.value })} />
+              </label>
+            </div>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-semibold text-ink">阶段定义</h4>
+                <p className="text-xs text-ink-muted">阶段 key 会用于矩阵列和清单模板 phase_key。</p>
+              </div>
+              <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={addPhaseDefinition}>
+                <Plus className="h-4 w-4" />
+                新增阶段
+              </button>
+            </div>
+            <div className="table-shell mt-3">
+              <table className="data-table min-w-[1180px]">
+                <thead>
+                  <tr>
+                    <th>排序</th>
+                    <th>阶段 Key</th>
+                    <th>阶段名称</th>
+                    <th>说明</th>
+                    <th>计划开始</th>
+                    <th>计划结束</th>
+                    <th>持续天数</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activePhaseDraft.phaseDefinitions.map((phase, index) => (
+                    <tr key={`${phase.key || 'phase'}-${index}`}>
+                      <td className="min-w-[100px]">
+                        <input className="input" type="number" value={phase.sortOrder ?? (index + 1) * 10} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { sortOrder: Number(event.target.value) })} />
+                      </td>
+                      <td className="min-w-[150px]">
+                        <input className="input" value={phase.key} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { key: event.target.value })} />
+                      </td>
+                      <td className="min-w-[180px]">
+                        <input className="input" value={phase.name} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { name: event.target.value })} />
+                      </td>
+                      <td className="min-w-[260px]">
+                        <input className="input" value={phase.description ?? ''} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { description: event.target.value })} />
+                      </td>
+                      <td className="min-w-[150px]">
+                        <input className="input" type="date" value={dateInputValue(phase.plannedStart)} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { plannedStart: event.target.value || null })} />
+                      </td>
+                      <td className="min-w-[150px]">
+                        <input className="input" type="date" value={dateInputValue(phase.plannedEnd)} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { plannedEnd: event.target.value || null })} />
+                      </td>
+                      <td className="min-w-[120px]">
+                        <input className="input" type="number" value={phase.durationDays ?? ''} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { durationDays: event.target.value ? Number(event.target.value) : null })} />
+                      </td>
+                      <td>
+                        <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || activePhaseDraft.phaseDefinitions.length <= 1} onClick={() => removePhaseDefinition(index)}>
+                          <Trash2 className="h-4 w-4" />
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="panel">
         <div className="panel-header">
           <div>
-            <p className="kicker">Template Checklist</p>
-            <h2 className="text-xl font-semibold">模板检查项维护</h2>
-            <p className="text-sm text-ink-muted">{selectedPhaseTemplate ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择创建项目模板'}</p>
+            <p className="kicker">Module Phase Matrix</p>
+            <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
+            <p className="text-sm text-ink-muted">{selectedPhaseTemplate && phaseEditorMode === 'edit' ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择已保存的创建项目模板'}</p>
           </div>
-          <span className="chip">{selectedTemplateChecklists.length} 组清单</span>
+          <span className="chip">{selectedTemplateChecklists.length} 组清单模板</span>
         </div>
-        {selectedTemplateDefinitions.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {selectedTemplateDefinitions.map(phase => (
-              <span key={phase.key} className="chip">
-                {phase.sortOrder ?? '-'} · {phase.name}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <div className="table-shell mt-4">
-          <table className="data-table min-w-[1180px]">
-            <thead>
-              <tr>
-                <th>阶段</th>
-                <th>模块</th>
-                <th>清单模板</th>
-                <th>模板检查项</th>
-                <th>版本</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedTemplateChecklists.map(template => {
-                const active = idOf(template.id) === selectedChecklistTemplateIdValue;
-                const phaseName = template.phaseKey
-                  ? selectedTemplateDefinitions.find(phase => phase.key === template.phaseKey)?.name ?? template.phaseKey
-                  : '通用';
-                return (
-                  <tr
-                    key={template.id}
-                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
-                    tabIndex={0}
-                    aria-selected={active}
-                    onClick={() => setSelectedChecklistTemplateId(idOf(template.id))}
-                    onKeyDown={event => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        setSelectedChecklistTemplateId(idOf(template.id));
-                      }
-                    }}
-                  >
-                    <td>{phaseName}</td>
-                    <td>
-                      <div>{template.moduleName || template.moduleCode || template.moduleId || '-'}</div>
-                      <div className="mt-1 text-xs text-ink-muted">{template.moduleCode || '-'}</div>
-                    </td>
-                    <td className="min-w-[260px]">
-                      <div className="font-semibold text-ink">{template.title}</div>
-                      <div className="mt-1 text-xs text-ink-muted">{template.code}</div>
-                    </td>
-                    <td>{checklistItemsOf(template).length} 项</td>
-                    <td>v{template.version ?? 1}</td>
-                    <td><StatusPill status={template.isActive !== false ? 'active' : 'disabled'} /></td>
-                  </tr>
-                );
-              })}
-              {!selectedTemplateChecklists.length ? (
+        {selectedPhaseTemplate && phaseEditorMode === 'edit' && selectedTemplateDefinitions.length ? (
+          <div className="table-shell mt-4">
+            <table className="data-table" style={{ minWidth: `${Math.max(960, 220 + selectedTemplateDefinitions.length * 220)}px` }}>
+              <thead>
                 <tr>
-                  <td colSpan={6} className="text-center text-ink-muted">该创建项目模板下暂无检查清单模板。</td>
+                  <th className="sticky left-0 z-10 bg-surface">检查模块</th>
+                  {selectedTemplateDefinitions.map(phase => (
+                    <th key={phase.key}>
+                      <div className="font-semibold">{phase.name}</div>
+                      <div className="mt-1 text-xs font-normal text-ink-muted">{phase.key}</div>
+                    </th>
+                  ))}
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {bySequence(data.inspectionModules).map(module => (
+                  <tr key={module.id}>
+                    <td className="sticky left-0 z-10 min-w-[220px] bg-surface">
+                      <div className="font-semibold text-ink">{module.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{module.code}</div>
+                      <div className="mt-2"><StatusPill status={module.isActive ? 'active' : 'disabled'} /></div>
+                    </td>
+                    {selectedTemplateDefinitions.map(phase => {
+                      const cellTemplates = checklistTemplatesForCell(
+                        data.checklistTemplates,
+                        selectedPhaseTemplateIdValue,
+                        module,
+                        phase
+                      );
+                      const primaryTemplate = cellTemplates[0];
+                      const active = primaryTemplate && idOf(primaryTemplate.id) === selectedChecklistTemplateIdValue && !creatingCell;
+                      return (
+                        <td key={`${module.id}-${phase.key}`} className="min-w-[220px] align-top">
+                          <button
+                            className={`w-full rounded-lg border p-3 text-left transition ${
+                              active ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft hover:border-primary/50'
+                            }`}
+                            type="button"
+                            disabled={!primaryTemplate && !canWrite}
+                            onClick={() => {
+                              if (primaryTemplate) {
+                                selectChecklistTemplate(primaryTemplate);
+                              } else {
+                                startCreateChecklistTemplate({ module, phase });
+                              }
+                            }}
+                          >
+                            {primaryTemplate ? (
+                              <>
+                                <div className="font-semibold text-ink">{primaryTemplate.title}</div>
+                                <div className="mt-1 text-xs text-ink-muted">{primaryTemplate.code}</div>
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  <StatusPill status={primaryTemplate.isActive !== false ? 'active' : 'disabled'} />
+                                  <span className="chip">{checklistItemsOf(primaryTemplate).length} 项</span>
+                                  {cellTemplates.length > 1 ? <span className="chip">+{cellTemplates.length - 1}</span> : null}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-semibold text-ink-muted">未配置</div>
+                                <div className="mt-2 text-xs text-ink-muted">{canWrite ? '点击新增清单模板' : '只读账号不可新增'}</div>
+                              </>
+                            )}
+                          </button>
+                          {primaryTemplate && canWrite ? (
+                            <button
+                              className="btn btn-ghost btn--sm mt-2 w-full"
+                              type="button"
+                              onClick={event => {
+                                event.stopPropagation();
+                                startCreateChecklistTemplate({ module, phase });
+                              }}
+                            >
+                              <Plus className="h-4 w-4" />
+                              新增单元格清单
+                            </button>
+                          ) : null}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {!data.inspectionModules.length ? (
+                  <tr>
+                    <td colSpan={selectedTemplateDefinitions.length + 1} className="text-center text-ink-muted">暂无检查模块。</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <EmptyState message={phaseEditorMode === 'create' ? '新模板保存后可维护模块阶段矩阵。' : '当前模板暂无阶段定义。'} />
+          </div>
+        )}
 
-        {selectedChecklistTemplate ? (
+        {activeChecklistDraft ? (
           <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-ink">{selectedChecklistTemplate.title}</div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+                  {creatingCell ? <Plus className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                  {creatingCell ? '新增清单模板' : activeChecklistDraft.name}
+                </div>
                 <div className="text-xs text-ink-muted">
-                  {selectedChecklistPhase?.name || selectedChecklistTemplate.phaseKey || '通用阶段'} · {selectedChecklistTemplate.moduleName || selectedChecklistTemplate.moduleCode || '未设置模块'}
+                  {selectedChecklistPhase?.name || activeChecklistDraft.phaseKey || '未设置阶段'} · {data.inspectionModules.find(module => idOf(module.id) === activeChecklistDraft.moduleId)?.name || '未设置模块'}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {!creatingCell && selectedChecklistTemplate ? (
+                  <button
+                    className="btn btn-ghost btn--sm"
+                    type="button"
+                    disabled={!canWrite || savingKey === `checklist-template-delete-${selectedChecklistTemplate.id}`}
+                    onClick={() => void deleteSelectedChecklistTemplate()}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    删除清单
+                  </button>
+                ) : null}
                 <button
                   className="btn btn-ghost btn--sm"
                   type="button"
-                  disabled={!canWrite}
+                  disabled={!canWrite || !activeChecklistDraft}
                   onClick={addDraftItem}
                 >
                   <Plus className="h-4 w-4" />
@@ -7155,15 +7752,51 @@ function ProjectTemplateView({
                 <button
                   className="btn btn-primary btn--sm"
                   type="button"
-                  disabled={!canWrite || invalidDraft || savingKey === `checklist-template-${selectedChecklistTemplate.id}`}
+                  disabled={!canWrite || invalidChecklistDraft || savingKey.startsWith('checklist-template')}
                   onClick={() => void saveChecklistTemplate()}
                 >
                   <Save className="h-4 w-4" />
-                  {savingKey === `checklist-template-${selectedChecklistTemplate.id}` ? '保存中' : '保存模板'}
+                  {savingKey === 'checklist-template-new' || savingKey === `checklist-template-${selectedChecklistTemplate?.id}` ? '保存中' : '保存清单'}
                 </button>
               </div>
             </div>
             {message ? <div className="mt-3 text-sm text-ink-muted">{message}</div> : null}
+            <div className="mt-4 grid gap-3 lg:grid-cols-6">
+              <label>
+                <span className="field-label">清单编码</span>
+                <input className="input" value={activeChecklistDraft.code} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ code: event.target.value })} />
+              </label>
+              <label className="lg:col-span-2">
+                <span className="field-label">清单名称</span>
+                <input className="input" value={activeChecklistDraft.name} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ name: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">模块</span>
+                <select className="select" value={activeChecklistDraft.moduleId} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ moduleId: event.target.value })}>
+                  <option value="">选择模块</option>
+                  {bySequence(data.inspectionModules).map(module => (
+                    <option key={module.id} value={idOf(module.id)}>{module.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">阶段</span>
+                <select className="select" value={activeChecklistDraft.phaseKey} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ phaseKey: event.target.value })}>
+                  <option value="">选择阶段</option>
+                  {selectedTemplateDefinitions.map(phase => (
+                    <option key={phase.key} value={phase.key}>{phase.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">版本</span>
+                <input className="input" type="number" min={1} value={activeChecklistDraft.version} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ version: event.target.value })} />
+              </label>
+              <label className="flex items-end gap-2 text-sm text-ink-muted">
+                <input type="checkbox" checked={activeChecklistDraft.isActive} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ isActive: event.target.checked })} />
+                启用
+              </label>
+            </div>
             <div className="table-shell mt-4">
               <table className="data-table min-w-[1280px]">
                 <thead>
@@ -7180,7 +7813,7 @@ function ProjectTemplateView({
                 </thead>
                 <tbody>
                   {selectedDraftItems.map((item, index) => (
-                    <tr key={`${selectedChecklistTemplate.id}-${index}`}>
+                    <tr key={`${creatingCell ? 'new' : selectedChecklistTemplate?.id}-${index}`}>
                       <td className="min-w-[110px]">
                         <input
                           className="input"
@@ -7271,7 +7904,12 @@ function ProjectTemplateView({
               </table>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-5">
+            <EmptyState message="请选择矩阵中的清单模板，或点击空单元格新增清单模板。" />
+          </div>
+        )}
+        {message && !activeChecklistDraft ? <div className="mt-3 text-sm text-ink-muted">{message}</div> : null}
       </section>
     </div>
   );
@@ -7299,7 +7937,7 @@ function BaseConfigView({
   canWrite: boolean;
   onScopeChange: (scope: ScopeState) => void;
   onSelectProject: (projectId: string | number) => void;
-  onCreateProject: () => void;
+  onCreateProject: (phaseTemplateId: string) => void;
   onUpdateProject: (draft: ProjectConfigDraft) => Promise<void>;
   onSeedTemplate: () => Promise<void>;
   onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<void>;
@@ -7319,6 +7957,7 @@ function BaseConfigView({
   const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
   const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
+  const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
   const [transferTargetPhaseId, setTransferTargetPhaseId] = useState('');
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
@@ -7373,11 +8012,22 @@ function BaseConfigView({
   const projectStatusOptions = statusOptionValues(data.projects.map(item => item.status));
   const phaseStatusOptions = statusOptionValues(data.phases.map(item => item.status));
   const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
+  const sortedCreatePhaseTemplates = bySequence(data.phaseTemplates).filter(template => template.isActive !== false);
+  const createPhaseTemplateKey = sortedCreatePhaseTemplates.map(template => `${idOf(template.id)}:${template.isActive}`).join('|');
   const selectedNewCheckPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
   const selectedModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
   const projectWorkbench = (
     <>
-      <ScopeToolbar hierarchy={data.hierarchy} scope={scope} canWrite={canWrite} onChange={onScopeChange} onCreateProject={onCreateProject} />
+      <ScopeToolbar
+        hierarchy={data.hierarchy}
+        phaseTemplates={data.phaseTemplates}
+        scope={scope}
+        selectedPhaseTemplateId={createPhaseTemplateId}
+        canWrite={canWrite}
+        onChange={onScopeChange}
+        onTemplateChange={setCreatePhaseTemplateId}
+        onCreateProject={onCreateProject}
+      />
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -7574,6 +8224,14 @@ function BaseConfigView({
       isActive: true
     });
   }, [project?.id, data.phases, data.inspectionModules, data.checkItems]);
+
+  useEffect(() => {
+    setCreatePhaseTemplateId(current =>
+      sortedCreatePhaseTemplates.some(template => idOf(template.id) === current)
+        ? current
+        : idOf(sortedCreatePhaseTemplates.find(template => template.isActive !== false)?.id ?? sortedCreatePhaseTemplates[0]?.id)
+    );
+  }, [createPhaseTemplateKey]);
 
   useEffect(() => {
     if (!newCheckDraft || !selectedPhaseId || newCheckDraft.projectPhaseId === selectedPhaseId) return;
@@ -8566,7 +9224,10 @@ export default function App() {
     void loadData(projectId, EMPTY_SCOPE);
   };
 
-  const handleCreateProject = async (nextView: AppTab = 'baseConfig') => {
+  const handleCreateProject = async (
+    nextView: AppTab = 'baseConfig',
+    phaseTemplateId?: string | number | null
+  ) => {
     if (!canWrite) return;
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === scope.factoryId);
     const workshop = workspace.hierarchy.workshops.find(item => idOf(item.id) === scope.workshopId);
@@ -8590,7 +9251,8 @@ export default function App() {
         workshopName: workshop.name,
         ownerName: profile?.displayName ?? '未设置',
         plannedStartDate: new Date().toISOString().slice(0, 10),
-        plannedEndDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10)
+        plannedEndDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10),
+        phaseTemplateId: phaseTemplateId || undefined
       });
       await loadData(project.id);
       setCurrentView(nextView);
@@ -8652,24 +9314,146 @@ export default function App() {
     }
   };
 
-  const handleUpdateChecklistTemplateConfig = async (
-    template: ChecklistTemplate,
-    itemTemplates: ChecklistTemplateItem[]
-  ) => {
-    if (!canWrite) return;
+  const handleCreatePhaseTemplateConfig = async (input: CreatePhaseTemplateInput) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
     try {
-      await updateChecklistTemplate(template.id, {
-        name: template.name || template.title,
-        isActive: template.isActive !== false,
-        itemTemplates,
-        metadata: {
-          ...(template.metadata ?? {}),
-          item_count: itemTemplates.filter(item => item.title.trim()).length
-        }
-      });
+      const created = await createPhaseTemplate(input);
+      await loadData();
+      return created;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '创建项目模板新增失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdatePhaseTemplateConfig = async (
+    template: PhaseTemplate,
+    input: UpdatePhaseTemplateInput
+  ) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const updated = await updatePhaseTemplate(template.id, input);
+      await loadData();
+      return updated;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '创建项目模板保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeletePhaseTemplateConfig = async (template: PhaseTemplate) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const relatedChecklists = workspace.checklistTemplates.filter(item =>
+        idOf(item.phaseTemplateId) === idOf(template.id)
+      );
+      for (const checklist of relatedChecklists) {
+        await deleteChecklistTemplate(checklist.id);
+      }
+      await deletePhaseTemplate(template.id);
       await loadData();
     } catch (err) {
-      setError(mutationErrorMessage(err, '模板检查项保存失败'));
+      setError(mutationErrorMessage(err, '创建项目模板删除失败'));
+      throw err;
+    }
+  };
+
+  const handleCopyPhaseTemplateConfig = async (template: PhaseTemplate) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    const sourceChecklists = workspace.checklistTemplates.filter(item =>
+      idOf(item.phaseTemplateId) === idOf(template.id)
+    );
+    const copiedCode = makeUniqueTemplateCode(
+      `${template.code}-draft`,
+      workspace.phaseTemplates.map(item => item.code)
+    );
+    try {
+      const copiedPhaseTemplate = await createPhaseTemplate({
+        code: copiedCode,
+        name: `${template.name} 草稿`,
+        version: template.version ?? 1,
+        description: template.description ?? '',
+        isActive: false,
+        phaseDefinitions: phaseDefinitionsOf(template),
+        metadata: {
+          ...(template.metadata ?? {}),
+          copied_from: {
+            type: 'phase_template',
+            id: template.id,
+            code: template.code,
+            version: template.version ?? 1
+          }
+        }
+      });
+      const checklistCodes = workspace.checklistTemplates.map(item => item.code);
+      for (const checklist of sourceChecklists) {
+        const copiedChecklistCode = makeUniqueTemplateCode(
+          `${copiedCode}-${checklist.code}`,
+          checklistCodes
+        );
+        checklistCodes.push(copiedChecklistCode);
+        await createChecklistTemplate({
+          code: copiedChecklistCode,
+          name: checklist.name || checklist.title,
+          moduleId: checklist.moduleId,
+          phaseTemplateId: copiedPhaseTemplate.id,
+          phaseKey: checklist.phaseKey ?? '',
+          version: checklist.version ?? 1,
+          isActive: checklist.isActive !== false,
+          itemTemplates: normalizeTemplateItemsForDraft(checklistItemsOf(checklist)),
+          metadata: {
+            ...(checklist.metadata ?? {}),
+            copied_from: {
+              type: 'checklist_template',
+              id: checklist.id,
+              code: checklist.code,
+              phase_template_id: template.id
+            }
+          }
+        });
+      }
+      await loadData();
+      return copiedPhaseTemplate;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '创建项目模板复制失败'));
+      throw err;
+    }
+  };
+
+  const handleCreateChecklistTemplateConfig = async (input: CreateChecklistTemplateInput) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const created = await createChecklistTemplate(input);
+      await loadData();
+      return created;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '清单模板新增失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateChecklistTemplateConfig = async (
+    template: ChecklistTemplate,
+    input: UpdateChecklistTemplateInput
+  ) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const updated = await updateChecklistTemplate(template.id, input);
+      await loadData();
+      return updated;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '清单模板保存失败'));
+      throw err;
+    }
+  };
+
+  const handleDeleteChecklistTemplateConfig = async (template: ChecklistTemplate) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      await deleteChecklistTemplate(template.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '清单模板删除失败'));
       throw err;
     }
   };
@@ -9152,6 +9936,12 @@ export default function App() {
         <ProjectTemplateView
           data={workspace}
           canWrite={canWrite}
+          onCreatePhaseTemplate={handleCreatePhaseTemplateConfig}
+          onUpdatePhaseTemplate={handleUpdatePhaseTemplateConfig}
+          onDeletePhaseTemplate={handleDeletePhaseTemplateConfig}
+          onCopyPhaseTemplate={handleCopyPhaseTemplateConfig}
+          onCreateChecklistTemplate={handleCreateChecklistTemplateConfig}
+          onDeleteChecklistTemplate={handleDeleteChecklistTemplateConfig}
           onUpdateChecklistTemplate={handleUpdateChecklistTemplateConfig}
         />
       );
@@ -9167,7 +9957,7 @@ export default function App() {
             setSelectedProjectId(projectId);
             void loadData(projectId);
           }}
-          onCreateProject={() => void handleCreateProject('baseConfig')}
+          onCreateProject={phaseTemplateId => void handleCreateProject('baseConfig', phaseTemplateId)}
           onUpdateProject={handleUpdateProject}
           onSeedTemplate={handleSeedTemplate}
           onUpdatePhase={handleUpdatePhase}

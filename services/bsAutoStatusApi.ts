@@ -9,6 +9,7 @@ import type {
   CheckItemOwner,
   CheckItemStatus,
   ChecklistTemplate,
+  ChecklistTemplateInput,
   ChecklistTemplateItem,
   CollisionReportBlock,
   CollisionReport,
@@ -22,6 +23,7 @@ import type {
   OwnerCandidate,
   PhaseDefinition,
   PhaseTemplate,
+  PhaseTemplateInput,
   ProductionLineOption,
   Project,
   ProjectPhaseProgress,
@@ -158,6 +160,20 @@ const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
       }
     }))
     .filter(owner => owner.idaas_id);
+
+const serializePhaseDefinitions = (definitions?: PhaseDefinition[]) =>
+  (definitions ?? [])
+    .map((definition, index) => ({
+      key: definition.key.trim(),
+      name: definition.name.trim(),
+      description: definition.description?.trim() || '',
+      sort_order: definition.sortOrder ?? (index + 1) * 10,
+      planned_start: optionalDate(definition.plannedStart),
+      planned_end: optionalDate(definition.plannedEnd),
+      duration_days: definition.durationDays ?? null,
+      metadata: definition.metadata ?? {}
+    }))
+    .filter(definition => definition.key && definition.name);
 
 const serializeChecklistTemplateItems = (items?: ChecklistTemplateItem[]) =>
   (items ?? [])
@@ -1106,12 +1122,15 @@ export type CreateCheckItemInput = UpdateCheckItemInput & {
   plannedEndDate?: string | null;
 };
 
-export type UpdateChecklistTemplateInput = {
-  name?: string;
-  isActive?: boolean;
-  itemTemplates?: ChecklistTemplateItem[];
-  metadata?: Record<string, unknown>;
-};
+export type CreatePhaseTemplateInput = Required<Pick<PhaseTemplateInput, 'code' | 'name' | 'version' | 'phaseDefinitions'>> &
+  Omit<PhaseTemplateInput, 'code' | 'name' | 'version' | 'phaseDefinitions'>;
+
+export type UpdatePhaseTemplateInput = PhaseTemplateInput;
+
+export type CreateChecklistTemplateInput = Required<Pick<ChecklistTemplateInput, 'code' | 'name' | 'moduleId'>> &
+  Omit<ChecklistTemplateInput, 'code' | 'name' | 'moduleId'>;
+
+export type UpdateChecklistTemplateInput = ChecklistTemplateInput;
 
 export type CreateExportInput = {
   reportName: string;
@@ -1845,6 +1864,68 @@ export async function testSharedStorageProfile(scope = 'li_bs_auto_status'): Pro
   return normalizeSharedStorageProfile(payload);
 }
 
+const serializePhaseTemplateInput = (input: PhaseTemplateInput) => ({
+  code: input.code,
+  name: input.name,
+  version: input.version,
+  description: input.description,
+  is_active: input.isActive,
+  phase_definitions: input.phaseDefinitions === undefined
+    ? undefined
+    : serializePhaseDefinitions(input.phaseDefinitions),
+  metadata: input.metadata
+});
+
+const serializeChecklistTemplateInput = (input: ChecklistTemplateInput) => ({
+  code: input.code,
+  name: input.name,
+  module: input.moduleId,
+  phase_template: input.phaseTemplateId,
+  phase_key: input.phaseKey,
+  version: input.version,
+  is_active: input.isActive,
+  item_templates: input.itemTemplates === undefined
+    ? undefined
+    : serializeChecklistTemplateItems(input.itemTemplates),
+  metadata: input.metadata
+});
+
+export async function createPhaseTemplate(input: CreatePhaseTemplateInput) {
+  return normalizePhaseTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>('/phase-templates/', {
+      method: 'POST',
+      body: JSON.stringify(serializePhaseTemplateInput(input))
+    })
+  ));
+}
+
+export async function updatePhaseTemplate(
+  templateId: string | number,
+  input: UpdatePhaseTemplateInput
+) {
+  return normalizePhaseTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/phase-templates/${templateId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(serializePhaseTemplateInput(input))
+    })
+  ));
+}
+
+export async function deletePhaseTemplate(templateId: string | number) {
+  await apiRequest(`/phase-templates/${templateId}/`, {
+    method: 'DELETE'
+  });
+}
+
+export async function createChecklistTemplate(input: CreateChecklistTemplateInput) {
+  return normalizeChecklistTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>('/checklist-templates/', {
+      method: 'POST',
+      body: JSON.stringify(serializeChecklistTemplateInput(input))
+    })
+  ));
+}
+
 export async function updateChecklistTemplate(
   templateId: string | number,
   input: UpdateChecklistTemplateInput
@@ -1852,16 +1933,15 @@ export async function updateChecklistTemplate(
   return normalizeChecklistTemplate(unwrap(
     await apiRequest<ApiEnvelope<unknown> | unknown>(`/checklist-templates/${templateId}/`, {
       method: 'PATCH',
-      body: JSON.stringify({
-        name: input.name,
-        is_active: input.isActive,
-        item_templates: input.itemTemplates === undefined
-          ? undefined
-          : serializeChecklistTemplateItems(input.itemTemplates),
-        metadata: input.metadata
-      })
+      body: JSON.stringify(serializeChecklistTemplateInput(input))
     })
   ));
+}
+
+export async function deleteChecklistTemplate(templateId: string | number) {
+  await apiRequest(`/checklist-templates/${templateId}/`, {
+    method: 'DELETE'
+  });
 }
 
 export async function updateInspectionModuleOwner(

@@ -25,6 +25,15 @@
 - 模板检查项支持新增、删除、修改排序、标题、描述/验收口径、优先级、计划开始、计划结束和启用状态；保存走 `PATCH /checklist-templates/{id}/`。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；`GET /phase-templates/`、`GET /checklist-templates/`、后端 `/api/auth/csrf/` 和 3005 SPA 均返回 HTTP 200。
 
+### 项目模板矩阵 CRUD 与复制
+
+- 项目模板页从普通清单表升级为“检查模块 × 项目阶段”矩阵，用户可按模块和阶段直接选择或新增对应清单模板。
+- `PhaseTemplate` 支持新增、编辑编码/名称/版本/说明/启用状态/阶段定义、复制草稿和删除；复制草稿默认停用，并写入 `metadata.copied_from`。
+- `ChecklistTemplate` 支持矩阵单元格新增、编辑编码/名称/模块/阶段/版本/启用状态、删除和维护模板检查项。
+- 删除阶段模板前会删除其关联清单模板，避免后端 FK 置空后留下孤儿模板配置。
+- 配置中心按范围创建项目新增项目模板下拉，且只列出启用模板；草稿模板需启用后才能用于创建项目。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check -- App.tsx services/bsAutoStatusApi.ts types/index.ts`；按 dev-environment-bootstrap 重启 3005 后，`GET /api/auth/csrf/`、`GET /phase-templates/`、`GET /checklist-templates/` 和 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标
