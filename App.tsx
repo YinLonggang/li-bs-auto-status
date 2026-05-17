@@ -204,7 +204,7 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'project.delete': '删除项目',
   'project.copy': '复制项目',
   'project.archive': '归档项目',
-  'project.seed_template': '补齐阶段模板',
+  'project.seed_template': '按默认模板补齐项目实例',
   'project.seed_check_items': '补齐检查项',
   'project_phase.create': '创建阶段',
   'project_phase.update': '更新阶段',
@@ -1386,10 +1386,89 @@ function HorizontalBarChart({
 
 function ScopeToolbar({
   hierarchy,
+  scope,
+  onChange
+}: {
+  hierarchy: WorkspaceData['hierarchy'];
+  scope: ScopeState;
+  onChange: (scope: ScopeState) => void;
+}) {
+  const workshops = hierarchy.workshops.filter(
+    workshop => !scope.factoryId || idOf(workshop.factoryId) === scope.factoryId
+  );
+  const productionLines = hierarchy.productionLines.filter(
+    line => !scope.workshopId || idOf(line.workshopId) === scope.workshopId
+  );
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="kicker">Project Instances</p>
+          <h2 className="text-xl font-semibold">项目实例筛选</h2>
+          <p className="text-sm text-ink-muted">筛选只作用于项目实例列表，不维护项目模板源数据。</p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <label>
+          <span className="field-label">工厂</span>
+          <select
+            className="select"
+            value={scope.factoryId}
+            onChange={event => onChange({ factoryId: event.target.value, workshopId: '', productionLineId: '' })}
+          >
+            <option value="">全部工厂</option>
+            {hierarchy.factories.map(factory => (
+              <option key={factory.id} value={idOf(factory.id)}>
+                {hierarchyLabel(factory)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="field-label">车间</span>
+          <select
+            className="select"
+            value={scope.workshopId}
+            onChange={event => onChange({ ...scope, workshopId: event.target.value, productionLineId: '' })}
+          >
+            <option value="">全部车间</option>
+            {workshops.map(workshop => (
+              <option key={workshop.id} value={idOf(workshop.id)}>
+                {hierarchyLabel(workshop)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="field-label">产线（可选）</span>
+          <select
+            className="select"
+            value={scope.productionLineId}
+            onChange={event => onChange({ ...scope, productionLineId: event.target.value })}
+            disabled={!scope.workshopId}
+          >
+            <option value="">车间级项目 / 全部产线</option>
+            {productionLines.map(line => (
+              <option key={line.id} value={idOf(line.id)}>
+                {hierarchyLabel(line)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function CreateProjectInstancePanel({
+  hierarchy,
   phaseTemplates,
   scope,
   selectedPhaseTemplateId,
   canWrite,
+  open,
+  onOpenChange,
   onChange,
   onTemplateChange,
   onCreateProject
@@ -1399,6 +1478,8 @@ function ScopeToolbar({
   scope: ScopeState;
   selectedPhaseTemplateId: string;
   canWrite: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onChange: (scope: ScopeState) => void;
   onTemplateChange: (templateId: string) => void;
   onCreateProject: (phaseTemplateId: string) => void;
@@ -1415,8 +1496,18 @@ function ScopeToolbar({
   );
 
   return (
-    <section className="panel">
-      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+    <details className="panel" open={open} onToggle={event => onOpenChange(event.currentTarget.open)}>
+      <summary className="cursor-pointer list-none">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Create Project Instance</p>
+            <h2 className="text-xl font-semibold">创建项目实例</h2>
+            <p className="text-sm text-ink-muted">初始化模板仅用于新项目初始化，不会修改已有项目。</p>
+          </div>
+          <span className="chip">{open ? '收起' : '展开'}</span>
+        </div>
+      </summary>
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_auto]">
         <label>
           <span className="field-label">工厂</span>
           <select
@@ -1464,14 +1555,14 @@ function ScopeToolbar({
           </select>
         </label>
         <label>
-          <span className="field-label">项目模板</span>
+          <span className="field-label">初始化模板</span>
           <select
             className="select"
             value={selectedPhaseTemplateId}
             onChange={event => onTemplateChange(event.target.value)}
             disabled={!sortedPhaseTemplates.length}
           >
-            <option value="">{sortedPhaseTemplates.length ? '选择项目模板' : '暂无启用项目模板'}</option>
+            <option value="">{sortedPhaseTemplates.length ? '选择初始化模板' : '暂无启用初始化模板'}</option>
             {sortedPhaseTemplates.map(template => (
               <option key={template.id} value={idOf(template.id)}>
                 {template.name} · v{template.version ?? 1}
@@ -1487,11 +1578,11 @@ function ScopeToolbar({
             onClick={() => onCreateProject(selectedPhaseTemplateId)}
           >
             <Plus className="h-4 w-4" />
-            按范围创建
+            创建项目实例
           </button>
         </div>
       </div>
-    </section>
+    </details>
   );
 }
 
@@ -4106,7 +4197,7 @@ function OverviewView({
 
 function PhasesView({ data }: { data: WorkspaceData }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+    <div className="grid gap-5">
       <section className="panel">
         <div className="panel-header">
           <h2 className="text-xl font-semibold">项目阶段实例</h2>
@@ -4127,22 +4218,6 @@ function PhasesView({ data }: { data: WorkspaceData }) {
                 <span>实际开始：{formatDate(phase.actualStartAt)}</span>
                 <span>进度：{percent(phase.progressPercent)}</span>
               </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="text-xl font-semibold">阶段模板</h2>
-        </div>
-        <div className="mt-4 space-y-3">
-          {bySequence(data.phaseTemplates).map(template => (
-            <div key={template.id} className="rounded-lg border border-outline bg-surface-soft p-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold text-ink">{template.name}</span>
-                <span className="chip">{template.code}</span>
-              </div>
-              <div className="mt-2 text-xs text-ink-muted">{template.defaultGoal}</div>
             </div>
           ))}
         </div>
@@ -7332,14 +7407,14 @@ function ProjectTemplateView({
         const created = await onCreatePhaseTemplate(phaseDraftInput(activePhaseDraft));
         setSelectedPhaseTemplateId(idOf(created.id));
         setPhaseEditorMode('edit');
-        setMessage('创建项目模板已新增。');
+        setMessage('项目模板源数据已新增。');
       } else if (selectedPhaseTemplate) {
         const updated = await onUpdatePhaseTemplate(selectedPhaseTemplate, phaseDraftInput(activePhaseDraft));
         setSelectedPhaseTemplateId(idOf(updated.id));
-        setMessage('创建项目模板已保存。');
+        setMessage('项目模板源数据已保存。');
       }
     } catch (err) {
-      setMessage(mutationErrorMessage(err, '创建项目模板保存失败。'));
+      setMessage(mutationErrorMessage(err, '项目模板源数据保存失败。'));
     } finally {
       setSavingKey('');
     }
@@ -7347,7 +7422,7 @@ function ProjectTemplateView({
 
   const deleteSelectedPhaseTemplate = async () => {
     if (!canWrite || !selectedPhaseTemplate) return;
-    const confirmed = window.confirm(`确认删除创建项目模板「${selectedPhaseTemplate.name}」？将同步删除该模板下的关联清单模板。`);
+    const confirmed = window.confirm(`确认删除项目模板源数据「${selectedPhaseTemplate.name}」？将同步删除该模板下的关联清单模板。`);
     if (!confirmed) return;
     setSavingKey(`phase-template-delete-${selectedPhaseTemplate.id}`);
     setMessage('');
@@ -7355,9 +7430,9 @@ function ProjectTemplateView({
       await onDeletePhaseTemplate(selectedPhaseTemplate);
       setSelectedPhaseTemplateId('');
       setSelectedChecklistTemplateId('');
-      setMessage('创建项目模板已删除。');
+      setMessage('项目模板源数据已删除。');
     } catch (err) {
-      setMessage(mutationErrorMessage(err, '创建项目模板删除失败。'));
+      setMessage(mutationErrorMessage(err, '项目模板源数据删除失败。'));
     } finally {
       setSavingKey('');
     }
@@ -7376,7 +7451,7 @@ function ProjectTemplateView({
       setNewChecklistDraft(null);
       setMessage('已复制为草稿模板，并复制关联清单模板与模板检查项。');
     } catch (err) {
-      setMessage(mutationErrorMessage(err, '创建项目模板复制失败。'));
+      setMessage(mutationErrorMessage(err, '项目模板源数据复制失败。'));
     } finally {
       setSavingKey('');
     }
@@ -7582,8 +7657,8 @@ function ProjectTemplateView({
         <div className="panel-header">
           <div>
             <p className="kicker">Project Templates</p>
-            <h2 className="text-xl font-semibold">创建项目模板</h2>
-            <p className="text-sm text-ink-muted">模板作为创建项目和补齐默认阶段/检查项的源数据，不和项目实例配置混在一起。</p>
+            <h2 className="text-xl font-semibold">项目模板源数据</h2>
+            <p className="text-sm text-ink-muted">项目模板源数据只用于新项目初始化和默认补齐，不和项目实例维护混在一起。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <ReadOnlyNotice canWrite={canWrite} />
@@ -7641,7 +7716,7 @@ function ProjectTemplateView({
               })}
               {!sortedPhaseTemplates.length ? (
                 <tr>
-                  <td colSpan={7} className="text-center text-ink-muted">暂无创建项目模板。</td>
+                  <td colSpan={7} className="text-center text-ink-muted">暂无项目模板源数据。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -7652,7 +7727,7 @@ function ProjectTemplateView({
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-ink">
-                  {phaseEditorMode === 'create' ? '新建创建项目模板' : '模板属性'}
+                  {phaseEditorMode === 'create' ? '新建项目模板源数据' : '模板属性'}
                 </h3>
                 <p className="text-xs text-ink-muted">
                   {phaseEditorMode === 'create' ? '保存后可在矩阵中维护模块阶段清单模板。' : `${selectedPhaseTemplate?.code ?? ''} · ${selectedTemplateDefinitions.length} 阶段`}
@@ -7941,7 +8016,7 @@ function ProjectTemplateView({
           <div>
             <p className="kicker">Module Phase Matrix</p>
             <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
-            <p className="text-sm text-ink-muted">{selectedPhaseTemplate && phaseEditorMode === 'edit' ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择已保存的创建项目模板'}</p>
+            <p className="text-sm text-ink-muted">{selectedPhaseTemplate && phaseEditorMode === 'edit' ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择已保存的项目模板源数据'}</p>
           </div>
           <span className="chip">{selectedTemplateChecklists.length} 组清单模板</span>
         </div>
@@ -8284,6 +8359,7 @@ function BaseConfigView({
   const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
   const [selectedModuleConfigId, setSelectedModuleConfigId] = useState('');
   const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
+  const [createProjectPanelOpen, setCreateProjectPanelOpen] = useState(false);
   const [transferTargetPhaseId, setTransferTargetPhaseId] = useState('');
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
@@ -8356,10 +8432,17 @@ function BaseConfigView({
     <>
       <ScopeToolbar
         hierarchy={data.hierarchy}
+        scope={scope}
+        onChange={onScopeChange}
+      />
+      <CreateProjectInstancePanel
+        hierarchy={data.hierarchy}
         phaseTemplates={data.phaseTemplates}
         scope={scope}
         selectedPhaseTemplateId={createPhaseTemplateId}
         canWrite={canWrite}
+        open={createProjectPanelOpen}
+        onOpenChange={setCreateProjectPanelOpen}
         onChange={onScopeChange}
         onTemplateChange={setCreatePhaseTemplateId}
         onCreateProject={onCreateProject}
@@ -8368,16 +8451,16 @@ function BaseConfigView({
         <div className="panel-header">
           <div>
             <p className="kicker">Configuration Center</p>
-            <h2 className="text-xl font-semibold">项目范围与项目列表</h2>
-            <p className="text-sm text-ink-muted">先按工厂、车间、产线缩小范围，再选择项目维护基础信息、阶段和检查项。</p>
+            <h2 className="text-xl font-semibold">项目实例列表</h2>
+            <p className="text-sm text-ink-muted">只展示项目实例；项目模板源数据请到侧边栏“项目模板”模块维护。</p>
           </div>
-          <span className="chip">{visibleProjects.length}/{data.projects.length} 个项目</span>
+          <span className="chip">{visibleProjects.length}/{data.projects.length} 个项目实例</span>
         </div>
         <div className="mt-4">
           <FilterShell>
             <label className="xl:col-span-2">
-              <span className="field-label">项目搜索</span>
-              <input className="input" value={projectFilters.keyword} onChange={event => setProjectFilters({ ...projectFilters, keyword: event.target.value })} placeholder="项目、编号、范围、负责人" aria-label="配置中心项目搜索" />
+              <span className="field-label">项目实例搜索</span>
+              <input className="input" value={projectFilters.keyword} onChange={event => setProjectFilters({ ...projectFilters, keyword: event.target.value })} placeholder="项目实例、编号、范围、负责人" aria-label="配置中心项目实例搜索" />
             </label>
             <label>
               <span className="field-label">状态</span>
@@ -8405,7 +8488,7 @@ function BaseConfigView({
             <thead>
               <tr>
                 <th>序号</th>
-                <th>项目</th>
+                <th>项目实例</th>
                 <th>范围</th>
                 <th>负责人</th>
                 <th>计划窗口</th>
@@ -8452,7 +8535,7 @@ function BaseConfigView({
                           event.stopPropagation();
                           onSelectProject(item.id);
                         }}
-                        aria-label={`配置项目 ${item.name}`}
+                        aria-label={`配置项目实例 ${item.name}`}
                       >
                         配置
                       </button>
@@ -8462,7 +8545,7 @@ function BaseConfigView({
               })}
               {!visibleProjects.length ? (
                 <tr>
-                  <td colSpan={8} className="text-center text-ink-muted">当前范围与筛选下暂无项目，可调整筛选或按范围创建。</td>
+                  <td colSpan={8} className="text-center text-ink-muted">当前范围与筛选下暂无项目实例，可调整筛选或展开“创建项目实例”。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -8803,7 +8886,7 @@ function BaseConfigView({
           <div>
             <p className="kicker">Project Phases</p>
             <h2 className="text-xl font-semibold">项目阶段配置</h2>
-            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留；项目展示按当前启用阶段数量渲染，也可在此补齐缺失阶段和检查项。</p>
+            <p className="text-sm text-ink-muted">阶段 code 作为稳定 key 保留；项目展示按当前启用阶段数量渲染，也可按默认模板补齐当前项目实例缺失阶段和检查项。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
@@ -8812,11 +8895,11 @@ function BaseConfigView({
               type="button"
               disabled={!canWrite || savingKey === 'seed-template'}
               onClick={() => void save('seed-template', onSeedTemplate)}
-              aria-label="补齐默认阶段和检查项"
-              title="按默认阶段模板补齐当前项目缺失的阶段和检查项"
+              aria-label="按默认模板补齐项目实例"
+              title="按默认模板补齐当前项目实例缺失的阶段和检查项，不会编辑项目模板源数据"
             >
               <RefreshCcw className="h-4 w-4" />
-              {savingKey === 'seed-template' ? '补齐中' : '补齐默认阶段'}
+              {savingKey === 'seed-template' ? '补齐中' : '按默认模板补齐项目实例'}
             </button>
           </div>
         </div>
@@ -9475,7 +9558,7 @@ function BaseConfigView({
           <div>
             <p className="kicker">Base Data</p>
             <h2 className="text-xl font-semibold">模块与负责人候选</h2>
-            <p className="text-sm text-ink-muted">检查项模块和 IDaaS 候选人留在项目配置中心；创建项目模板在侧边栏“项目模板”模块维护。</p>
+            <p className="text-sm text-ink-muted">检查项模块和 IDaaS 候选人留在项目配置中心；项目模板源数据在侧边栏“项目模板”模块维护。</p>
           </div>
           <span className="chip">{data.inspectionModules.length} 模块 · {data.ownerCandidates.length} 候选人</span>
         </div>
@@ -9564,20 +9647,10 @@ function BaseConfigView({
 
 function SettingsView({ data }: { data: WorkspaceData }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-3">
-      <section className="panel">
-        <h2 className="text-xl font-semibold">阶段模板</h2>
-        <div className="mt-4 space-y-2">
-          {bySequence(data.phaseTemplates).map(template => (
-            <div key={template.id} className="rounded-lg border border-outline bg-surface-soft p-3">
-              <div className="font-semibold text-ink">{template.name}</div>
-              <div className="text-xs text-ink-muted">{template.code} · {template.defaultDurationDays ?? '-'} 天</div>
-            </div>
-          ))}
-        </div>
-      </section>
+    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
       <section className="panel">
         <h2 className="text-xl font-semibold">检查模块</h2>
+        <p className="mt-2 text-sm text-ink-muted">设置 fallback 仅展示基础数据，不展示模板源数据。</p>
         <div className="mt-4 space-y-2">
           {bySequence(data.inspectionModules).map(module => (
             <div key={module.id} className="flex items-center justify-between rounded-lg border border-outline bg-surface-soft p-3">
@@ -9588,14 +9661,15 @@ function SettingsView({ data }: { data: WorkspaceData }) {
         </div>
       </section>
       <section className="panel">
-        <h2 className="text-xl font-semibold">检查项模板</h2>
+        <h2 className="text-xl font-semibold">负责人候选</h2>
         <div className="mt-4 space-y-2">
-          {data.checklistTemplates.map(template => (
-            <div key={template.id} className="rounded-lg border border-outline bg-surface-soft p-3">
-              <div className="font-semibold text-ink">{template.title}</div>
-              <div className="text-xs text-ink-muted">{template.code} · {template.defaultOwnerRole ?? '未设置'}</div>
+          {data.ownerCandidates.map(owner => (
+            <div key={owner.idaasId || owner.displayName} className="rounded-lg border border-outline bg-surface-soft p-3">
+              <div className="font-semibold text-ink">{owner.displayName || owner.idaasId}</div>
+              <div className="text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
             </div>
           ))}
+          {!data.ownerCandidates.length ? <EmptyState message="暂无 IDaaS 负责人候选。" /> : null}
         </div>
       </section>
     </div>
@@ -9795,7 +9869,7 @@ export default function App() {
       await loadData();
       return created;
     } catch (err) {
-      setError(mutationErrorMessage(err, '创建项目模板新增失败'));
+      setError(mutationErrorMessage(err, '项目模板源数据新增失败'));
       throw err;
     }
   };
@@ -9810,7 +9884,7 @@ export default function App() {
       await loadData();
       return updated;
     } catch (err) {
-      setError(mutationErrorMessage(err, '创建项目模板保存失败'));
+      setError(mutationErrorMessage(err, '项目模板源数据保存失败'));
       throw err;
     }
   };
@@ -9827,7 +9901,7 @@ export default function App() {
       await deletePhaseTemplate(template.id);
       await loadData();
     } catch (err) {
-      setError(mutationErrorMessage(err, '创建项目模板删除失败'));
+      setError(mutationErrorMessage(err, '项目模板源数据删除失败'));
       throw err;
     }
   };
@@ -9889,7 +9963,7 @@ export default function App() {
       await loadData();
       return copiedPhaseTemplate;
     } catch (err) {
-      setError(mutationErrorMessage(err, '创建项目模板复制失败'));
+      setError(mutationErrorMessage(err, '项目模板源数据复制失败'));
       throw err;
     }
   };
