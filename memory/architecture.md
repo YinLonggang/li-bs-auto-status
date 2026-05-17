@@ -216,3 +216,11 @@
 - 编辑画布新增客户端 PNG 预览下载能力：前端用 `html-to-image` 将当前 `.collision-sheet` 渲染成图片，先展示预览弹窗，再由用户下载 PNG。
 - 生成 PNG 时临时添加 `is-capturing-image` class，隐藏上传、下载、删除等操作控件，并把输入控件视觉降级成普通文本，避免图片中出现操作按钮。
 - PNG 捕获对附件缩略图的 Blob URL 使用 `cacheBust=false`，捕获前等待字体和图片解码完成；画布尺寸取 `scrollWidth/scrollHeight`，按尺寸动态限制 `pixelRatio`，失败时自动降级到 1x 重试，避免 dev-test 长报告、多图片附件场景预览失败。
+
+## 2026-05-17 重点问题附件去重与模块负责人
+
+- 重点问题维护页附件展示收敛到字段级槽位：描述、对策、进展、备注各自展示对应 `key_issue_slot` 附件，取消编辑表单底部的全量附件列表，避免图片/附件重复出现。
+- `InspectionModule` 前端模型补齐 `ownerName/ownerIdaasId/ownerEmail/owners/metadata`，API adapter 从后端模块负责人快照和 `metadata.owners` 归一化为 IDaaS 负责人数组。
+- 模块负责人保存调用 `PATCH /inspection-modules/{id}/`，把第一负责人同步到 `owner_*` 快照，并把完整负责人数组写入 `metadata.owners`；负责人候选仍通过 IDaaS 搜索组件选择。
+- 配置中心底部“检查模块”支持维护模块负责人，并提供“应用到检查项”批量动作；批量动作会先保存模块负责人，再更新当前项目下该模块的检查项 `owners`，并在检查项 metadata 中标记 `owner_source=module`。
+- 检查项新增入口在选择模块时默认带出模块负责人；检查项级负责人仍可单独覆盖，保持模块级默认和检查项级例外并存。

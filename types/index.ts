@@ -206,10 +206,16 @@ export type InspectionModule = {
   id: string | number;
   code: string;
   name: string;
+  description?: string;
   sequence: number;
   isActive: boolean;
+  ownerName?: string;
+  ownerIdaasId?: string;
+  ownerEmail?: string;
+  owners?: CheckItemOwner[];
   color?: string;
   milestones?: number[];
+  metadata?: Record<string, unknown>;
 };
 
 export type ChecklistTemplate = {

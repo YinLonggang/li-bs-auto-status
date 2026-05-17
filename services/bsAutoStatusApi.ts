@@ -581,14 +581,25 @@ const normalizeProjectPhase = (input: unknown): ProjectPhase => {
 const normalizeInspectionModule = (input: unknown): InspectionModule => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
+  const ownerIdaasId = firstString(raw, ['ownerIdaasId', 'owner_idaas_id']);
+  const ownerName =
+    firstString(raw, ['ownerName', 'owner_display_name', 'owner_name']) ||
+    firstString(metadata, ['ownerName', 'owner_name']);
+  const owners = normalizeCheckItemOwners(metadata.owners, ownerName, ownerIdaasId);
   return {
     id: firstId(raw, ['id']),
     code: firstString(raw, ['code']),
     name: firstString(raw, ['name']),
+    description: firstString(raw, ['description']),
     sequence: firstNumber(raw, ['sequence', 'sort_order']),
     isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
+    ownerName: ownerName || owners[0]?.displayName,
+    ownerIdaasId: ownerIdaasId || owners[0]?.idaasId,
+    ownerEmail: firstString(raw, ['ownerEmail', 'owner_email']) || owners[0]?.email,
+    owners,
     color: firstString(metadata, ['color']),
-    milestones: asArray(metadata.milestones).map(item => Number(item)).filter(item => Number.isFinite(item))
+    milestones: asArray(metadata.milestones).map(item => Number(item)).filter(item => Number.isFinite(item)),
+    metadata
   };
 };
 
@@ -1750,6 +1761,29 @@ export async function testSharedStorageProfile(scope = 'li_bs_auto_status'): Pro
     )
   );
   return normalizeSharedStorageProfile(payload);
+}
+
+export async function updateInspectionModuleOwner(
+  moduleId: string | number,
+  payload: { owners: CheckItemOwner[]; metadata?: Record<string, unknown> }
+) {
+  const owners = serializeCheckItemOwners(payload.owners);
+  const primaryOwner = owners[0];
+  return normalizeInspectionModule(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/inspection-modules/${moduleId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        owner_display_name: primaryOwner?.display_name ?? '',
+        owner_name: primaryOwner?.display_name ?? '',
+        owner_idaas_id: primaryOwner?.idaas_id ?? '',
+        owner_email: primaryOwner?.email ?? '',
+        metadata: {
+          ...(payload.metadata ?? {}),
+          owners
+        }
+      })
+    })
+  ));
 }
 
 export async function updateCheckItemOwner(

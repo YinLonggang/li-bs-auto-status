@@ -9,6 +9,14 @@
 - 重点问题附件列表继续复用受控图片缩略图、普通文件卡片、说明、下载和删除能力；列表列名从“照片”改为“附件”并显示附件数量。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 返回 HTTP 200，后端 `/api/auth/csrf/` 返回 HTTP 200。
 
+### 重点问题附件去重与模块负责人
+
+- 重点问题编辑区取消底部全量附件列表，只保留描述、对策、进展、备注字段下的槽位附件展示，避免同一附件重复显示。
+- 检查模块补齐负责人读取和保存能力：模块负责人来自 IDaaS 候选人，保存到模块 `owner_*` 快照和 `metadata.owners`。
+- 配置中心“检查模块”列表新增模块负责人编辑器，并提供“应用到检查项”批量动作，把当前项目中同模块检查项负责人统一更新为模块负责人。
+- 新增检查项时会按所选模块带出模块负责人；检查项级负责人仍允许单独覆盖。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 和后端 `/api/auth/csrf/` 均返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标

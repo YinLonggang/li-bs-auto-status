@@ -66,6 +66,7 @@ import {
   updateCheckItem,
   updateCheckItemOwner,
   updateCheckItemStatus,
+  updateInspectionModuleOwner,
   updateKeyIssue,
   updateProject,
   updateProjectPhase,
@@ -857,6 +858,15 @@ const ownersOfItem = (item: CheckItem) =>
       ? item.owners
       : item.ownerIdaasId && item.ownerName && item.ownerName !== '未设置'
         ? [{ displayName: item.ownerName, idaasId: item.ownerIdaasId }]
+        : []
+  );
+
+const ownersOfModule = (module: InspectionModule) =>
+  normalizeOwners(
+    module.owners?.length
+      ? module.owners
+      : module.ownerIdaasId && module.ownerName
+        ? [{ displayName: module.ownerName, idaasId: module.ownerIdaasId, email: module.ownerEmail }]
         : []
   );
 
@@ -4558,7 +4568,12 @@ function ChecksView({
   const statusOptions = statusOptionValues(checkItems.map(item => item.status));
   const selectedNewPhase = visiblePhases.find(phase => idOf(phase.id) === newDraft?.projectPhaseId) ?? defaultPhase;
   const selectedNewModule = orderedModules.find(module => idOf(module.id) === newDraft?.moduleId) ?? defaultModule;
-  const defaultOwners = defaultOwner?.idaasId ? [ownerCandidateToOwner(defaultOwner)] : [];
+  const selectedNewModuleOwners = selectedNewModule ? ownersOfModule(selectedNewModule) : [];
+  const defaultOwners = selectedNewModuleOwners.length
+    ? selectedNewModuleOwners
+    : defaultOwner?.idaasId
+      ? [ownerCandidateToOwner(defaultOwner)]
+      : [];
   const createDisabledReason = !canWrite
     ? '当前账号只读，写操作已禁用。'
     : !newDraft?.title.trim()
@@ -4675,7 +4690,20 @@ function ChecksView({
             </label>
             <label>
               <span className="field-label">模块</span>
-              <select className="select" value={newDraft.moduleId} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, moduleId: event.target.value })}>
+              <select
+                className="select"
+                value={newDraft.moduleId}
+                disabled={!canWrite}
+                onChange={event => {
+                  const nextModule = orderedModules.find(module => idOf(module.id) === event.target.value);
+                  const nextOwners = nextModule ? ownersOfModule(nextModule) : [];
+                  setNewDraft({
+                    ...newDraft,
+                    moduleId: event.target.value,
+                    owners: nextOwners
+                  });
+                }}
+              >
                 {orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
               </select>
             </label>
@@ -5754,23 +5782,6 @@ function IssuesCrudView({
           {renderIssueTextArea('currentProgress', '进展', draft.currentProgress, value => setDraft({ ...draft, currentProgress: value }))}
           {renderIssueTextArea('remark', '备注', draft.remark, value => setDraft({ ...draft, remark: value }))}
         </div>
-        {!selectedIsNew && selectedIssue ? (
-          <div className="mt-5 rounded-lg border border-outline bg-surface p-3">
-            <div className="text-xs font-semibold text-ink-muted">附件列表</div>
-            <div className="mt-2">
-              <AttachmentList
-                attachments={selectedIssue.attachments}
-                canDownload={canWrite}
-                canDelete={canWrite}
-                canEditCaption={canWrite}
-                onDownloadAttachment={onDownloadAttachment}
-                onDeleteAttachment={onDeleteAttachment}
-                onUpdateAttachmentCaption={onUpdateAttachmentCaption}
-                emptyMessage="当前重点问题暂无附件。"
-              />
-            </div>
-          </div>
-        ) : null}
       </div>
       <div className="mt-5">
         <AuditHistoryPanel
@@ -6840,7 +6851,9 @@ function BaseConfigView({
   onDeletePhase,
   onCreateCheckItem,
   onUpdateCheckItem,
-  onDeleteCheckItem
+  onDeleteCheckItem,
+  onUpdateModuleOwner,
+  onApplyModuleOwnerToCheckItems
 }: {
   data: WorkspaceData;
   scope: ScopeState;
@@ -6855,10 +6868,13 @@ function BaseConfigView({
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
   onUpdateCheckItem: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
   onDeleteCheckItem: (item: CheckItem) => Promise<void>;
+  onUpdateModuleOwner: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<void>;
+  onApplyModuleOwnerToCheckItems: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<void>;
 }) {
   const [projectDraft, setProjectDraft] = useState<ProjectConfigDraft | null>(null);
   const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseConfigDraft>>({});
   const [checkItemDrafts, setCheckItemDrafts] = useState<Record<string, CheckItemConfigDraft>>({});
+  const [moduleOwnerDrafts, setModuleOwnerDrafts] = useState<Record<string, CheckItemOwner[]>>({});
   const [projectFilters, setProjectFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -7037,6 +7053,7 @@ function BaseConfigView({
       setProjectDraft(null);
       setPhaseDrafts({});
       setCheckItemDrafts({});
+      setModuleOwnerDrafts({});
       setCheckFilters(EMPTY_FILTERS);
       setSelectedPhaseConfigId('');
       setTransferTargetPhaseId('');
@@ -7071,6 +7088,11 @@ function BaseConfigView({
         ])
       )
     );
+    setModuleOwnerDrafts(
+      Object.fromEntries(
+        data.inspectionModules.map(module => [idOf(module.id), ownersOfModule(module)])
+      )
+    );
     setCheckItemDrafts(
       Object.fromEntries(
         data.checkItems.map(item => [
@@ -7092,7 +7114,8 @@ function BaseConfigView({
       )
     );
     const firstPhaseId = idOf(sortedPhases[0]?.id);
-    const firstModuleId = idOf(bySequence(data.inspectionModules)[0]?.id);
+    const firstModule = bySequence(data.inspectionModules)[0];
+    const firstModuleId = idOf(firstModule?.id);
     setCheckFilters(current => ({ ...current, phaseId: '' }));
     setSelectedPhaseConfigId(current =>
       sortedPhases.some(phase => idOf(phase.id) === current) ? current : firstPhaseId
@@ -7107,11 +7130,11 @@ function BaseConfigView({
       plannedEndDate: dateInputValue(sortedPhases[0]?.plannedEndDate),
       ownerName: '',
       ownerIdaasId: undefined,
-      owners: [],
+      owners: firstModule ? ownersOfModule(firstModule) : [],
       status: 'pending',
       isActive: true
     });
-  }, [project?.id, data.phases, data.checkItems]);
+  }, [project?.id, data.phases, data.inspectionModules, data.checkItems]);
 
   useEffect(() => {
     if (!newCheckDraft || !selectedPhaseId || newCheckDraft.projectPhaseId === selectedPhaseId) return;
@@ -7680,7 +7703,20 @@ function BaseConfigView({
               </label>
               <label>
                 <span className="field-label">模块</span>
-                <select className="select" value={newCheckDraft.moduleId} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, moduleId: event.target.value })}>
+                <select
+                  className="select"
+                  value={newCheckDraft.moduleId}
+                  disabled={!canWrite}
+                  onChange={event => {
+                    const nextModule = data.inspectionModules.find(module => idOf(module.id) === event.target.value);
+                    const nextOwners = nextModule ? ownersOfModule(nextModule) : [];
+                    setNewCheckDraft({
+                      ...newCheckDraft,
+                      moduleId: event.target.value,
+                      owners: nextOwners
+                    });
+                  }}
+                >
                   {bySequence(data.inspectionModules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
                 </select>
               </label>
@@ -7873,18 +7909,63 @@ function BaseConfigView({
           <span className="chip">{data.inspectionModules.length} 模块 · {data.ownerCandidates.length} 候选人</span>
         </div>
         <div className="mt-4 grid gap-4 xl:grid-cols-3">
-          <div className="rounded-lg border border-outline bg-surface-soft p-4">
+          <div className="rounded-lg border border-outline bg-surface-soft p-4 xl:col-span-2">
             <div className="text-sm font-semibold text-ink">检查模块</div>
             <div className="mt-3 space-y-2">
-              {bySequence(data.inspectionModules).map(module => (
-                <div key={module.id} className="flex items-center justify-between gap-3 rounded-lg border border-outline bg-surface px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-ink">{module.name}</div>
-                    <div className="text-xs text-ink-muted">{module.code}</div>
+              {bySequence(data.inspectionModules).map(module => {
+                const moduleId = idOf(module.id);
+                const draftOwners = moduleOwnerDrafts[moduleId] ?? ownersOfModule(module);
+                const moduleCheckItems = data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
+                return (
+                  <div key={module.id} className="rounded-lg border border-outline bg-surface px-3 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-ink">{module.name}</div>
+                        <div className="text-xs text-ink-muted">{module.code} · {moduleCheckItems.length} 项检查项</div>
+                      </div>
+                      <StatusPill status={module.isActive ? 'active' : 'disabled'} />
+                    </div>
+                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                      <div>
+                        <span className="field-label">模块负责人</span>
+                        <OwnerListEditor
+                          owners={draftOwners}
+                          ownerCandidates={data.ownerCandidates}
+                          canWrite={canWrite}
+                          candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
+                          onChange={next =>
+                            setModuleOwnerDrafts(current => ({
+                              ...current,
+                              [moduleId]: next.owners
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="btn btn-primary btn--sm"
+                          type="button"
+                          disabled={!canWrite || savingKey === `module-owner-${module.id}`}
+                          onClick={() => void save(`module-owner-${module.id}`, () => onUpdateModuleOwner(module, draftOwners))}
+                        >
+                          <Save className="h-4 w-4" />
+                          保存负责人
+                        </button>
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={!canWrite || !moduleCheckItems.length || !draftOwners.length || savingKey === `module-owner-apply-${module.id}`}
+                          onClick={() => void save(`module-owner-apply-${module.id}`, () => onApplyModuleOwnerToCheckItems(module, draftOwners))}
+                          title={moduleCheckItems.length ? `应用到 ${moduleCheckItems.length} 个检查项` : '该模块暂无检查项'}
+                        >
+                          <Workflow className="h-4 w-4" />
+                          应用到检查项
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <StatusPill status={module.isActive ? 'active' : 'disabled'} />
-                </div>
-              ))}
+                );
+              })}
               {!data.inspectionModules.length ? <EmptyState message="暂无检查模块。" /> : null}
             </div>
           </div>
@@ -8098,6 +8179,48 @@ export default function App() {
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '负责人更新失败'));
+      throw err;
+    }
+  };
+
+  const handleUpdateModuleOwner = async (module: InspectionModule, owners: CheckItemOwner[]) => {
+    if (!canWrite) return;
+    try {
+      await updateInspectionModuleOwner(module.id, {
+        owners: normalizeOwners(owners),
+        metadata: module.metadata
+      });
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '模块负责人更新失败'));
+      throw err;
+    }
+  };
+
+  const handleApplyModuleOwnerToCheckItems = async (module: InspectionModule, owners: CheckItemOwner[]) => {
+    if (!canWrite) return;
+    const nextOwners = normalizeOwners(owners);
+    if (!nextOwners.length) return;
+    const moduleCheckItems = workspace.checkItems.filter(item => idOf(item.moduleId) === idOf(module.id));
+    try {
+      await updateInspectionModuleOwner(module.id, {
+        owners: nextOwners,
+        metadata: module.metadata
+      });
+      for (const item of moduleCheckItems) {
+        await updateCheckItemOwner(item.id, {
+          owners: nextOwners,
+          metadata: {
+            ...(item.metadata ?? {}),
+            owner_source: 'module',
+            owner_module_id: module.id,
+            owner_module_code: module.code
+          }
+        });
+      }
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '模块负责人应用失败'));
       throw err;
     }
   };
@@ -8594,6 +8717,8 @@ export default function App() {
           onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateCheckItem={handleUpdateCheckItemConfig}
           onDeleteCheckItem={handleDeleteCheckItem}
+          onUpdateModuleOwner={handleUpdateModuleOwner}
+          onApplyModuleOwnerToCheckItems={handleApplyModuleOwnerToCheckItems}
         />
       );
     }
