@@ -8282,6 +8282,7 @@ function BaseConfigView({
   const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
   const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
+  const [selectedModuleConfigId, setSelectedModuleConfigId] = useState('');
   const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
   const [transferTargetPhaseId, setTransferTargetPhaseId] = useState('');
   const [savingKey, setSavingKey] = useState('');
@@ -8311,8 +8312,18 @@ function BaseConfigView({
     : '';
   const selectedConfigPhase = sortedPhases.find(phase => idOf(phase.id) === selectedPhaseId);
   const selectedPhaseDraft = selectedConfigPhase ? phaseDrafts[idOf(selectedConfigPhase.id)] : undefined;
+  const sortedInspectionModules = bySequence(data.inspectionModules);
+  const selectedModuleId = sortedInspectionModules.length
+    ? sortedInspectionModules.some(module => idOf(module.id) === selectedModuleConfigId)
+      ? selectedModuleConfigId
+      : idOf(sortedInspectionModules[0]?.id)
+    : '';
+  const selectedConfigModule = sortedInspectionModules.find(module => idOf(module.id) === selectedModuleId);
   const selectedPhaseAllCheckItems = selectedPhaseId
     ? data.checkItems.filter(item => idOf(item.projectPhaseId) === selectedPhaseId)
+    : [];
+  const selectedCellAllCheckItems = selectedPhaseId && selectedModuleId
+    ? selectedPhaseAllCheckItems.filter(item => idOf(item.moduleId) === selectedModuleId)
     : [];
   const transferTargetPhase = sortedPhases.find(phase => idOf(phase.id) === transferTargetPhaseId);
   const visibleCheckItems = data.checkItems.filter(item => {
@@ -8320,7 +8331,7 @@ function BaseConfigView({
     const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
     const itemOwners = ownersOfItem(item);
     if (!selectedPhaseId || idOf(item.projectPhaseId) !== selectedPhaseId) return false;
-    if (checkFilters.moduleId && idOf(item.moduleId) !== checkFilters.moduleId) return false;
+    if (!selectedModuleId || idOf(item.moduleId) !== selectedModuleId) return false;
     if (checkFilters.status && item.status !== checkFilters.status) return false;
     if (checkFilters.owner && !textMatches(checkFilters.owner, ownersForSearch(itemOwners))) return false;
     if (checkFilters.activeState === 'enabled' && item.isActive === false) return false;
@@ -8340,7 +8351,7 @@ function BaseConfigView({
   const sortedCreatePhaseTemplates = bySequence(data.phaseTemplates).filter(template => template.isActive !== false);
   const createPhaseTemplateKey = sortedCreatePhaseTemplates.map(template => `${idOf(template.id)}:${template.isActive}`).join('|');
   const selectedNewCheckPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
-  const selectedModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
+  const selectedNewCheckModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
   const projectWorkbench = (
     <>
       <ScopeToolbar
@@ -8470,6 +8481,7 @@ function BaseConfigView({
       setModuleOwnerDrafts({});
       setCheckFilters(EMPTY_FILTERS);
       setSelectedPhaseConfigId('');
+      setSelectedModuleConfigId('');
       setTransferTargetPhaseId('');
       setNewCheckDraft(null);
       return;
@@ -8528,11 +8540,14 @@ function BaseConfigView({
       )
     );
     const firstPhaseId = idOf(sortedPhases[0]?.id);
-    const firstModule = bySequence(data.inspectionModules)[0];
+    const firstModule = sortedInspectionModules[0];
     const firstModuleId = idOf(firstModule?.id);
-    setCheckFilters(current => ({ ...current, phaseId: '' }));
+    setCheckFilters(current => ({ ...current, phaseId: '', moduleId: '' }));
     setSelectedPhaseConfigId(current =>
       sortedPhases.some(phase => idOf(phase.id) === current) ? current : firstPhaseId
+    );
+    setSelectedModuleConfigId(current =>
+      sortedInspectionModules.some(module => idOf(module.id) === current) ? current : firstModuleId
     );
     setTransferTargetPhaseId('');
     setNewCheckDraft({
@@ -8559,15 +8574,31 @@ function BaseConfigView({
   }, [createPhaseTemplateKey]);
 
   useEffect(() => {
-    if (!newCheckDraft || !selectedPhaseId || newCheckDraft.projectPhaseId === selectedPhaseId) return;
+    if (!selectedPhaseId) return;
     const phase = sortedPhases.find(item => idOf(item.id) === selectedPhaseId);
-    setNewCheckDraft({
-      ...newCheckDraft,
-      projectPhaseId: selectedPhaseId,
-      plannedStartDate: dateInputValue(phase?.plannedStartDate),
-      plannedEndDate: dateInputValue(phase?.plannedEndDate)
+    setNewCheckDraft(current => {
+      if (!current || current.projectPhaseId === selectedPhaseId) return current;
+      return {
+        ...current,
+        projectPhaseId: selectedPhaseId,
+        plannedStartDate: dateInputValue(phase?.plannedStartDate),
+        plannedEndDate: dateInputValue(phase?.plannedEndDate)
+      };
     });
   }, [selectedPhaseId]);
+
+  useEffect(() => {
+    if (!selectedModuleId) return;
+    const module = sortedInspectionModules.find(item => idOf(item.id) === selectedModuleId);
+    setNewCheckDraft(current => {
+      if (!current || current.moduleId === selectedModuleId) return current;
+      return {
+        ...current,
+        moduleId: selectedModuleId,
+        owners: module ? ownersOfModule(module) : []
+      };
+    });
+  }, [selectedModuleId]);
 
   const save = async (key: string, action: () => Promise<void>) => {
     if (!canWrite) {
@@ -8597,6 +8628,27 @@ function BaseConfigView({
             projectPhaseId: phaseId,
             plannedStartDate: dateInputValue(phase.plannedStartDate),
             plannedEndDate: dateInputValue(phase.plannedEndDate)
+          }
+        : current
+    );
+  };
+
+  const selectMatrixCellForConfig = (module: InspectionModule, phase: ProjectPhase) => {
+    const phaseId = idOf(phase.id);
+    const moduleId = idOf(module.id);
+    const moduleOwners = ownersOfModule(module);
+    setSelectedPhaseConfigId(phaseId);
+    setSelectedModuleConfigId(moduleId);
+    setTransferTargetPhaseId('');
+    setNewCheckDraft(current =>
+      current
+        ? {
+            ...current,
+            moduleId,
+            projectPhaseId: phaseId,
+            plannedStartDate: dateInputValue(phase.plannedStartDate),
+            plannedEndDate: dateInputValue(phase.plannedEndDate),
+            owners: current.moduleId === moduleId ? current.owners : moduleOwners
           }
         : current
     );
@@ -9042,10 +9094,96 @@ function BaseConfigView({
         <div className="panel-header">
           <div>
             <p className="kicker">Checklist</p>
-            <h2 className="text-xl font-semibold">所选阶段检查项配置</h2>
-            <p className="text-sm text-ink-muted">{selectedConfigPhase ? `${selectedConfigPhase.name} · ${selectedConfigPhase.code}` : '先在上方阶段表选择阶段'}</p>
+            <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
+            <p className="text-sm text-ink-muted">点击单元格后，下方只维护该模块在该阶段的检查项。</p>
           </div>
-          <span className="chip">{visibleCheckItems.length}/{selectedPhaseAllCheckItems.length} 项</span>
+          <span className="chip">{sortedInspectionModules.length} 模块 · {visiblePhases.length} 阶段</span>
+        </div>
+        {visiblePhases.length && sortedInspectionModules.length ? (
+          <div className="table-shell mt-4">
+            <table className="data-table" style={{ minWidth: `${Math.max(960, 220 + visiblePhases.length * 220)}px` }}>
+              <thead>
+                <tr>
+                  <th className="sticky left-0 z-10 bg-surface">检查模块</th>
+                  {visiblePhases.map(phase => (
+                    <th key={phase.id}>
+                      <div className="font-semibold">{phase.name}</div>
+                      <div className="mt-1 text-xs font-normal text-ink-muted">{phase.code}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedInspectionModules.map(module => (
+                  <tr key={module.id}>
+                    <td className="sticky left-0 z-10 min-w-[220px] bg-surface">
+                      <div className="font-semibold text-ink">{module.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{module.code}</div>
+                      <div className="mt-2"><StatusPill status={module.isActive ? 'active' : 'disabled'} /></div>
+                    </td>
+                    {visiblePhases.map(phase => {
+                      const cellItems = data.checkItems.filter(
+                        item => idOf(item.moduleId) === idOf(module.id) && idOf(item.projectPhaseId) === idOf(phase.id)
+                      );
+                      const completedCount = cellItems.filter(item => isComplete(item.status)).length;
+                      const enabledCount = cellItems.filter(item => item.isActive !== false).length;
+                      const active = selectedPhaseId === idOf(phase.id) && selectedModuleId === idOf(module.id);
+                      return (
+                        <td key={`${module.id}-${phase.id}`} className="min-w-[220px] align-top">
+                          <button
+                            className={`w-full rounded-lg border p-3 text-left transition ${
+                              active ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft hover:border-primary/50'
+                            }`}
+                            type="button"
+                            onClick={() => selectMatrixCellForConfig(module, phase)}
+                            aria-label={`配置 ${module.name} ${phase.name} 检查项`}
+                          >
+                            {cellItems.length ? (
+                              <>
+                                <div className="font-semibold text-ink">{cellItems.length} 项检查项</div>
+                                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-ink-muted">
+                                  <span className="chip">{completedCount}/{cellItems.length} 完成</span>
+                                  <span className="chip">{enabledCount} 启用</span>
+                                </div>
+                                <div className="mt-2 text-xs text-ink-muted">
+                                  {cellItems.slice(0, 2).map(item => item.title).join('、')}
+                                  {cellItems.length > 2 ? ` 等 ${cellItems.length} 项` : ''}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-semibold text-ink-muted">未配置</div>
+                                <div className="mt-2 text-xs text-ink-muted">{canWrite ? '点击后在下方新增检查项' : '只读查看'}</div>
+                              </>
+                            )}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <EmptyState message="当前阶段筛选下暂无可维护的矩阵列，或暂无检查模块。" />
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Checklist</p>
+            <h2 className="text-xl font-semibold">所选单元检查项配置</h2>
+            <p className="text-sm text-ink-muted">
+              {selectedConfigPhase && selectedConfigModule
+                ? `${selectedConfigModule.name} / ${selectedConfigPhase.name} · ${selectedConfigPhase.code}`
+                : '先在上方矩阵选择模块和阶段'}
+            </p>
+          </div>
+          <span className="chip">{visibleCheckItems.length}/{selectedCellAllCheckItems.length} 项</span>
         </div>
         <div className="mt-4">
           <FilterShell>
@@ -9054,10 +9192,20 @@ function BaseConfigView({
               <input className="input" value={checkFilters.keyword} onChange={event => setCheckFilters({ ...checkFilters, keyword: event.target.value })} placeholder="标题、标签、负责人" aria-label="配置中心检查项搜索" />
             </label>
             <label>
-              <span className="field-label">模块</span>
-              <select className="select" value={checkFilters.moduleId} onChange={event => setCheckFilters({ ...checkFilters, moduleId: event.target.value })}>
-                <option value="">全部模块</option>
-                {bySequence(data.inspectionModules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
+              <span className="field-label">矩阵模块</span>
+              <select
+                className="select"
+                value={selectedModuleId}
+                onChange={event => {
+                  const module = sortedInspectionModules.find(item => idOf(item.id) === event.target.value);
+                  if (module && selectedConfigPhase) {
+                    selectMatrixCellForConfig(module, selectedConfigPhase);
+                  } else {
+                    setSelectedModuleConfigId(event.target.value);
+                  }
+                }}
+              >
+                {sortedInspectionModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
               </select>
             </label>
             <label>
@@ -9094,7 +9242,7 @@ function BaseConfigView({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-ink">新增检查项</div>
-                <div className="text-xs text-ink-muted">默认归属 {selectedNewCheckPhase?.name ?? '当前阶段'} / {selectedModule?.name ?? '当前模块'}。</div>
+                <div className="text-xs text-ink-muted">默认归属 {selectedNewCheckPhase?.name ?? '当前阶段'} / {selectedNewCheckModule?.name ?? '当前模块'}。</div>
               </div>
               <ReadOnlyNotice canWrite={canWrite} />
             </div>
@@ -9132,6 +9280,7 @@ function BaseConfigView({
                   onChange={event => {
                     const nextModule = data.inspectionModules.find(module => idOf(module.id) === event.target.value);
                     const nextOwners = nextModule ? ownersOfModule(nextModule) : [];
+                    setSelectedModuleConfigId(event.target.value);
                     setNewCheckDraft({
                       ...newCheckDraft,
                       moduleId: event.target.value,
@@ -9314,7 +9463,7 @@ function BaseConfigView({
               })}
               {!visibleCheckItems.length ? (
                 <tr>
-                  <td colSpan={10} className="text-center text-ink-muted">该阶段暂无检查项。</td>
+                  <td colSpan={10} className="text-center text-ink-muted">该模块阶段单元暂无检查项，可在上方新增。</td>
                 </tr>
               ) : null}
             </tbody>

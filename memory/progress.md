@@ -42,6 +42,15 @@
 - 模板矩阵和清单模板模块下拉使用最新模块列表；保存模块后刷新 workspace 数据。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check -- App.tsx services/bsAutoStatusApi.ts types/index.ts`；按 dev-environment-bootstrap 重启 3005 后，`GET /api/auth/csrf/`、`GET /inspection-modules/` 和 `GET http://127.0.0.1:3005/` 均返回 HTTP 200。
 
+### 配置中心项目检查矩阵
+
+- 配置中心新增项目实例“模块 × 阶段矩阵”，矩阵行读取检查模块，列读取当前项目阶段。
+- 矩阵单元汇总检查项总数、完成数和启用数；点击后下方仅显示该模块 + 阶段的检查项。
+- 新增检查项表单跟随所选矩阵单元，默认填入阶段、模块、阶段计划日期和模块负责人。
+- 保留阶段表、阶段编辑、阶段级检查项迁移、项目基础信息和模块负责人维护。
+- 验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check -- App.tsx`。
+- 按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/`、后端 `/api/auth/csrf/` 和 `/api/li-bs-auto-status/v1/inspection-modules/` 均返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标
