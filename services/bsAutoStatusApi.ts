@@ -9,6 +9,7 @@ import type {
   CheckItemOwner,
   CheckItemStatus,
   ChecklistTemplate,
+  ChecklistTemplateItem,
   CollisionReportBlock,
   CollisionReport,
   DashboardProgressRow,
@@ -19,6 +20,7 @@ import type {
   InspectionModule,
   KeyIssue,
   OwnerCandidate,
+  PhaseDefinition,
   PhaseTemplate,
   ProductionLineOption,
   Project,
@@ -156,6 +158,21 @@ const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
       }
     }))
     .filter(owner => owner.idaas_id);
+
+const serializeChecklistTemplateItems = (items?: ChecklistTemplateItem[]) =>
+  (items ?? [])
+    .map((item, index) => ({
+      title: item.title.trim(),
+      description: item.description?.trim() || '',
+      sort_order: item.sortOrder ?? index * 10,
+      planned_start: optionalDate(item.plannedStart),
+      planned_end: optionalDate(item.plannedEnd),
+      due_date: optionalDate(item.dueDate),
+      priority: item.priority?.trim() || '',
+      is_enabled: item.isActive ?? true,
+      metadata: item.metadata ?? {}
+    }))
+    .filter(item => item.title);
 
 const firstString = (record: RawRecord, keys: string[], fallback = '') => {
   for (const key of keys) {
@@ -541,15 +558,34 @@ const normalizeProject = (input: unknown): Project => {
 const normalizePhaseTemplate = (input: unknown): PhaseTemplate => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
-  const definitions = asArray(raw.phase_definitions);
+  const definitions = asArray(raw.phase_definitions).map(normalizePhaseDefinition);
   return {
     id: firstId(raw, ['id']),
     code: firstString(raw, ['code']),
     name: firstString(raw, ['name']),
+    version: firstNumber(raw, ['version'], 1),
+    description: firstString(raw, ['description']),
     sequence: firstNumber(raw, ['sequence', 'sort_order', 'version']),
     defaultGoal: firstString(raw, ['defaultGoal', 'description']) || `${definitions.length || 0} 个阶段`,
     defaultDurationDays: firstNumber(metadata, ['defaultDurationDays', 'default_duration_days']),
-    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true))
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
+    phaseDefinitions: definitions,
+    metadata
+  };
+};
+
+const normalizePhaseDefinition = (input: unknown): PhaseDefinition => {
+  const raw = asRecord(input);
+  const durationDays = firstNumber(raw, ['durationDays', 'duration_days'], Number.NaN);
+  return {
+    key: firstString(raw, ['key', 'phase_key']),
+    name: firstString(raw, ['name']),
+    description: firstString(raw, ['description']),
+    sortOrder: firstNumber(raw, ['sortOrder', 'sort_order'], 0),
+    plannedStart: firstString(raw, ['plannedStart', 'planned_start']) || null,
+    plannedEnd: firstString(raw, ['plannedEnd', 'planned_end']) || null,
+    durationDays: Number.isFinite(durationDays) ? durationDays : null,
+    metadata: asRecord(raw.metadata)
   };
 };
 
@@ -606,17 +642,41 @@ const normalizeInspectionModule = (input: unknown): InspectionModule => {
 const normalizeChecklistTemplate = (input: unknown): ChecklistTemplate => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
-  const itemTemplates = asArray(raw.item_templates);
+  const itemTemplates = asArray(raw.item_templates).map(normalizeChecklistTemplateItem);
   return {
     id: firstId(raw, ['id']),
     moduleId: firstId(raw, ['moduleId', 'module']),
-    phaseTemplateId: firstId(raw, ['phaseTemplateId', 'phase_template']),
+    moduleCode: firstString(raw, ['moduleCode', 'module_code']),
+    moduleName: firstString(raw, ['moduleName', 'module_name']),
+    phaseTemplateId: firstOptionalId(raw, ['phaseTemplateId', 'phase_template']),
+    phaseTemplateCode: firstString(raw, ['phaseTemplateCode', 'phase_template_code']),
+    phaseKey: firstString(raw, ['phaseKey', 'phase_key']),
     code: firstString(raw, ['code']),
+    name: firstString(raw, ['name']),
     title: firstString(raw, ['title', 'name']),
+    version: firstNumber(raw, ['version'], 1),
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
     defaultOwnerRole: firstString(metadata, ['defaultOwnerRole', 'default_owner_role']) || `${itemTemplates.length || 0} 个模板项`,
     defaultDurationDays: firstNumber(metadata, ['defaultDurationDays', 'default_duration_days']),
     requiredAttachment: asBoolean(metadata.requiredAttachment, asBoolean(metadata.required_attachment)),
-    severity: firstString(metadata, ['severity'], 'medium')
+    severity: firstString(metadata, ['severity'], 'medium'),
+    itemTemplates,
+    metadata
+  };
+};
+
+const normalizeChecklistTemplateItem = (input: unknown): ChecklistTemplateItem => {
+  const raw = asRecord(input);
+  return {
+    title: firstString(raw, ['title']),
+    description: firstString(raw, ['description']),
+    sortOrder: firstNumber(raw, ['sortOrder', 'sort_order'], 0),
+    plannedStart: firstString(raw, ['plannedStart', 'planned_start']) || null,
+    plannedEnd: firstString(raw, ['plannedEnd', 'planned_end']) || null,
+    dueDate: firstString(raw, ['dueDate', 'due_date']) || null,
+    priority: firstString(raw, ['priority']),
+    isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
+    metadata: asRecord(raw.metadata)
   };
 };
 
@@ -1001,6 +1061,7 @@ export type CreateProjectInput = {
   ownerName: string;
   plannedStartDate: string;
   plannedEndDate: string;
+  phaseTemplateId?: string | number | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -1043,6 +1104,13 @@ export type CreateCheckItemInput = UpdateCheckItemInput & {
   projectPhaseId: string | number;
   plannedStartDate?: string | null;
   plannedEndDate?: string | null;
+};
+
+export type UpdateChecklistTemplateInput = {
+  name?: string;
+  isActive?: boolean;
+  itemTemplates?: ChecklistTemplateItem[];
+  metadata?: Record<string, unknown>;
 };
 
 export type CreateExportInput = {
@@ -1544,6 +1612,7 @@ export async function createProject(input: CreateProjectInput) {
         factory: input.factoryId,
         workshop: input.workshopId,
         production_line: input.productionLineId,
+        phase_template: input.phaseTemplateId,
         factory_name_snapshot: input.plant,
         workshop_name_snapshot: input.workshopName,
         line_name_snapshot: input.lineName,
@@ -1663,7 +1732,16 @@ export async function fetchProjectBundle(
 
 export async function fetchWorkspaceData(projectId?: string | number, filters?: ProjectScopeFilters): Promise<WorkspaceData> {
   const effectiveFilters = projectId ? { ...filters, projectId } : filters;
-  const [projects, hierarchyPayload, dashboardSummary, dashboardProjectStats] = await Promise.all([
+  const [
+    projects,
+    hierarchyPayload,
+    dashboardSummary,
+    dashboardProjectStats,
+    globalPhaseTemplates,
+    globalInspectionModules,
+    globalChecklistTemplates,
+    globalOwnerCandidates
+  ] = await Promise.all([
     listProjects(filters),
     fetchHierarchyOptions()
       .catch(error => {
@@ -1671,7 +1749,11 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
         throw error;
       }),
     fetchDashboardSummary(effectiveFilters),
-    fetchDashboardProjectStatistics(filters)
+    fetchDashboardProjectStatistics(filters),
+    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/phase-templates/'),
+    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/inspection-modules/'),
+    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/checklist-templates/'),
+    fetchOwnerCandidates()
   ]);
   const hierarchy = mergeHierarchyFallback(hierarchyPayload, projects);
   const selectedProject = projects.find(project => `${project.id}` === `${projectId}`) ?? projects[0] ?? null;
@@ -1690,15 +1772,15 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
       selectedProjectStats: null,
       timeline: null,
       phases: [],
-      phaseTemplates: [],
-      inspectionModules: [],
-      checklistTemplates: [],
+      phaseTemplates: unwrap(globalPhaseTemplates).map(normalizePhaseTemplate),
+      inspectionModules: unwrap(globalInspectionModules).map(normalizeInspectionModule),
+      checklistTemplates: unwrap(globalChecklistTemplates).map(normalizeChecklistTemplate),
       checkItems: [],
       keyIssues: [],
       collisionReports: [],
       reports: [],
       exportTasks: [],
-      ownerCandidates: []
+      ownerCandidates: globalOwnerCandidates
     };
   }
 
@@ -1761,6 +1843,25 @@ export async function testSharedStorageProfile(scope = 'li_bs_auto_status'): Pro
     )
   );
   return normalizeSharedStorageProfile(payload);
+}
+
+export async function updateChecklistTemplate(
+  templateId: string | number,
+  input: UpdateChecklistTemplateInput
+) {
+  return normalizeChecklistTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/checklist-templates/${templateId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        name: input.name,
+        is_active: input.isActive,
+        item_templates: input.itemTemplates === undefined
+          ? undefined
+          : serializeChecklistTemplateItems(input.itemTemplates),
+        metadata: input.metadata
+      })
+    })
+  ));
 }
 
 export async function updateInspectionModuleOwner(

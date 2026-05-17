@@ -175,10 +175,25 @@ export type PhaseTemplate = {
   id: string | number;
   code: string;
   name: string;
+  version?: number;
+  description?: string;
   sequence: number;
   defaultGoal?: string;
   defaultDurationDays?: number;
   isActive: boolean;
+  phaseDefinitions?: PhaseDefinition[];
+  metadata?: Record<string, unknown>;
+};
+
+export type PhaseDefinition = {
+  key: string;
+  name: string;
+  description?: string;
+  sortOrder?: number;
+  plannedStart?: string | null;
+  plannedEnd?: string | null;
+  durationDays?: number | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type ProjectPhase = {
@@ -221,13 +236,34 @@ export type InspectionModule = {
 export type ChecklistTemplate = {
   id: string | number;
   moduleId: string | number;
-  phaseTemplateId: string | number;
+  moduleCode?: string;
+  moduleName?: string;
+  phaseTemplateId: string | number | null;
+  phaseTemplateCode?: string;
+  phaseKey?: string;
   code: string;
+  name?: string;
   title: string;
+  version?: number;
+  isActive?: boolean;
   defaultOwnerRole?: string;
   defaultDurationDays?: number;
   requiredAttachment?: boolean;
   severity: Severity;
+  itemTemplates?: ChecklistTemplateItem[];
+  metadata?: Record<string, unknown>;
+};
+
+export type ChecklistTemplateItem = {
+  title: string;
+  description?: string;
+  sortOrder?: number;
+  plannedStart?: string | null;
+  plannedEnd?: string | null;
+  dueDate?: string | null;
+  priority?: string;
+  isActive?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type CheckItemOwner = {

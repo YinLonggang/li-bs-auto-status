@@ -17,6 +17,14 @@
 - 新增检查项时会按所选模块带出模块负责人；检查项级负责人仍允许单独覆盖。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 和后端 `/api/auth/csrf/` 均返回 HTTP 200。
 
+### 项目模板独立模块
+
+- 侧边栏新增“项目模板”模块，创建项目模板和模板检查项维护从配置中心剥离，配置中心只保留项目实例、检查模块和负责人候选。
+- 项目模板页独立列出后端 `PhaseTemplate`，展示模板版本、阶段数、清单模板数、模板检查项数和启用状态。
+- 用户点击项目模板后，下方横向表格展示该模板下的 `ChecklistTemplate`；再点击清单模板后，可以维护 `item_templates`。
+- 模板检查项支持新增、删除、修改排序、标题、描述/验收口径、优先级、计划开始、计划结束和启用状态；保存走 `PATCH /checklist-templates/{id}/`。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`；`GET /phase-templates/`、`GET /checklist-templates/`、后端 `/api/auth/csrf/` 和 3005 SPA 均返回 HTTP 200。
+
 ## 2026-05-16
 
 ### 今日目标

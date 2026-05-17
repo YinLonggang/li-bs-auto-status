@@ -27,6 +27,7 @@ export type AppTab =
   | 'issues'
   | 'collision'
   | 'reports'
+  | 'templates'
   | 'settings';
 
 export type SidebarMenuItem<TView extends string = AppTab> = {
@@ -43,6 +44,7 @@ export const MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'issues', label: '重点问题', description: '风险闭环', icon: FileWarning },
   { id: 'collision', label: '碰撞一页纸', description: '制造评审材料', icon: BarChart3 },
   { id: 'reports', label: '报告导出', description: '报表与任务', icon: Download },
+  { id: 'templates', label: '项目模板', description: '创建模板与检查项', icon: SlidersHorizontal },
   { id: 'baseConfig', label: '配置中心', description: '项目、阶段与基础数据', icon: SlidersHorizontal }
 ];
 

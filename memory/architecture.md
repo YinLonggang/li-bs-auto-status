@@ -224,3 +224,11 @@
 - 模块负责人保存调用 `PATCH /inspection-modules/{id}/`，把第一负责人同步到 `owner_*` 快照，并把完整负责人数组写入 `metadata.owners`；负责人候选仍通过 IDaaS 搜索组件选择。
 - 配置中心底部“检查模块”支持维护模块负责人，并提供“应用到检查项”批量动作；批量动作会先保存模块负责人，再更新当前项目下该模块的检查项 `owners`，并在检查项 metadata 中标记 `owner_source=module`。
 - 检查项新增入口在选择模块时默认带出模块负责人；检查项级负责人仍可单独覆盖，保持模块级默认和检查项级例外并存。
+
+## 2026-05-17 项目模板独立模块
+
+- 侧边栏新增 `templates` / “项目模板”模块，作为创建项目模板和模板检查项维护的独立入口；配置中心不再展示检查项模板，避免模板源数据和项目实例配置混在一起。
+- 项目模板页上半部分列出 `PhaseTemplate` 创建项目模板，显示模板版本、阶段数、清单模板数、模板检查项总数和启用状态；模板阶段定义来自后端 `phase_definitions`。
+- 项目模板页下半部分按所选 `PhaseTemplate` 展示对应 `ChecklistTemplate` 清单模板，用户选择清单后用横向表格维护其 `item_templates`。
+- 模板检查项编辑支持新增、删除、修改排序、标题、描述/验收口径、优先级、计划开始、计划结束和启用状态；保存调用 `PATCH /checklist-templates/{id}/`，只更新模板源数据，不自动覆盖已有项目实例检查项。
+- `ChecklistTemplate` 前端模型补齐 `moduleCode/moduleName/phaseTemplateCode/phaseKey/version/isActive/itemTemplates/metadata`；`PhaseTemplate` 补齐 `version/description/phaseDefinitions/metadata`。
