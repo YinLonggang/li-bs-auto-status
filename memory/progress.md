@@ -2,6 +2,13 @@
 
 ## 2026-05-19
 
+### 生产构建产物目录
+
+- 定位生产构建 artifact 收集失败原因：发布平台声明读取 `build/`，但 Auto Status 未显式配置 Vite 输出目录，默认产出 `dist/`。
+- 已在 `vite.config.ts` 增加 `build.outDir='build'` 和 `emptyOutDir=true`，对齐其他运行期 SPA。
+- `.gitignore` 补充 `build/`，保持生产构建产物不入库。
+- 验证通过：`npm run type-check`、`npm run build`，并确认生成 `build/index.html`。
+
 ### 宽屏空白区优化
 
 - 移除 Auto Status 主内容 `.page-shell` 的居中最大宽度限制，桌面端主内容改为占满侧边栏外的剩余空间。

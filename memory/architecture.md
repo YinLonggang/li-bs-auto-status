@@ -1,5 +1,10 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-19 生产构建产物目录
+
+- Auto Status SPA 的生产构建产物目录固定为 `build/`，与发布平台 artifact 声明 `path=["build/"]` 以及其他运行期 SPA 保持一致。
+- `vite.config.ts` 显式配置 `build.outDir = "build"` 和 `emptyOutDir = true`，禁止依赖 Vite 默认 `dist/`，避免 build 脚本成功但 artifact 收集阶段找不到 `build/`。
+
 ## 2026-05-19 应用壳层宽屏布局
 
 - Auto Status 桌面布局采用固定侧边栏 + 主内容占满剩余宽度的壳层口径；主内容不再用居中 `max-width` 容器承载业务面板。

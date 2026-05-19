@@ -19,5 +19,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, '.')
     }
+  },
+  build: {
+    outDir: 'build',
+    emptyOutDir: true
   }
 });
