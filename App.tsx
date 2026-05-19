@@ -7177,6 +7177,26 @@ function SharedStorageSettingsPanel({ canWrite }: { canWrite: boolean }) {
   );
 }
 
+function SharedStorageSettingsView({ canWrite }: { canWrite: boolean }) {
+  return (
+    <div className="space-y-5">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Global Attachment Storage</p>
+            <h1 className="text-2xl font-semibold">Auto Status 全局附件共享盘</h1>
+            <p className="text-sm text-ink-muted">
+              此配置对所有 Auto Status 项目实例生效，不随项目筛选、工厂、车间或产线变化；项目附件只保存受控对象键。
+            </p>
+          </div>
+          <span className="chip">scope: li_bs_auto_status</span>
+        </div>
+      </section>
+      <SharedStorageSettingsPanel canWrite={canWrite} />
+    </div>
+  );
+}
+
 function ProjectTemplateView({
   data,
   canWrite,
@@ -9640,7 +9660,6 @@ function BaseConfigView({
           </div>
         </div>
       </section>
-      <SharedStorageSettingsPanel canWrite={canWrite} />
     </div>
   );
 }
@@ -10534,6 +10553,9 @@ export default function App() {
           onDeleteInspectionModule={handleDeleteInspectionModuleConfig}
         />
       );
+    }
+    if (currentView === 'storage') {
+      return <SharedStorageSettingsView canWrite={canWrite} />;
     }
     if (currentView === 'baseConfig') {
       return (

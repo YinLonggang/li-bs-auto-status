@@ -103,10 +103,12 @@
 
 ### Auto Status SMB 配置入口
 
-- 配置中心底部新增“附件共享盘配置”面板，维护 `li_bs_auto_status` scope 的 SMB URL、host/share、业务根路径、凭据、对象前缀、环境目录和传输参数。
+- 侧边栏独立“附件共享盘”模块维护 `li_bs_auto_status` scope 的 SMB URL、host/share、业务根路径、凭据、对象前缀、环境目录和传输参数；该配置对所有 Auto Status 项目实例共享。
+- 配置中心已移除共享盘面板，避免共享存储配置被理解为当前项目的附属配置。
 - 面板通过 `/api/shared-storage/v1/profiles/li_bs_auto_status/` 读取/保存配置，通过 `/test/` 做连接验证；保存和验证受 `li_bs_auto_status` 模块写权限控制，只读账号可查看但不能修改。
 - 前端类型新增 `SharedStorageProfile`，API adapter 新增 `fetchSharedStorageProfile`、`updateSharedStorageProfile`、`testSharedStorageProfile`。
-- 验证通过：`npm run type-check`、`npm run build`。
+- 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`（cookie 缺失场景按脚本规则 SKIP，失败数 0）、`git diff --check`。
+- 按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/`、`GET /api/auth/csrf/` 和 `GET /api/shared-storage/v1/profiles/li_bs_auto_status/` 均返回 HTTP 200。
 
 ## 2026-05-13
 
