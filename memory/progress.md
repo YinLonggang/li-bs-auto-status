@@ -1,5 +1,19 @@
 # li-bs-auto-status 进度记录
 
+## 2026-05-19
+
+### 宽屏空白区优化
+
+- 移除 Auto Status 主内容 `.page-shell` 的居中最大宽度限制，桌面端主内容改为占满侧边栏外的剩余空间。
+- 顶部 header 内层从 `max-w-[1520px] mx-auto` 改为全宽布局，避免页面标题和业务内容在宽屏上整体右移。
+- 主内容容器补齐 `w-full`，折叠/展开侧边栏时仍按原有 padding 切换，不改变移动端抽屉行为。
+
+### 验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过；Vite 仍提示主 chunk 略高于 500 kB，这是既有性能提示，不影响本轮布局变更。
+- 按 `dev-environment-bootstrap` 重启后，Django 8000、SPAs 3000-3005、堡垒机 38443/18080 与 Caddy 3050/8443 健康检查均为 HTTP 200。
+
 ## 2026-05-17
 
 ### 项目模板与项目实例体验拆分

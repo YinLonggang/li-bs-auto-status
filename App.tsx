@@ -10701,9 +10701,9 @@ export default function App() {
         isDesktopCollapsed={isCollapsed}
         onToggleDesktopCollapsed={toggleCollapsed}
       />
-      <div className={`min-w-0 flex-1 transition-[padding] duration-200 ${isCollapsed ? 'lg:pl-20' : 'lg:pl-72'}`}>
-        <header className="sticky top-0 z-20 border-b border-outline bg-surface/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
-          <div className="mx-auto flex max-w-[1520px] flex-wrap items-center justify-between gap-4">
+      <div className={`min-w-0 w-full flex-1 transition-[padding] duration-200 ${isCollapsed ? 'lg:pl-20' : 'lg:pl-72'}`}>
+        <header className="sticky top-0 z-20 border-b border-outline bg-surface/95 px-4 py-3 backdrop-blur sm:px-5 lg:px-6 xl:px-7 2xl:px-8">
+          <div className="flex w-full flex-wrap items-center justify-between gap-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <MobileMenuButton onClick={() => setSidebarOpen(true)} />
               <div className="min-w-0">
