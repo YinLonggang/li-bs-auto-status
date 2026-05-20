@@ -1,5 +1,11 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-20 负责人候选与生产分包
+
+- 负责人编辑器继续以 `OwnerListEditor` 为统一入口，默认候选来自 workspace 的 `/idaas-candidates/` 空查询结果；输入关键字时仍调用同一接口动态搜索，不在前端维护手工负责人或本地 mock 候选。
+- 当前登录用户只作为默认候选之一展示；可搜索的其他 IDaaS 用户由后端合并业务已保存负责人快照与 IDaaS profile 缓存返回。
+- Vite 生产构建使用 Rollup `manualChunks` 将 `react/react-dom`、`lucide-react`、`html-to-image` 拆为独立 vendor chunks，主业务 chunk 保持低于 500 kB，避免构建性能提示。
+
 ## 2026-05-20 明暗主题状态色复核
 
 - Auto Status 状态文字继续通过 `primary/accent/success/warning` 语义 token 表达；亮色主题 token 已使用深色蓝、深青、深绿、深琥珀，暗色主题保持可读。

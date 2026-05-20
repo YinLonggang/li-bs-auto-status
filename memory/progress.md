@@ -2,6 +2,19 @@
 
 ## 2026-05-20
 
+### 负责人候选搜索与分包警告
+
+- 定位负责人候选链路：页面加载和负责人编辑器均调用 `/idaas-candidates/`；前端本地候选缓存只来自 workspace `ownerCandidates`，动态搜索由 `OwnerListEditor` 输入关键字后触发。
+- 后端候选原先只来自当前登录用户和 Auto Status 业务表中已保存的负责人/确认人/审批人快照；空业务数据时自然只剩当前登录用户。
+- 本轮保持前端链路不变，由后端在关键字搜索时补充 IDaaS profile 缓存候选；当前登录用户仍作为默认候选，搜索可返回其他真实 IDaaS 用户。
+- `vite.config.ts` 增加 Rollup `manualChunks`，拆分 `react`、`icons`、`imageExport` chunks；`npm run build` 产物最大业务 chunk 为 `471.79 kB`，不再出现 `chunk > 500 kB` 警告。
+
+### 负责人候选验证
+
+- `npm run type-check` 通过。
+- `npm run build` 通过，构建输出包含 `react`、`imageExport`、`icons`、`index` 四个 JS chunks，无 500 kB 警告。
+- 后端定向候选测试通过；完整 `li_bs_auto_status` 后端测试与 `manage.py check` 已在后端 memory 记录。
+
 ### 明暗主题状态色复核
 
 - 复核 Auto Status 的 `success/warning/primary/accent` 状态文字，现有代码已通过 CSS 主题变量或深色 light token 保持浅底可读，本轮无需继续修改组件代码。

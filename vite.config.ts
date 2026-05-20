@@ -22,6 +22,15 @@ export default defineConfig({
   },
   build: {
     outDir: 'build',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          icons: ['lucide-react'],
+          imageExport: ['html-to-image']
+        }
+      }
+    }
   }
 });
