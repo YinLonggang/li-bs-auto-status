@@ -1,5 +1,11 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-20 亮色主题成功态可读性
+
+- Auto Status 的 `success` 语义色改为 CSS 主题变量，由 Tailwind `success` token 读取 `--success`。
+- 暗色主题保持原成功绿 `22 163 74`；亮色主题使用更深的 `22 101 52`，用于 `bg-success/10 text-success`、状态 pill、保存提示和超级管理员标识等成功/提示态。
+- 成功态背景透明度和组件结构不变，避免影响暗色主题布局与状态语义，只提升亮色主题浅绿色背景上的文字对比度。
+
 ## 2026-05-20 生产 API 基址环境变量
 
 - Auto Status SPA 的后端基址优先读取 `VITE_BASE_API`，兼容 `VITE_API_BASE` 与旧变量 `VITE_API_BASE_URL`；读取时取第一个非空值并去除尾部 `/`。

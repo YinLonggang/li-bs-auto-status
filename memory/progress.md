@@ -2,6 +2,12 @@
 
 ## 2026-05-20
 
+### 亮色主题成功态可读性
+
+- 定位成功/提示态主要来自 `success` Tailwind token：`StatusPill`、保存提示、共享盘配置成功消息和超级管理员 badge 均使用 `bg-success/10 text-success`。
+- 将 `success` 从固定 `#16a34a` 改为读取 CSS 主题变量；暗色主题保持 `22 163 74`，亮色主题改为更深的 `22 101 52`，提升浅绿色背景上的文字对比度。
+- 仅修改 `li-bs-auto-status` 内主题样式文件，未修改 `li-sicar-iot` 或根仓业务代码。
+
 ### 生产 API 基址环境变量兼容
 
 - 修复生产构建只注入 `VITE_BASE_API` 时 Auto Status 仍使用同源或旧后端基址的问题。

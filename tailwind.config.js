@@ -34,7 +34,7 @@ export default {
           soft: 'rgb(var(--accent-soft) / <alpha-value>)'
         },
         outline: 'rgb(var(--border) / <alpha-value>)',
-        success: '#16a34a',
+        success: 'rgb(var(--success) / <alpha-value>)',
         warning: '#d97706',
         danger: '#dc2626'
       },
