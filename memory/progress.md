@@ -449,3 +449,13 @@
 - 前端 PNG 捕获改为 `cacheBust=false`，并增加字体/图片等待、`scrollWidth/scrollHeight` 尺寸捕获、动态像素比和 1x 降级重试；filter 增加节点类型保护，避免文本节点触发 `node.closest is not a function`。
 - Chrome headless 真实浏览器回归通过：打开 3005，进入碰撞一页纸，选择 `dev-test`，点击 `预览图片` 后生成 PNG，尺寸 `2235 x 10736`。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm audit --audit-level=high`、`npm run permission-regression`、`git diff --check`；按 dev-environment-bootstrap 重启 3005 后，`GET http://127.0.0.1:3005/` 与 `GET /api/auth/csrf/` 均返回 HTTP 200。
+
+## 2026-05-20
+
+### 检查项列表密度与负责人头像
+
+- 配置中心检查项表格、检查项列表和配置中心检查模块列表中的负责人维护改为默认头像栈展示，点击后再展开完整负责人搜索器，解决列表行被候选人搜索框和候选人卡片撑高的问题。
+- `UserAvatar` 支持真实头像 URL，图片加载失败时回退姓名/IDaaS 首字；前端 owner/candidate 类型、归一化和保存链路均补齐 `avatarUrl`。
+- 后端 `/api/li-bs-auto-status/v1/idaas-candidates/` 候选人返回补齐 `avatar_url` 字段；候选来源包括当前登录用户、Mongo profile 缓存和已保存检查项 owner metadata。
+- 检查项列表附件面板在 compact 模式下默认折叠上传控件，避免每一行直接展示文件选择器。
+- 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。

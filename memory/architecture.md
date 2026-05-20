@@ -298,3 +298,11 @@
 - 前端 API adapter 新增 `createInspectionModule()`、`updateInspectionModule()`、`deleteInspectionModule()`；旧的 `updateInspectionModuleOwner()` 收敛为调用 `updateInspectionModule()` 的负责人子集。
 - 模板矩阵行、清单模板模块下拉和新建清单模板默认模块都读取最新 `data.inspectionModules`，模块保存后通过 `loadData()` 刷新全局基础数据。
 - 模块删除不做前端级强删规避，直接调用后端 DELETE；后端 `InspectionModule` 被 `ChecklistTemplate` 或 `CheckItem` 引用时按 PROTECT 拒绝，前端展示错误提示。
+
+## 2026-05-20 检查项负责人紧凑列表
+
+- 检查项列表和配置中心检查项表格不再默认展开完整负责人搜索器；行内默认展示负责人头像栈和人数，点击头像入口后才展开 IDaaS 搜索、候选和移除操作。
+- 配置中心底部检查模块列表的模块负责人维护也采用同一紧凑头像入口，避免每个列表卡片默认铺开候选人搜索面板。
+- `OwnerCandidate` 与 `CheckItemOwner` 前端模型补齐 `avatarUrl`；API adapter 从候选人、owner 顶层字段和 owner metadata 中归一化头像 URL，保存 owner 时把头像 URL 写回 metadata。
+- 后端 IDaaS 候选人接口透传 `avatar_url`，来源包括当前 IDaaS 用户、Mongo profile 缓存和已保存检查项 owner metadata；无头像时前端仍用姓名首字兜底。
+- 检查项列表中的附件面板在 compact 模式下默认收起上传表单，只显示附件概览和“上传”入口，点击后再展开文件选择。

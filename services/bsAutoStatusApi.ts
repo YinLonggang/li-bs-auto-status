@@ -109,6 +109,7 @@ const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
     return { displayName: input.trim() };
   }
   const raw = asRecord(input);
+  const metadata = asRecord(raw.metadata);
   const manualName = firstString(raw, ['manualName', 'manual_name']);
   const sortOrder = firstNumber(raw, ['sortOrder', 'sort_order'], Number.NaN);
   const isPrimary = asBoolean(raw.isPrimary, asBoolean(raw.is_primary, false));
@@ -117,6 +118,9 @@ const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
     idaasId: firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']),
     email: firstString(raw, ['email']),
     department: firstString(raw, ['department', 'department_name', 'org_name']),
+    avatarUrl:
+      firstString(raw, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'photo', 'photoUrl']) ||
+      firstString(metadata, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'photo', 'photoUrl']),
     manualName: '',
     manual_name: '',
     role: firstString(raw, ['role']),
@@ -124,7 +128,7 @@ const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
     sort_order: Number.isFinite(sortOrder) ? sortOrder : undefined,
     isPrimary,
     is_primary: isPrimary,
-    metadata: asRecord(raw.metadata)
+    metadata
   };
 };
 
@@ -157,7 +161,8 @@ const serializeCheckItemOwners = (owners?: CheckItemOwner[]) =>
       is_primary: owner.isPrimary ?? owner.is_primary ?? undefined,
       metadata: {
         ...(owner.metadata ?? {}),
-        ...(owner.department ? { department: owner.department } : {})
+        ...(owner.department ? { department: owner.department } : {}),
+        ...(owner.avatarUrl ? { avatar_url: owner.avatarUrl } : {})
       }
     }))
     .filter(owner => owner.idaas_id);
@@ -895,13 +900,17 @@ const normalizeExportTask = (input: unknown): ExportTask => {
 
 const normalizeOwnerCandidate = (input: unknown): OwnerCandidate => {
   const raw = asRecord(input);
+  const metadata = asRecord(raw.metadata);
   const idaasId = firstString(raw, ['idaasId', 'idaas_id', 'user_id', 'open_id', 'id']);
   const displayName = firstString(raw, ['displayName', 'display_name', 'name', 'username'], idaasId);
   return {
     idaasId,
     displayName,
     email: firstString(raw, ['email']),
-    department: firstString(raw, ['department', 'department_name', 'org_name'])
+    department: firstString(raw, ['department', 'department_name', 'org_name']),
+    avatarUrl:
+      firstString(raw, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'photo', 'photoUrl']) ||
+      firstString(metadata, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'photo', 'photoUrl'])
   };
 };
 

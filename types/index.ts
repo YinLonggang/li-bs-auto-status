@@ -25,6 +25,7 @@ export type OwnerCandidate = {
   displayName: string;
   email?: string;
   department?: string;
+  avatarUrl?: string;
 };
 
 export type FactoryOption = {
@@ -304,6 +305,7 @@ export type CheckItemOwner = {
   idaasId?: string;
   email?: string;
   department?: string;
+  avatarUrl?: string;
   manualName?: string;
   manual_name?: string;
   role?: string;

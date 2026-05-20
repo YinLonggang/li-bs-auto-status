@@ -677,23 +677,40 @@ function AuditHistoryPanel({
 function UserAvatar({
   name,
   idaasId,
+  avatarUrl,
   size = 'sm'
 }: {
   name?: string;
   idaasId?: string;
+  avatarUrl?: string;
   size?: 'xs' | 'sm';
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const label = (name || idaasId || '').trim();
   const initials = Array.from(label).slice(0, 2).join('').toUpperCase();
   const sizeClass = size === 'xs' ? 'h-5 w-5 text-[10px]' : 'h-7 w-7 text-xs';
+  const canShowImage = Boolean(avatarUrl && !imageFailed);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [avatarUrl]);
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 font-semibold text-primary ${sizeClass}`}
+      className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-primary/20 bg-primary/10 font-semibold text-primary ${sizeClass}`}
       aria-hidden="true"
       title={label || undefined}
     >
-      {initials || <UserRound className={size === 'xs' ? 'h-3 w-3' : 'h-4 w-4'} />}
+      {canShowImage ? (
+        <img
+          src={avatarUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        initials || <UserRound className={size === 'xs' ? 'h-3 w-3' : 'h-4 w-4'} />
+      )}
     </span>
   );
 }
@@ -717,10 +734,12 @@ function CheckItemAttachmentPanel({
 }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     setSelectedFile(null);
+    setUploadOpen(false);
     setMessage('');
   }, [item.id]);
 
@@ -755,31 +774,46 @@ function CheckItemAttachmentPanel({
             <p className="text-xs text-ink-muted">附件归档到当前检查项，上传和下载由后端 OiS3 接口控制。</p>
           ) : null}
         </div>
-        <Paperclip className="h-4 w-4 text-ink-muted" />
+        {compact ? (
+          <button
+            className="btn btn-ghost btn--sm"
+            type="button"
+            disabled={!canWrite}
+            onClick={() => setUploadOpen(current => !current)}
+            aria-expanded={uploadOpen}
+          >
+            <Paperclip className="h-4 w-4" />
+            上传
+          </button>
+        ) : (
+          <Paperclip className="h-4 w-4 text-ink-muted" />
+        )}
       </div>
-      <div className="mt-3 grid gap-2">
-        <label>
-          <span className="field-label">选择附件</span>
-          <input
-            className="input"
-            type="file"
-            disabled={!canWrite || uploading}
-            onChange={event => setSelectedFile(event.target.files?.[0] ?? null)}
-            aria-label={`为检查项 ${item.title} 选择附件`}
-          />
-        </label>
-        <button
-          className="btn btn-primary btn--sm w-fit"
-          type="button"
-          disabled={!canWrite || uploading || !selectedFile}
-          onClick={() => void handleUpload()}
-        >
-          <Paperclip className="h-4 w-4" />
-          {uploading ? '上传中' : '上传附件'}
-        </button>
-      </div>
+      {!compact || uploadOpen ? (
+        <div className="mt-3 grid gap-2">
+          <label>
+            <span className="field-label">选择附件</span>
+            <input
+              className="input"
+              type="file"
+              disabled={!canWrite || uploading}
+              onChange={event => setSelectedFile(event.target.files?.[0] ?? null)}
+              aria-label={`为检查项 ${item.title} 选择附件`}
+            />
+          </label>
+          <button
+            className="btn btn-primary btn--sm w-fit"
+            type="button"
+            disabled={!canWrite || uploading || !selectedFile}
+            onClick={() => void handleUpload()}
+          >
+            <Paperclip className="h-4 w-4" />
+            {uploading ? '上传中' : '上传附件'}
+          </button>
+        </div>
+      ) : null}
       {message ? <div className="mt-2 text-xs text-ink-muted">{message}</div> : null}
-      <div className="mt-4">
+      <div className={compact ? 'mt-2' : 'mt-4'}>
         <AttachmentList
           attachments={item.attachments}
           canDownload={canWrite}
@@ -855,16 +889,23 @@ const ownerKeyOf = (owner: CheckItemOwner) =>
 const normalizeOwners = (owners: CheckItemOwner[]) => {
   const seen = new Set<string>();
   return owners
-    .map((owner, index) => ({
-      ...owner,
-      displayName: (owner.displayName || owner.idaasId || '').trim(),
-      idaasId: owner.idaasId?.trim() || undefined,
-      manualName: undefined,
-      manual_name: undefined,
-      role: owner.role?.trim() || undefined,
-      sortOrder: index,
-      sort_order: index
-    }))
+    .map((owner, index) => {
+      const metadataAvatarUrl =
+        typeof owner.metadata?.avatar_url === 'string'
+          ? owner.metadata.avatar_url
+          : undefined;
+      return {
+        ...owner,
+        displayName: (owner.displayName || owner.idaasId || '').trim(),
+        idaasId: owner.idaasId?.trim() || undefined,
+        manualName: undefined,
+        manual_name: undefined,
+        role: owner.role?.trim() || undefined,
+        avatarUrl: owner.avatarUrl || metadataAvatarUrl,
+        sortOrder: index,
+        sort_order: index
+      };
+    })
     .filter(owner => owner.idaasId)
     .filter(owner => {
       const key = ownerKeyOf(owner);
@@ -1127,7 +1168,8 @@ const normalizeOwnerCandidates = (candidates: OwnerCandidate[]) => {
     .map(candidate => ({
       ...candidate,
       idaasId: candidate.idaasId?.trim() ?? '',
-      displayName: (candidate.displayName || candidate.idaasId || '').trim()
+      displayName: (candidate.displayName || candidate.idaasId || '').trim(),
+      avatarUrl: candidate.avatarUrl?.trim() || undefined
     }))
     .filter(candidate => candidate.idaasId)
     .filter(candidate => {
@@ -1146,6 +1188,7 @@ const ownerCandidateToOwner = (candidate: OwnerCandidate): CheckItemOwner => ({
   idaasId: candidate.idaasId,
   email: candidate.email,
   department: candidate.department,
+  avatarUrl: candidate.avatarUrl,
   role: 'owner'
 });
 
@@ -4788,7 +4831,7 @@ function OwnerListEditor({
       <div className="flex flex-wrap gap-1.5">
         {normalizedOwners.length ? normalizedOwners.map(owner => (
           <span key={ownerKeyOf(owner)} className="chip gap-1.5">
-            <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} size="xs" />
+            <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} avatarUrl={owner.avatarUrl} size="xs" />
             <span>{ownerDisplayName(owner)}</span>
             <button
               className="ml-1 text-ink-muted hover:text-danger disabled:hover:text-ink-muted"
@@ -4826,7 +4869,7 @@ function OwnerListEditor({
               setRemoteCandidates([]);
             }}
           >
-            <UserAvatar name={candidate.displayName} idaasId={candidate.idaasId} />
+            <UserAvatar name={candidate.displayName} idaasId={candidate.idaasId} avatarUrl={candidate.avatarUrl} />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-semibold">{candidate.displayName || candidate.idaasId}</span>
               <span className="block truncate text-xs text-ink-muted">{candidate.department || candidate.email || candidate.idaasId}</span>
@@ -4844,6 +4887,88 @@ function OwnerListEditor({
         )}
       </div>
       {searchError ? <div className="text-xs text-danger">{searchError}</div> : null}
+    </div>
+  );
+}
+
+function OwnerAvatarStack({ owners, maxVisible = 4 }: { owners: CheckItemOwner[]; maxVisible?: number }) {
+  const normalizedOwners = normalizeOwners(owners);
+  const visibleOwners = normalizedOwners.slice(0, maxVisible);
+  const hiddenCount = Math.max(0, normalizedOwners.length - visibleOwners.length);
+
+  if (!normalizedOwners.length) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
+        <UserAvatar size="xs" />
+        未设置
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <span className="flex -space-x-1.5">
+        {visibleOwners.map(owner => (
+          <UserAvatar
+            key={ownerKeyOf(owner)}
+            name={ownerDisplayName(owner)}
+            idaasId={owner.idaasId}
+            avatarUrl={owner.avatarUrl}
+            size="xs"
+          />
+        ))}
+      </span>
+      {hiddenCount ? (
+        <span className="rounded-full border border-outline bg-surface-soft px-1.5 py-0.5 text-[11px] font-semibold text-ink-muted">
+          +{hiddenCount}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function CompactOwnerListEditor({
+  owners,
+  ownerCandidates,
+  canWrite,
+  candidateLabel,
+  onChange
+}: {
+  owners: CheckItemOwner[];
+  ownerCandidates: OwnerCandidate[];
+  canWrite: boolean;
+  candidateLabel: string;
+  onChange: (next: { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const normalizedOwners = normalizeOwners(owners);
+  const ownerSummary = normalizedOwners.length
+    ? `${normalizedOwners.length} 人`
+    : '未设置';
+
+  return (
+    <div className="min-w-[150px]">
+      <button
+        className="flex min-h-9 w-full items-center justify-between gap-2 rounded-lg border border-outline bg-surface-strong px-2 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        type="button"
+        onClick={() => setIsOpen(current => !current)}
+        aria-expanded={isOpen}
+        aria-label={`${candidateLabel}，${isOpen ? '收起' : '展开'}负责人编辑`}
+      >
+        <OwnerAvatarStack owners={normalizedOwners} />
+        <span className="shrink-0 text-[11px] font-medium text-ink-muted">{ownerSummary}</span>
+      </button>
+      {isOpen ? (
+        <div className="mt-2 rounded-lg border border-outline bg-surface p-2 shadow-sm">
+          <OwnerListEditor
+            owners={owners}
+            ownerCandidates={ownerCandidates}
+            canWrite={canWrite}
+            candidateLabel={candidateLabel}
+            onChange={onChange}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -5164,8 +5289,8 @@ function ChecksView({
                   </td>
                   <td>{phaseById.get(`${item.projectPhaseId}`)?.name ?? '-'}</td>
                   <td>{moduleById.get(`${item.moduleId}`)?.name ?? '-'}</td>
-                  <td className="min-w-[280px]">
-                    <OwnerListEditor
+                  <td className="min-w-[170px]">
+                    <CompactOwnerListEditor
                       owners={draft.owners}
                       ownerCandidates={ownerCandidates}
                       canWrite={canWrite}
@@ -5179,7 +5304,7 @@ function ChecksView({
                     />
                   </td>
                   <td>{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
-                  <td className="min-w-[280px]">
+                  <td className="min-w-[240px]">
                     <div className="mb-2">
                       <StatusPill status={item.status} />
                     </div>
@@ -5190,7 +5315,7 @@ function ChecksView({
                       onUpdateStatus={onUpdateStatus}
                     />
                   </td>
-                  <td className="min-w-[320px]">
+                  <td className="min-w-[240px]">
                     <CheckItemAttachmentPanel
                       item={item}
                       canWrite={canWrite}
@@ -7930,7 +8055,7 @@ function ProjectTemplateView({
                         <div className="flex flex-wrap gap-1.5">
                           {moduleOwners.map(owner => (
                             <span key={ownerKeyOf(owner)} className="chip gap-1.5">
-                              <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} size="xs" />
+                              <UserAvatar name={ownerDisplayName(owner)} idaasId={owner.idaasId} avatarUrl={owner.avatarUrl} size="xs" />
                               <span>{ownerDisplayName(owner)}</span>
                             </span>
                           ))}
@@ -9440,7 +9565,7 @@ function BaseConfigView({
           </div>
         ) : null}
         <div className="table-shell mt-4">
-          <table className="data-table min-w-[1520px]">
+          <table className="data-table min-w-[1380px]">
             <thead>
               <tr>
                 <th>检查项</th>
@@ -9501,8 +9626,8 @@ function BaseConfigView({
                     <td className="min-w-[150px]">
                       <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
                     </td>
-                    <td className="min-w-[280px]">
-                      <OwnerListEditor
+                    <td className="min-w-[170px]">
+                      <CompactOwnerListEditor
                         owners={draft.owners}
                         ownerCandidates={data.ownerCandidates}
                         canWrite={canWrite}
@@ -9599,10 +9724,10 @@ function BaseConfigView({
                       </div>
                       <StatusPill status={module.isActive ? 'active' : 'disabled'} />
                     </div>
-                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(180px,240px)_auto] lg:items-start">
                       <div>
                         <span className="field-label">模块负责人</span>
-                        <OwnerListEditor
+                        <CompactOwnerListEditor
                           owners={draftOwners}
                           ownerCandidates={data.ownerCandidates}
                           canWrite={canWrite}
@@ -9648,7 +9773,7 @@ function BaseConfigView({
             <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
               {data.ownerCandidates.map(owner => (
                 <div key={owner.idaasId || owner.displayName} className="flex items-center gap-2 rounded-lg border border-outline bg-surface px-3 py-2">
-                  <UserAvatar name={owner.displayName} idaasId={owner.idaasId} />
+                  <UserAvatar name={owner.displayName} idaasId={owner.idaasId} avatarUrl={owner.avatarUrl} />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-ink">{owner.displayName || owner.idaasId}</div>
                     <div className="mt-1 truncate text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
@@ -10610,7 +10735,7 @@ export default function App() {
           canWrite={canWrite}
           defaultOwner={
             profile?.userId
-              ? { idaasId: profile.userId, displayName: profile.displayName, email: profile.email }
+              ? { idaasId: profile.userId, displayName: profile.displayName, email: profile.email, avatarUrl: profile.avatarUrl }
               : undefined
           }
           onCreateCheckItem={handleCreateCheckItemConfig}
