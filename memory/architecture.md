@@ -1,5 +1,11 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-20 生产 API 基址环境变量
+
+- Auto Status SPA 的后端基址优先读取 `VITE_BASE_API`，兼容 `VITE_API_BASE` 与旧变量 `VITE_API_BASE_URL`；读取时取第一个非空值并去除尾部 `/`。
+- `LOGIN_URL` 未显式配置 `VITE_LOGIN_URL` 时由解析后的 API 基址拼接 `/login/`，保证部署到独立 SPA 域名后登录跳转仍回到 li-sicar 后端。
+- Chrome 控制台中 `content_main.js`、Built-In AI `LanguageDetector` 和 message channel closed 报错不是 Auto Status 源码或构建产物触发，通常来自浏览器扩展/Chrome 注入脚本；本应用代码不注册 `chrome.runtime` listener。
+
 ## 2026-05-19 生产构建产物目录
 
 - Auto Status SPA 的生产构建产物目录固定为 `build/`，与发布平台 artifact 声明 `path=["build/"]` 以及其他运行期 SPA 保持一致。

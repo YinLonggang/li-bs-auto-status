@@ -1,5 +1,15 @@
 # li-bs-auto-status 进度记录
 
+## 2026-05-20
+
+### 生产 API 基址环境变量兼容
+
+- 修复生产构建只注入 `VITE_BASE_API` 时 Auto Status 仍使用同源或旧后端基址的问题。
+- `config.ts` 改为按 `VITE_BASE_API -> VITE_API_BASE -> VITE_API_BASE_URL` 顺序读取第一个非空值，并统一去掉尾部 `/`。
+- `.env.example` 补充 `VITE_BASE_API=http://127.0.0.1:8000` 和 `VITE_API_BASE`，保留 `VITE_API_BASE_URL` 作为兼容变量。
+- 排查控制台 `content_main.js` / Chrome Built-In AI / message channel closed 报错：仓库源码中无对应脚本、无 `chrome.runtime` listener，判断为浏览器扩展或 Chrome 注入脚本，不属于 SPA 业务代码。
+- 验证通过：`npm run type-check`；`VITE_BASE_API=https://li-sicar.inner.chj.cloud npm run build`；构建产物包含 `https://li-sicar.inner.chj.cloud`。
+
 ## 2026-05-19
 
 ### 生产构建产物目录
