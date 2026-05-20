@@ -863,6 +863,16 @@ type SearchFilterState = {
   activeState: string;
 };
 
+type OwnerEditorChange = {
+  owners: CheckItemOwner[];
+  ownerName: string;
+  ownerIdaasId?: string;
+};
+
+type BaseOwnerDrawerTarget =
+  | { kind: 'check'; id: string }
+  | { kind: 'module'; id: string };
+
 const EMPTY_FILTERS: SearchFilterState = {
   keyword: '',
   status: '',
@@ -4761,7 +4771,7 @@ function OwnerListEditor({
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
   candidateLabel: string;
-  onChange: (next: { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }) => void;
+  onChange: (next: OwnerEditorChange) => void;
 }) {
   const [query, setQuery] = useState('');
   const [remoteCandidates, setRemoteCandidates] = useState<OwnerCandidate[]>([]);
@@ -4929,18 +4939,15 @@ function OwnerAvatarStack({ owners, maxVisible = 4 }: { owners: CheckItemOwner[]
 
 function CompactOwnerListEditor({
   owners,
-  ownerCandidates,
-  canWrite,
   candidateLabel,
-  onChange
+  isActive = false,
+  onOpen
 }: {
   owners: CheckItemOwner[];
-  ownerCandidates: OwnerCandidate[];
-  canWrite: boolean;
   candidateLabel: string;
-  onChange: (next: { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }) => void;
+  isActive?: boolean;
+  onOpen: () => void;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
   const normalizedOwners = normalizeOwners(owners);
   const ownerSummary = normalizedOwners.length
     ? `${normalizedOwners.length} 人`
@@ -4949,17 +4956,85 @@ function CompactOwnerListEditor({
   return (
     <div className="min-w-[150px]">
       <button
-        className="flex min-h-9 w-full items-center justify-between gap-2 rounded-lg border border-outline bg-surface-strong px-2 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${isActive ? 'border-primary/50 bg-primary/10' : 'border-outline bg-surface-strong'}`}
         type="button"
-        onClick={() => setIsOpen(current => !current)}
-        aria-expanded={isOpen}
-        aria-label={`${candidateLabel}，${isOpen ? '收起' : '展开'}负责人编辑`}
+        onClick={onOpen}
+        aria-expanded={isActive}
+        aria-label={`${candidateLabel}，打开负责人编辑`}
       >
         <OwnerAvatarStack owners={normalizedOwners} />
         <span className="shrink-0 text-[11px] font-medium text-ink-muted">{ownerSummary}</span>
       </button>
-      {isOpen ? (
-        <div className="mt-2 rounded-lg border border-outline bg-surface p-2 shadow-sm">
+    </div>
+  );
+}
+
+function OwnerEditorDrawer({
+  open,
+  title,
+  subtitle,
+  owners,
+  ownerCandidates,
+  canWrite,
+  candidateLabel,
+  onChange,
+  onClose
+}: {
+  open: boolean;
+  title: string;
+  subtitle?: string;
+  owners: CheckItemOwner[];
+  ownerCandidates: OwnerCandidate[];
+  canWrite: boolean;
+  candidateLabel: string;
+  onChange: (next: OwnerEditorChange) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <button
+        className="absolute inset-0 cursor-default bg-black/30"
+        type="button"
+        onClick={onClose}
+        aria-label="关闭负责人编辑"
+      />
+      <aside
+        className="relative flex h-full w-full max-w-[440px] flex-col border-l border-outline bg-surface shadow-2xl"
+        aria-label={candidateLabel}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-outline px-4 py-4">
+          <div className="min-w-0">
+            <p className="kicker">Owner</p>
+            <h3 className="truncate text-lg font-semibold text-ink">{title}</h3>
+            {subtitle ? <p className="mt-1 text-xs text-ink-muted">{subtitle}</p> : null}
+          </div>
+          <button
+            className="btn btn-ghost btn--sm shrink-0"
+            type="button"
+            onClick={onClose}
+            aria-label="关闭负责人编辑"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mb-3 rounded-lg border border-outline bg-surface-soft p-3">
+            <div className="text-xs font-semibold text-ink-muted">当前负责人</div>
+            <div className="mt-2">
+              <OwnerAvatarStack owners={owners} maxVisible={6} />
+            </div>
+          </div>
           <OwnerListEditor
             owners={owners}
             ownerCandidates={ownerCandidates}
@@ -4968,7 +5043,12 @@ function CompactOwnerListEditor({
             onChange={onChange}
           />
         </div>
-      ) : null}
+        <div className="flex justify-end border-t border-outline px-4 py-3">
+          <button className="btn btn-primary btn--sm" type="button" onClick={onClose}>
+            完成
+          </button>
+        </div>
+      </aside>
     </div>
   );
 }
@@ -5005,6 +5085,7 @@ function ChecksView({
   const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newDraft, setNewDraft] = useState<CheckItemConfigDraft | null>(null);
+  const [ownerDrawerItemId, setOwnerDrawerItemId] = useState<string | null>(null);
   const [createMessage, setCreateMessage] = useState('');
   const [savingCreate, setSavingCreate] = useState(false);
   const visiblePhases = activePhasesOf(phases);
@@ -5029,6 +5110,16 @@ function ChecksView({
     if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, ...ownersForSearch(itemOwners)])) return false;
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
   });
+  const ownerDrawerItem = ownerDrawerItemId
+    ? checkItems.find(item => idOf(item.id) === ownerDrawerItemId)
+    : undefined;
+  const ownerDrawerDraft = ownerDrawerItem
+    ? drafts[ownerDrawerItemId ?? ''] ?? {
+      owners: ownersOfItem(ownerDrawerItem),
+      ownerName: '',
+      ownerIdaasId: undefined
+    }
+    : null;
   const statusOptions = statusOptionValues(checkItems.map(item => item.status));
   const selectedNewPhase = visiblePhases.find(phase => idOf(phase.id) === newDraft?.projectPhaseId) ?? defaultPhase;
   const selectedNewModule = orderedModules.find(module => idOf(module.id) === newDraft?.moduleId) ?? defaultModule;
@@ -5104,6 +5195,7 @@ function ChecksView({
   };
 
   return (
+    <>
     <section className="panel">
       <div className="panel-header">
         <div>
@@ -5292,15 +5384,9 @@ function ChecksView({
                   <td className="min-w-[170px]">
                     <CompactOwnerListEditor
                       owners={draft.owners}
-                      ownerCandidates={ownerCandidates}
-                      canWrite={canWrite}
                       candidateLabel={`检查项 ${item.title} IDaaS 责任人`}
-                      onChange={next =>
-                        setDrafts(current => ({
-                          ...current,
-                          [`${item.id}`]: next
-                        }))
-                      }
+                      isActive={ownerDrawerItemId === idOf(item.id)}
+                      onOpen={() => setOwnerDrawerItemId(idOf(item.id))}
                     />
                   </td>
                   <td>{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
@@ -5344,6 +5430,28 @@ function ChecksView({
         </table>
       </div>
     </section>
+    <OwnerEditorDrawer
+      open={Boolean(ownerDrawerItem && ownerDrawerDraft)}
+      title={ownerDrawerItem?.title ?? '检查项负责人'}
+      subtitle={[
+        ownerDrawerItem ? phaseById.get(idOf(ownerDrawerItem.projectPhaseId))?.name : '',
+        ownerDrawerItem ? moduleById.get(idOf(ownerDrawerItem.moduleId))?.name : ''
+      ].filter(Boolean).join(' / ')}
+      owners={ownerDrawerDraft?.owners ?? []}
+      ownerCandidates={ownerCandidates}
+      canWrite={canWrite}
+      candidateLabel={`检查项 ${ownerDrawerItem?.title ?? ''} IDaaS 责任人`}
+      onChange={next => {
+        if (!ownerDrawerItem) return;
+        const itemId = idOf(ownerDrawerItem.id);
+        setDrafts(current => ({
+          ...current,
+          [itemId]: next
+        }));
+      }}
+      onClose={() => setOwnerDrawerItemId(null)}
+    />
+    </>
   );
 }
 
@@ -8501,6 +8609,7 @@ function BaseConfigView({
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
+  const [ownerDrawerTarget, setOwnerDrawerTarget] = useState<BaseOwnerDrawerTarget | null>(null);
   const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
   const [selectedModuleConfigId, setSelectedModuleConfigId] = useState('');
   const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
@@ -8560,6 +8669,45 @@ function BaseConfigView({
     if (!textMatches(checkFilters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, item.tags?.join(' '), ...ownersForSearch(itemOwners)])) return false;
     return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, checkFilters.startDate, checkFilters.endDate);
   });
+  const ownerDrawerConfig = (() => {
+    if (!ownerDrawerTarget) return null;
+    if (ownerDrawerTarget.kind === 'check') {
+      const item = data.checkItems.find(checkItem => idOf(checkItem.id) === ownerDrawerTarget.id);
+      const draft = checkItemDrafts[ownerDrawerTarget.id];
+      if (!item || !draft) return null;
+      const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
+      const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
+      return {
+        title: item.title,
+        subtitle: [phase?.name, module?.name].filter(Boolean).join(' / '),
+        owners: draft.owners,
+        candidateLabel: `配置中心 ${item.title} IDaaS 责任人`,
+        onChange: (next: OwnerEditorChange) => {
+          setCheckItemDrafts(current => ({
+            ...current,
+            [ownerDrawerTarget.id]: {
+              ...(current[ownerDrawerTarget.id] ?? draft),
+              ...next
+            }
+          }));
+        }
+      };
+    }
+    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === ownerDrawerTarget.id);
+    if (!module) return null;
+    return {
+      title: module.name,
+      subtitle: `${module.code} · 检查模块`,
+      owners: moduleOwnerDrafts[ownerDrawerTarget.id] ?? ownersOfModule(module),
+      candidateLabel: `检查模块 ${module.name} IDaaS 负责人`,
+      onChange: (next: OwnerEditorChange) => {
+        setModuleOwnerDrafts(current => ({
+          ...current,
+          [ownerDrawerTarget.id]: next.owners
+        }));
+      }
+    };
+  })();
   const workshops = data.hierarchy.workshops.filter(
     workshop => !projectDraft?.factoryId || idOf(workshop.factoryId) === projectDraft.factoryId
   );
@@ -8712,6 +8860,7 @@ function BaseConfigView({
       setSelectedModuleConfigId('');
       setTransferTargetPhaseId('');
       setNewCheckDraft(null);
+      setOwnerDrawerTarget(null);
       return;
     }
     setProjectDraft({
@@ -9629,15 +9778,9 @@ function BaseConfigView({
                     <td className="min-w-[170px]">
                       <CompactOwnerListEditor
                         owners={draft.owners}
-                        ownerCandidates={data.ownerCandidates}
-                        canWrite={canWrite}
                         candidateLabel={`配置中心 ${item.title} IDaaS 责任人`}
-                        onChange={next =>
-                          setCheckItemDrafts(current => ({
-                            ...current,
-                            [idOf(item.id)]: { ...draft, ...next }
-                          }))
-                        }
+                        isActive={ownerDrawerTarget?.kind === 'check' && ownerDrawerTarget.id === idOf(item.id)}
+                        onOpen={() => setOwnerDrawerTarget({ kind: 'check', id: idOf(item.id) })}
                       />
                     </td>
                     <td className="min-w-[160px]">
@@ -9729,15 +9872,9 @@ function BaseConfigView({
                         <span className="field-label">模块负责人</span>
                         <CompactOwnerListEditor
                           owners={draftOwners}
-                          ownerCandidates={data.ownerCandidates}
-                          canWrite={canWrite}
                           candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
-                          onChange={next =>
-                            setModuleOwnerDrafts(current => ({
-                              ...current,
-                              [moduleId]: next.owners
-                            }))
-                          }
+                          isActive={ownerDrawerTarget?.kind === 'module' && ownerDrawerTarget.id === moduleId}
+                          onOpen={() => setOwnerDrawerTarget({ kind: 'module', id: moduleId })}
                         />
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -9785,6 +9922,17 @@ function BaseConfigView({
           </div>
         </div>
       </section>
+      <OwnerEditorDrawer
+        open={Boolean(ownerDrawerConfig)}
+        title={ownerDrawerConfig?.title ?? '负责人'}
+        subtitle={ownerDrawerConfig?.subtitle}
+        owners={ownerDrawerConfig?.owners ?? []}
+        ownerCandidates={data.ownerCandidates}
+        canWrite={canWrite}
+        candidateLabel={ownerDrawerConfig?.candidateLabel ?? '配置中心 IDaaS 负责人'}
+        onChange={next => ownerDrawerConfig?.onChange(next)}
+        onClose={() => setOwnerDrawerTarget(null)}
+      />
     </div>
   );
 }

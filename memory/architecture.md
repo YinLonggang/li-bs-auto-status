@@ -303,6 +303,7 @@
 
 - 检查项列表和配置中心检查项表格不再默认展开完整负责人搜索器；行内默认展示负责人头像栈和人数，点击头像入口后才展开 IDaaS 搜索、候选和移除操作。
 - 配置中心底部检查模块列表的模块负责人维护也采用同一紧凑头像入口，避免每个列表卡片默认铺开候选人搜索面板。
+- 负责人搜索和候选列表进一步收口到固定右侧抽屉 `OwnerEditorDrawer`；表格行和模块卡片只渲染摘要按钮，点击后由抽屉承载完整编辑器，避免 `<td>` 参与展开布局导致行高或列宽变化。
 - `OwnerCandidate` 与 `CheckItemOwner` 前端模型补齐 `avatarUrl`；API adapter 从候选人、owner 顶层字段和 owner metadata 中归一化头像 URL，保存 owner 时把头像 URL 写回 metadata。
 - 后端 IDaaS 候选人接口透传 `avatar_url`，来源包括当前 IDaaS 用户、Mongo profile 缓存和已保存检查项 owner metadata；无头像时前端仍用姓名首字兜底。
 - 检查项列表中的附件面板在 compact 模式下默认收起上传表单，只显示附件概览和“上传”入口，点击后再展开文件选择。

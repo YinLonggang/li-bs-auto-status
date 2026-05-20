@@ -455,7 +455,8 @@
 ### 检查项列表密度与负责人头像
 
 - 配置中心检查项表格、检查项列表和配置中心检查模块列表中的负责人维护改为默认头像栈展示，点击后再展开完整负责人搜索器，解决列表行被候选人搜索框和候选人卡片撑高的问题。
+- 二次修正为右侧抽屉编辑：负责人搜索器不再渲染在表格单元格内，表格行只保留头像摘要按钮，点击后由 fixed drawer 承载候选人搜索和增删操作。
 - `UserAvatar` 支持真实头像 URL，图片加载失败时回退姓名/IDaaS 首字；前端 owner/candidate 类型、归一化和保存链路均补齐 `avatarUrl`。
 - 后端 `/api/li-bs-auto-status/v1/idaas-candidates/` 候选人返回补齐 `avatar_url` 字段；候选来源包括当前登录用户、Mongo profile 缓存和已保存检查项 owner metadata。
 - 检查项列表附件面板在 compact 模式下默认折叠上传控件，避免每一行直接展示文件选择器。
-- 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。
+- 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。右侧抽屉修正后复跑 `npm run type-check`、`npm run build` 和 `git diff --check` 通过，3005 返回 HTTP 200。
