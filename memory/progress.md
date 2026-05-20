@@ -62,7 +62,7 @@
 - 配置中心项目范围筛选与项目实例列表只展示项目实例，不再把初始化模板下拉混入列表筛选区。
 - 新增独立“创建项目实例”折叠区，承载工厂/车间/产线范围选择、初始化模板选择和“创建项目实例”按钮，并说明初始化模板不会修改已有项目。
 - 项目模板模块、模板页和相关保存/删除提示统一改为“项目模板源数据”；配置中心补齐动作改为“按默认模板补齐项目实例”。
-- 阶段页移除并列阶段模板展示；Settings fallback 移除阶段模板和检查项模板列表，只展示检查模块与负责人候选。
+- 阶段页移除并列阶段模板展示；Settings fallback 移除阶段模板、检查项模板和负责人候选列表，只展示检查模块状态。
 - 本轮验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`、`git diff --check`。
 
 ### 重点问题字段级通用附件上传
@@ -82,7 +82,7 @@
 
 ### 项目模板独立模块
 
-- 侧边栏新增“项目模板”模块，创建项目模板和模板检查项维护从配置中心剥离，配置中心只保留项目实例、检查模块和负责人候选。
+- 侧边栏新增“项目模板”模块，创建项目模板和模板检查项维护从配置中心剥离，配置中心只保留项目实例和模块负责人配置。
 - 项目模板页独立列出后端 `PhaseTemplate`，展示模板版本、阶段数、清单模板数、模板检查项数和启用状态。
 - 用户点击项目模板后，下方横向表格展示该模板下的 `ChecklistTemplate`；再点击清单模板后，可以维护 `item_templates`。
 - 模板检查项支持新增、删除、修改排序、标题、描述/验收口径、优先级、计划开始、计划结束和启用状态；保存走 `PATCH /checklist-templates/{id}/`。
@@ -196,7 +196,7 @@
 - Dashboard 项目统计补齐 `planned_start` / `planned_end`、阶段逾期和检查项逾期字段兼容；逾期总数缺失时由两类逾期相加。
 - 基础配置默认阶段/检查项删除入口下线，只有后端返回 `can_delete=true` 的自定义项才展示删除；默认项通过启用/停用维护。
 - 导出任务下载按钮改为使用 `has_result` 判断，timeline 项目 ID 兼容顶层 `project_id` 与 `project.id`。
-- 侧边栏配置入口收敛为“配置中心”，项目列表、项目基础信息、六阶段、阶段检查项、模块/模板和负责人候选在同一工作台完成。
+- 侧边栏配置入口收敛为“配置中心”，项目列表、项目基础信息、六阶段、阶段检查项和模块负责人配置在同一工作台完成。
 - 配置中心补齐检查项新增路径，调用真实 `/projects/{id}/check-items/`，并保持编辑、停用和自定义项删除路径。
 - Dashboard 项目统计、Dashboard 模块泳道/检查项详情、配置中心项目/阶段/检查项、时间甘特、检查项表、重点问题、碰撞一页纸、报告定义和导出任务均补齐稳定筛选/搜索。
 - 删除空 `li-bs-auto-status/mocks` 目录，运行期仍无 MSW、mock worker 或本地填充数据入口。
@@ -456,7 +456,8 @@
 
 - 配置中心检查项表格、检查项列表和配置中心检查模块列表中的负责人维护改为默认头像栈展示，点击后再展开完整负责人搜索器，解决列表行被候选人搜索框和候选人卡片撑高的问题。
 - 二次修正为右侧抽屉编辑：负责人搜索器不再渲染在表格单元格内，表格行只保留头像摘要按钮，点击后由 fixed drawer 承载候选人搜索和增删操作。
+- 配置中心底部“模块与负责人候选”改为“模块负责人配置”紧凑表格，移除右侧负责人候选常驻列表；Settings fallback 也不再展示候选人列表。
 - `UserAvatar` 支持真实头像 URL，图片加载失败时回退姓名/IDaaS 首字；前端 owner/candidate 类型、归一化和保存链路均补齐 `avatarUrl`。
 - 后端 `/api/li-bs-auto-status/v1/idaas-candidates/` 候选人返回补齐 `avatar_url` 字段；候选来源包括当前登录用户、Mongo profile 缓存和已保存检查项 owner metadata。
 - 检查项列表附件面板在 compact 模式下默认折叠上传控件，避免每一行直接展示文件选择器。
-- 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。右侧抽屉修正后复跑 `npm run type-check`、`npm run build` 和 `git diff --check` 通过，3005 返回 HTTP 200。
+- 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。右侧抽屉和模块负责人配置表修正后复跑 `npm run type-check`、`npm run build` 和 `git diff --check` 通过，3005 返回 HTTP 200。

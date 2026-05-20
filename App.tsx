@@ -9052,7 +9052,7 @@ function BaseConfigView({
         {projectWorkbench}
         <section className="panel">
           <h2 className="text-xl font-semibold">配置中心</h2>
-          <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段、检查项、模块与负责人候选。</p>
+          <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段、检查项与模块负责人配置。</p>
         </section>
       </div>
     );
@@ -9845,38 +9845,46 @@ function BaseConfigView({
         <div className="panel-header">
           <div>
             <p className="kicker">Base Data</p>
-            <h2 className="text-xl font-semibold">模块与负责人候选</h2>
-            <p className="text-sm text-ink-muted">检查项模块和 IDaaS 候选人留在项目配置中心；项目模板源数据在侧边栏“项目模板”模块维护。</p>
+            <h2 className="text-xl font-semibold">模块负责人配置</h2>
+            <p className="text-sm text-ink-muted">为检查模块维护默认负责人；需要换人时直接打开搜索抽屉，项目模板源数据在侧边栏“项目模板”模块维护。</p>
           </div>
-          <span className="chip">{data.inspectionModules.length} 模块 · {data.ownerCandidates.length} 候选人</span>
+          <span className="chip">{data.inspectionModules.length} 模块</span>
         </div>
-        <div className="mt-4 grid gap-4 xl:grid-cols-3">
-          <div className="rounded-lg border border-outline bg-surface-soft p-4 xl:col-span-2">
-            <div className="text-sm font-semibold text-ink">检查模块</div>
-            <div className="mt-3 space-y-2">
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[900px]">
+            <thead>
+              <tr>
+                <th>模块</th>
+                <th>检查项</th>
+                <th>模块负责人</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
               {bySequence(data.inspectionModules).map(module => {
                 const moduleId = idOf(module.id);
                 const draftOwners = moduleOwnerDrafts[moduleId] ?? ownersOfModule(module);
                 const moduleCheckItems = data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
                 return (
-                  <div key={module.id} className="rounded-lg border border-outline bg-surface px-3 py-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-ink">{module.name}</div>
-                        <div className="text-xs text-ink-muted">{module.code} · {moduleCheckItems.length} 项检查项</div>
-                      </div>
+                  <tr key={module.id}>
+                    <td className="min-w-[260px]">
+                      <div className="font-semibold text-ink">{module.name}</div>
+                      <div className="mt-1 text-xs text-ink-muted">{module.code}</div>
+                    </td>
+                    <td className="whitespace-nowrap text-ink-muted">{moduleCheckItems.length} 项</td>
+                    <td className="min-w-[180px]">
+                      <CompactOwnerListEditor
+                        owners={draftOwners}
+                        candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
+                        isActive={ownerDrawerTarget?.kind === 'module' && ownerDrawerTarget.id === moduleId}
+                        onOpen={() => setOwnerDrawerTarget({ kind: 'module', id: moduleId })}
+                      />
+                    </td>
+                    <td className="whitespace-nowrap">
                       <StatusPill status={module.isActive ? 'active' : 'disabled'} />
-                    </div>
-                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(180px,240px)_auto] lg:items-start">
-                      <div>
-                        <span className="field-label">模块负责人</span>
-                        <CompactOwnerListEditor
-                          owners={draftOwners}
-                          candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
-                          isActive={ownerDrawerTarget?.kind === 'module' && ownerDrawerTarget.id === moduleId}
-                          onOpen={() => setOwnerDrawerTarget({ kind: 'module', id: moduleId })}
-                        />
-                      </div>
+                    </td>
+                    <td className="min-w-[260px]">
                       <div className="flex flex-wrap gap-2">
                         <button
                           className="btn btn-primary btn--sm"
@@ -9898,28 +9906,17 @@ function BaseConfigView({
                           应用到检查项
                         </button>
                       </div>
-                    </div>
-                  </div>
+                    </td>
+                  </tr>
                 );
               })}
-              {!data.inspectionModules.length ? <EmptyState message="暂无检查模块。" /> : null}
-            </div>
-          </div>
-          <div className="rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="text-sm font-semibold text-ink">负责人候选</div>
-            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
-              {data.ownerCandidates.map(owner => (
-                <div key={owner.idaasId || owner.displayName} className="flex items-center gap-2 rounded-lg border border-outline bg-surface px-3 py-2">
-                  <UserAvatar name={owner.displayName} idaasId={owner.idaasId} avatarUrl={owner.avatarUrl} />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-ink">{owner.displayName || owner.idaasId}</div>
-                    <div className="mt-1 truncate text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
-                  </div>
-                </div>
-              ))}
-              {!data.ownerCandidates.length ? <EmptyState message="暂无 IDaaS 责任人候选，可在责任人编辑器中输入关键字搜索。" /> : null}
-            </div>
-          </div>
+              {!data.inspectionModules.length ? (
+                <tr>
+                  <td colSpan={5} className="text-center text-ink-muted">暂无检查模块。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
       </section>
       <OwnerEditorDrawer
@@ -9939,29 +9936,34 @@ function BaseConfigView({
 
 function SettingsView({ data }: { data: WorkspaceData }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+    <div className="grid gap-5">
       <section className="panel">
         <h2 className="text-xl font-semibold">检查模块</h2>
-        <p className="mt-2 text-sm text-ink-muted">设置 fallback 仅展示基础数据，不展示模板源数据。</p>
-        <div className="mt-4 space-y-2">
-          {bySequence(data.inspectionModules).map(module => (
-            <div key={module.id} className="flex items-center justify-between rounded-lg border border-outline bg-surface-soft p-3">
-              <span className="font-semibold text-ink">{module.name}</span>
-              <StatusPill status={module.isActive ? 'active' : 'disabled'} />
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="panel">
-        <h2 className="text-xl font-semibold">负责人候选</h2>
-        <div className="mt-4 space-y-2">
-          {data.ownerCandidates.map(owner => (
-            <div key={owner.idaasId || owner.displayName} className="rounded-lg border border-outline bg-surface-soft p-3">
-              <div className="font-semibold text-ink">{owner.displayName || owner.idaasId}</div>
-              <div className="text-xs text-ink-muted">{owner.department || owner.email || owner.idaasId}</div>
-            </div>
-          ))}
-          {!data.ownerCandidates.length ? <EmptyState message="暂无 IDaaS 负责人候选。" /> : null}
+        <p className="mt-2 text-sm text-ink-muted">设置 fallback 仅展示模块基础状态；负责人通过配置中心搜索选择。</p>
+        <div className="table-shell mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>模块</th>
+                <th>编码</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bySequence(data.inspectionModules).map(module => (
+                <tr key={module.id}>
+                  <td className="font-semibold text-ink">{module.name}</td>
+                  <td className="text-ink-muted">{module.code}</td>
+                  <td><StatusPill status={module.isActive ? 'active' : 'disabled'} /></td>
+                </tr>
+              ))}
+              {!data.inspectionModules.length ? (
+                <tr>
+                  <td colSpan={3} className="text-center text-ink-muted">暂无检查模块。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
       </section>
     </div>
