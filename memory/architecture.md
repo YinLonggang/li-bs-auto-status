@@ -1,5 +1,10 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-20 明暗主题状态色复核
+
+- Auto Status 状态文字继续通过 `primary/accent/success/warning` 语义 token 表达；亮色主题 token 已使用深色蓝、深青、深绿、深琥珀，暗色主题保持可读。
+- 碰撞一页纸 Excel 画布内的 `bg-teal-700 text-white` 与白底输入框 focus teal border 属于固定报表版式，不是浅色文字压白底；后续主题修复不要把该版式误改成全局工作台 token。
+
 ## 2026-05-20 亮色主题成功态可读性
 
 - Auto Status 的 `success` 语义色改为 CSS 主题变量，由 Tailwind `success` token 读取 `--success`。

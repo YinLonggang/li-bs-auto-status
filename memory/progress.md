@@ -2,6 +2,11 @@
 
 ## 2026-05-20
 
+### 明暗主题状态色复核
+
+- 复核 Auto Status 的 `success/warning/primary/accent` 状态文字，现有代码已通过 CSS 主题变量或深色 light token 保持浅底可读，本轮无需继续修改组件代码。
+- 复核剩余 `teal` 命中均来自碰撞一页纸 Excel 白底版式：深 `teal-700` 底配白字或输入 focus 边框，不属于浅色文字压浅底问题。
+
 ### 亮色主题成功态可读性
 
 - 定位成功/提示态主要来自 `success` Tailwind token：`StatusPill`、保存提示、共享盘配置成功消息和超级管理员 badge 均使用 `bg-success/10 text-success`。
