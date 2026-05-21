@@ -1,5 +1,11 @@
 # li-bs-auto-status 前端架构记录
 
+## 2026-05-21 负责人头像统一缓存
+
+- 负责人头像展示不在 Auto Status 前端或业务服务中自行解析 IDaaS 来源；后端返回的 `owner_avatar_url` / `owners[].avatar_url` 来自 `li_sicar` 顶层 IDaaS/Mongo 用户资料缓存。
+- 前端 owner fallback 会读取后端 `owner_avatar_url`，用于历史只有 `owner_idaas_id/owner_display_name`、尚未持久化 `owners[]` 头像 metadata 的记录。
+- 负责人候选搜索当前仅使用当前登录用户、本地 Mongo 用户资料缓存和历史业务快照；应用没有 IDaaS 全员实时搜索权限，未登录同步进缓存的用户不能被搜索选中。
+
 ## 2026-05-20 负责人候选与生产分包
 
 - 负责人编辑器继续以 `OwnerListEditor` 为统一入口，默认候选来自 workspace 的 `/idaas-candidates/` 空查询结果；输入关键字时仍调用同一接口动态搜索，不在前端维护手工负责人或本地 mock 候选。

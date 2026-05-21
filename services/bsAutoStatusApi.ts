@@ -132,7 +132,12 @@ const normalizeCheckItemOwner = (input: unknown): CheckItemOwner => {
   };
 };
 
-const normalizeCheckItemOwners = (input: unknown, fallbackName = '', fallbackIdaasId = '') => {
+const normalizeCheckItemOwners = (
+  input: unknown,
+  fallbackName = '',
+  fallbackIdaasId = '',
+  fallbackAvatarUrl = ''
+) => {
   const seen = new Set<string>();
   const owners = asArray(input)
     .map(normalizeCheckItemOwner)
@@ -145,7 +150,7 @@ const normalizeCheckItemOwners = (input: unknown, fallbackName = '', fallbackIda
     });
   if (owners.length) return owners;
   return fallbackIdaasId
-    ? [{ displayName: fallbackName || fallbackIdaasId, idaasId: fallbackIdaasId }]
+    ? [{ displayName: fallbackName || fallbackIdaasId, idaasId: fallbackIdaasId, avatarUrl: fallbackAvatarUrl || undefined }]
     : [];
 };
 
@@ -643,7 +648,8 @@ const normalizeInspectionModule = (input: unknown): InspectionModule => {
   const ownerName =
     firstString(raw, ['ownerName', 'owner_display_name', 'owner_name']) ||
     firstString(metadata, ['ownerName', 'owner_name']);
-  const owners = normalizeCheckItemOwners(metadata.owners, ownerName, ownerIdaasId);
+  const ownerAvatarUrl = firstString(raw, ['ownerAvatarUrl', 'owner_avatar_url', 'avatarUrl', 'avatar_url']);
+  const owners = normalizeCheckItemOwners(metadata.owners, ownerName, ownerIdaasId, ownerAvatarUrl);
   return {
     id: firstId(raw, ['id']),
     code: firstString(raw, ['code']),
@@ -709,7 +715,8 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
   const ownerName = ownerIdaasId
     ? firstString(raw, ['ownerName', 'owner_display_name', 'owner_name'], '未设置')
     : firstString(raw, ['ownerName', 'owner_display_name'], '未设置');
-  const owners = normalizeCheckItemOwners(raw.owners, ownerName === '未设置' ? '' : ownerName, ownerIdaasId);
+  const ownerAvatarUrl = firstString(raw, ['ownerAvatarUrl', 'owner_avatar_url', 'avatarUrl', 'avatar_url']);
+  const owners = normalizeCheckItemOwners(raw.owners, ownerName === '未设置' ? '' : ownerName, ownerIdaasId, ownerAvatarUrl);
   return {
     id: firstId(raw, ['id']),
     projectId: firstId(raw, ['projectId', 'project']),

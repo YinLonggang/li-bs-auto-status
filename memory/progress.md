@@ -1,5 +1,14 @@
 # li-bs-auto-status 进度记录
 
+## 2026-05-21
+
+### 负责人头像缓存刷新
+
+- 目标：修复历史负责人头像仍显示旧快照的问题，并保持头像来源由顶层 `li_sicar` IDaaS/Mongo 用户资料缓存统一提供。
+- 完成：前端 API adapter 在历史 owner fallback 中读取后端 `owner_avatar_url`；检查项/模块 owner 正常化继续优先使用后端返回的只读头像字段。
+- 口径：当前应用没有 IDaaS 全员姓名实时搜索权限，候选人搜索仍仅覆盖当前登录用户、本地 Mongo 用户资料缓存和历史业务快照；未登录同步进缓存的用户不能被搜索选中。
+- 验证：`npm run type-check`、`npm run build` 与 `git diff --check` 通过；后端 Auto Status 全量测试 60 tests OK。
+
 ## 2026-05-20
 
 ### 负责人候选搜索与分包警告
