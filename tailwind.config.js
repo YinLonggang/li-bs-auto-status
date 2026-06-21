@@ -3,12 +3,7 @@ import defaultTheme from 'tailwindcss/defaultTheme';
 export default {
   content: [
     './index.html',
-    './index.tsx',
-    './App.tsx',
-    './components/**/*.{ts,tsx}',
-    './hooks/**/*.{ts,tsx}',
-    './services/**/*.{ts,tsx}',
-    './types/**/*.{ts,tsx}'
+    './src/**/*.{ts,tsx}',
   ],
   darkMode: ['class', '[data-theme="dark"]'],
   theme: {

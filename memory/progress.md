@@ -470,3 +470,8 @@
 - 后端 `/api/li-bs-auto-status/v1/idaas-candidates/` 候选人返回补齐 `avatar_url` 字段；候选来源包括当前登录用户、Mongo profile 缓存和已保存检查项 owner metadata。
 - 检查项列表附件面板在 compact 模式下默认折叠上传控件，避免每一行直接展示文件选择器。
 - 本轮验证通过：Auto Status `npm run type-check`、`npm run build`、`git diff --check`；后端 `manage.py check --settings=li_sicar.settings.dev` 与 `manage.py test li_bs_auto_status`（58 tests OK）通过；重启 8000 后端后，`GET http://127.0.0.1:3005/` 与 `GET /api/li-bs-auto-status/v1/idaas-candidates/?limit=2` 均返回 HTTP 200。右侧抽屉和模块负责人配置表修正后复跑 `npm run type-check`、`npm run build` 和 `git diff --check` 通过，3005 返回 HTTP 200。
+# 2026-06-22
+
+- 将 BS Auto Status SPA 运行源码统一迁移到 `src/`，覆盖入口、组件、hooks、services、types 和配置。
+- 同步修正 Vite alias、TypeScript path、Tailwind content 和 HTML 入口。
+- 验证通过：`npm run type-check`、`npm run build`、`npm run permission-regression`；用户态场景因缺少 Cookie 按脚本逻辑跳过。
