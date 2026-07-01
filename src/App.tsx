@@ -63,7 +63,6 @@ import {
   fetchExportDownloadLink,
   fetchKeyIssueAuditLogs,
   fetchProjectAuditLogs,
-  fetchSharedStorageProfile,
   fetchOwnerCandidates,
   fetchWorkspaceData,
   importCollisionReportsCsv,
@@ -81,8 +80,6 @@ import {
   updatePhaseTemplate,
   updateProject,
   updateProjectPhase,
-  updateSharedStorageProfile,
-  testSharedStorageProfile,
   uploadAttachment
 } from './services/bsAutoStatusApi';
 import type {
@@ -115,7 +112,6 @@ import type {
   ProjectPhase,
   ProjectStatistics,
   ReportDefinition,
-  SharedStorageProfile,
   UserProfile,
   WorkspaceData
 } from './types';
@@ -7220,216 +7216,6 @@ type CheckItemConfigDraft = {
 const ownersFromDraft = (draft: Pick<CheckItemConfigDraft, 'owners' | 'ownerName' | 'ownerIdaasId'>) =>
   normalizeOwners(draft.owners);
 
-type SharedStorageDraft = SharedStorageProfile & { smbPassword: string };
-
-const emptySharedStorageDraft = (): SharedStorageDraft => ({
-  scope: 'li_bs_auto_status',
-  displayName: 'Auto Status 附件共享盘',
-  isActive: false,
-  smbUrl: '',
-  smbHost: '',
-  smbShare: '',
-  smbPath: '',
-  smbDomain: '',
-  smbUsername: '',
-  smbPassword: '',
-  passwordSet: false,
-  objectPrefix: 'shared-storage',
-  envSegment: '',
-  smbTimeout: 10,
-  smbChunkKb: 256,
-  smbRateLimitMbps: 0,
-  smbMaxConcurrency: 4,
-  smbMaxSizeMb: 2048,
-  description: ''
-});
-
-function SharedStorageSettingsPanel({ canWrite }: { canWrite: boolean }) {
-  const [draft, setDraft] = useState<SharedStorageDraft>(emptySharedStorageDraft);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    fetchSharedStorageProfile('li_bs_auto_status')
-      .then(profile => {
-        if (!mounted) return;
-        setDraft({ ...emptySharedStorageDraft(), ...profile, smbPassword: '' });
-        setError('');
-      })
-      .catch(err => {
-        if (!mounted) return;
-        setError(err instanceof Error ? err.message : '共享盘配置加载失败');
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const save = async () => {
-    setSaving('save');
-    setMessage('');
-    setError('');
-    try {
-      const profile = await updateSharedStorageProfile('li_bs_auto_status', draft);
-      setDraft({ ...emptySharedStorageDraft(), ...profile, smbPassword: '' });
-      setMessage('共享盘配置已保存。');
-    } catch (err) {
-      setError(mutationErrorMessage(err, '共享盘配置保存失败'));
-    } finally {
-      setSaving('');
-    }
-  };
-
-  const test = async () => {
-    setSaving('test');
-    setMessage('');
-    setError('');
-    try {
-      const profile = await testSharedStorageProfile('li_bs_auto_status');
-      setDraft({ ...emptySharedStorageDraft(), ...profile, smbPassword: '' });
-      setMessage(profile.lastValidationMessage || '共享盘连接验证通过。');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '共享盘连接验证失败');
-    } finally {
-      setSaving('');
-    }
-  };
-
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="kicker">SMB Storage</p>
-          <h2 className="text-xl font-semibold">附件共享盘配置</h2>
-          <p className="text-sm text-ink-muted">仅用于 Auto Status 附件上传、图片预览和管理员下载；PLC 共享盘仍按工厂/车间独立维护。</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="chip">{draft.isActive ? '已启用' : '未启用'}</span>
-          <span className="chip">{draft.passwordSet ? '密码已设置' : '未设置密码'}</span>
-        </div>
-      </div>
-      {loading ? <div className="mt-4 text-sm text-ink-muted">正在加载共享盘配置...</div> : null}
-      {message ? <div className="mt-4 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">{message}</div> : null}
-      {error ? <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
-      <div className="mt-4 grid gap-3 lg:grid-cols-3">
-        <label>
-          <span className="field-label">配置名称</span>
-          <input className="input" value={draft.displayName ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, displayName: event.target.value })} placeholder="Auto Status 附件共享盘" />
-        </label>
-        <label>
-          <span className="field-label">对象前缀</span>
-          <input className="input" value={draft.objectPrefix ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, objectPrefix: event.target.value })} placeholder="shared-storage" />
-        </label>
-        <label>
-          <span className="field-label">环境目录</span>
-          <input className="input" value={draft.envSegment ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, envSegment: event.target.value })} placeholder="留空使用 IDAAS_ENV" />
-        </label>
-        <label className="lg:col-span-3">
-          <span className="field-label">SMB URL</span>
-          <input className="input" value={draft.smbUrl ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbUrl: event.target.value })} placeholder="smb://server/share/base-path" />
-        </label>
-        <label>
-          <span className="field-label">SMB 主机</span>
-          <input className="input" value={draft.smbHost ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbHost: event.target.value })} placeholder="server" />
-        </label>
-        <label>
-          <span className="field-label">SMB 共享名</span>
-          <input className="input" value={draft.smbShare ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbShare: event.target.value })} placeholder="share" />
-        </label>
-        <label>
-          <span className="field-label">业务根路径</span>
-          <input className="input" value={draft.smbPath ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbPath: event.target.value })} placeholder="li-sicar/auto-status" />
-        </label>
-        <label>
-          <span className="field-label">域</span>
-          <input className="input" value={draft.smbDomain ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbDomain: event.target.value })} placeholder="可选" />
-        </label>
-        <label>
-          <span className="field-label">用户名</span>
-          <input className="input" value={draft.smbUsername ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbUsername: event.target.value })} autoComplete="username" />
-        </label>
-        <label>
-          <span className="field-label">密码</span>
-          <input className="input" type="password" value={draft.smbPassword} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbPassword: event.target.value })} placeholder={draft.passwordSet ? '留空则保留原密码' : '输入密码'} autoComplete="new-password" />
-        </label>
-      </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-5">
-        <label>
-          <span className="field-label">超时秒数</span>
-          <input className="input" type="number" min={1} step={0.5} value={draft.smbTimeout ?? 10} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbTimeout: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span className="field-label">分片 KB</span>
-          <input className="input" type="number" min={1} value={draft.smbChunkKb ?? 256} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbChunkKb: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span className="field-label">限速 Mbps</span>
-          <input className="input" type="number" min={0} value={draft.smbRateLimitMbps ?? 0} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbRateLimitMbps: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span className="field-label">最大并发</span>
-          <input className="input" type="number" min={1} value={draft.smbMaxConcurrency ?? 4} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbMaxConcurrency: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span className="field-label">最大文件 MB</span>
-          <input className="input" type="number" min={1} value={draft.smbMaxSizeMb ?? 2048} disabled={!canWrite} onChange={event => setDraft({ ...draft, smbMaxSizeMb: Number(event.target.value) })} />
-        </label>
-      </div>
-      <label className="mt-3 block">
-        <span className="field-label">备注</span>
-        <textarea className="input min-h-[88px]" value={draft.description ?? ''} disabled={!canWrite} onChange={event => setDraft({ ...draft, description: event.target.value })} placeholder="记录共享盘用途、申请单或联系人" />
-      </label>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-outline pt-4">
-        <div className="min-w-0 text-xs text-ink-muted">
-          <div className="truncate">生效 URL：{draft.effectiveSmbUrl || '保存后生成'}</div>
-          <div>最近验证：{draft.lastValidationStatus ? `${draft.lastValidationStatus} · ${draft.lastValidationMessage || '-'}` : '未验证'}</div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-sm text-ink-muted">
-            <input type="checkbox" checked={draft.isActive ?? false} disabled={!canWrite} onChange={event => setDraft({ ...draft, isActive: event.target.checked })} />
-            启用
-          </label>
-          <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || !draft.id || !!saving} onClick={() => void test()}>
-            <RefreshCcw className="h-4 w-4" />
-            {saving === 'test' ? '验证中' : '测试连接'}
-          </button>
-          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !!saving} onClick={() => void save()}>
-            <Save className="h-4 w-4" />
-            {saving === 'save' ? '保存中' : '保存配置'}
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SharedStorageSettingsView({ canWrite }: { canWrite: boolean }) {
-  return (
-    <div className="space-y-5">
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="kicker">Global Attachment Storage</p>
-            <h1 className="text-2xl font-semibold">Auto Status 全局附件共享盘</h1>
-            <p className="text-sm text-ink-muted">
-              此配置对所有 Auto Status 项目实例生效，不随项目筛选、工厂、车间或产线变化；项目附件只保存受控对象键。
-            </p>
-          </div>
-          <span className="chip">scope: li_bs_auto_status</span>
-        </div>
-      </section>
-      <SharedStorageSettingsPanel canWrite={canWrite} />
-    </div>
-  );
-}
-
 function ProjectTemplateView({
   data,
   canWrite,
@@ -10828,9 +10614,6 @@ export default function App() {
           onDeleteInspectionModule={handleDeleteInspectionModuleConfig}
         />
       );
-    }
-    if (currentView === 'storage') {
-      return <SharedStorageSettingsView canWrite={canWrite} />;
     }
     if (currentView === 'baseConfig') {
       return (

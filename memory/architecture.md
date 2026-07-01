@@ -92,11 +92,9 @@
 
 ## 2026-05-19 附件共享盘配置
 
-- Auto Status 不直接读取 `SHARED_STORAGE_SMB_URL / SMB_URL / PLC_SHARE_SMB_URL` 环境变量作为业务配置入口；SPA 配置中心通过共享存储配置 API 维护 `li_bs_auto_status` scope。
-- “附件共享盘”是 Auto Status 全局配置模块，侧边栏独立入口维护唯一 `li_bs_auto_status` profile；它对所有项目实例生效，不随项目筛选、工厂、车间或产线变化。
-- 配置中心只负责项目实例、阶段、检查项和模块负责人，不再承载共享盘配置，避免用户误认为附件存储挂在单个项目下。
-- 密码字段写入时前端只提交非空值，留空保留后端原密码；读取接口只返回 `passwordSet`，不回传真实密码。
-- PLC 的共享盘配置仍由 `li_sicar_plc` 工厂/车间模型维护，Auto Status 仅消费通用共享存储 profile。
+- 本节是历史记录，已被 2026-07-02 全局 shared-storage singleton 规则取代。
+- Auto Status 不再维护“附件共享盘”侧边栏入口、共享盘配置表单或 scope API client。
+- Auto Status 附件继续由后端附件服务消费全局 shared-storage，app 目录固定为 `li-bs-auto-status`，连接、认证和传输参数统一到 `li_sicar` 主页基础配置区维护。
 
 ## 2026-05-15 碰撞一页纸字段级贴图
 

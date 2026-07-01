@@ -101,33 +101,6 @@ export type AttachmentPreview = {
   fileName?: string;
 };
 
-export type SharedStorageProfile = {
-  id?: string | number;
-  scope: string;
-  displayName?: string;
-  isActive?: boolean;
-  smbUrl?: string;
-  smbHost?: string;
-  smbShare?: string;
-  smbPath?: string;
-  smbDomain?: string;
-  smbUsername?: string;
-  passwordSet?: boolean;
-  objectPrefix?: string;
-  envSegment?: string;
-  smbTimeout?: number;
-  smbChunkKb?: number;
-  smbRateLimitMbps?: number;
-  smbMaxConcurrency?: number;
-  smbMaxSizeMb?: number;
-  description?: string;
-  effectiveSmbUrl?: string;
-  lastValidatedAt?: string | null;
-  lastValidationStatus?: string;
-  lastValidationMessage?: string;
-  updatedAt?: string;
-};
-
 export type AuditLog = {
   id: string | number;
   action: string;

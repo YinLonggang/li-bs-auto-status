@@ -1,4 +1,4 @@
-import { BASE_CONFIG_PREFIX, SHARED_STORAGE_PREFIX } from '../config';
+import { BASE_CONFIG_PREFIX } from '../config';
 import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http';
 import type {
   ApiEnvelope,
@@ -32,7 +32,6 @@ import type {
   ProjectStatistics,
   ProjectTimeline,
   ReportDefinition,
-  SharedStorageProfile,
   WorkshopOption,
   WorkspaceData
 } from '../types';
@@ -237,58 +236,6 @@ const optionalDate = (value?: string | null) => {
 };
 
 const metadataOf = (record: RawRecord) => asRecord(record.metadata);
-
-const normalizeSharedStorageProfile = (input: unknown): SharedStorageProfile => {
-  const raw = asRecord(input);
-  return {
-    id: firstOptionalId(raw, ['id']) ?? undefined,
-    scope: firstString(raw, ['scope'], 'li_bs_auto_status'),
-    displayName: firstString(raw, ['displayName', 'display_name']),
-    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, false)),
-    smbUrl: firstString(raw, ['smbUrl', 'smb_url']),
-    smbHost: firstString(raw, ['smbHost', 'smb_host']),
-    smbShare: firstString(raw, ['smbShare', 'smb_share']),
-    smbPath: firstString(raw, ['smbPath', 'smb_path']),
-    smbDomain: firstString(raw, ['smbDomain', 'smb_domain']),
-    smbUsername: firstString(raw, ['smbUsername', 'smb_username']),
-    passwordSet: asBoolean(raw.passwordSet, asBoolean(raw.password_set, false)),
-    objectPrefix: firstString(raw, ['objectPrefix', 'object_prefix'], 'shared-storage'),
-    envSegment: firstString(raw, ['envSegment', 'env_segment']),
-    smbTimeout: firstNumber(raw, ['smbTimeout', 'smb_timeout'], 10),
-    smbChunkKb: firstNumber(raw, ['smbChunkKb', 'smb_chunk_kb'], 256),
-    smbRateLimitMbps: firstNumber(raw, ['smbRateLimitMbps', 'smb_rate_limit_mbps'], 0),
-    smbMaxConcurrency: firstNumber(raw, ['smbMaxConcurrency', 'smb_max_concurrency'], 4),
-    smbMaxSizeMb: firstNumber(raw, ['smbMaxSizeMb', 'smb_max_size_mb'], 2048),
-    description: firstString(raw, ['description']),
-    effectiveSmbUrl: firstString(raw, ['effectiveSmbUrl', 'effective_smb_url']),
-    lastValidatedAt: firstString(raw, ['lastValidatedAt', 'last_validated_at']) || null,
-    lastValidationStatus: firstString(raw, ['lastValidationStatus', 'last_validation_status']),
-    lastValidationMessage: firstString(raw, ['lastValidationMessage', 'last_validation_message']),
-    updatedAt: firstString(raw, ['updatedAt', 'updated_at'])
-  };
-};
-
-const serializeSharedStorageProfile = (
-  input: SharedStorageProfile & { smbPassword?: string }
-) => ({
-  display_name: input.displayName ?? '',
-  is_active: input.isActive ?? false,
-  smb_url: input.smbUrl ?? '',
-  smb_host: input.smbHost ?? '',
-  smb_share: input.smbShare ?? '',
-  smb_path: input.smbPath ?? '',
-  smb_domain: input.smbDomain ?? '',
-  smb_username: input.smbUsername ?? '',
-  ...(input.smbPassword ? { smb_password: input.smbPassword } : {}),
-  object_prefix: input.objectPrefix ?? 'shared-storage',
-  env_segment: input.envSegment ?? '',
-  smb_timeout: input.smbTimeout ?? 10,
-  smb_chunk_kb: input.smbChunkKb ?? 256,
-  smb_rate_limit_mbps: input.smbRateLimitMbps ?? 0,
-  smb_max_concurrency: input.smbMaxConcurrency ?? 4,
-  smb_max_size_mb: input.smbMaxSizeMb ?? 2048,
-  description: input.description ?? ''
-});
 
 const EMPTY_HIERARCHY: HierarchyOptions = {
   factories: [],
@@ -1841,44 +1788,6 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
     timeline,
     ...bundle
   };
-}
-
-export async function fetchSharedStorageProfile(scope = 'li_bs_auto_status'): Promise<SharedStorageProfile> {
-  const payload = unwrap(
-    await requestWithPrefix<ApiEnvelope<unknown> | unknown>(
-      SHARED_STORAGE_PREFIX,
-      `/profiles/${encodeURIComponent(scope)}/`
-    )
-  );
-  return normalizeSharedStorageProfile(payload);
-}
-
-export async function updateSharedStorageProfile(
-  scope: string,
-  input: SharedStorageProfile & { smbPassword?: string }
-): Promise<SharedStorageProfile> {
-  const payload = unwrap(
-    await requestWithPrefix<ApiEnvelope<unknown> | unknown>(
-      SHARED_STORAGE_PREFIX,
-      `/profiles/${encodeURIComponent(scope)}/`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify(serializeSharedStorageProfile(input))
-      }
-    )
-  );
-  return normalizeSharedStorageProfile(payload);
-}
-
-export async function testSharedStorageProfile(scope = 'li_bs_auto_status'): Promise<SharedStorageProfile> {
-  const payload = unwrap(
-    await requestWithPrefix<ApiEnvelope<unknown> | unknown>(
-      SHARED_STORAGE_PREFIX,
-      `/profiles/${encodeURIComponent(scope)}/test/`,
-      { method: 'POST', body: JSON.stringify({}) }
-    )
-  );
-  return normalizeSharedStorageProfile(payload);
 }
 
 const serializePhaseTemplateInput = (input: PhaseTemplateInput) => ({

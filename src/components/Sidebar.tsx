@@ -4,7 +4,6 @@ import {
   ClipboardCheck,
   Download,
   FileWarning,
-  HardDrive,
   LayoutDashboard,
   Menu,
   Moon,
@@ -29,7 +28,6 @@ export type AppTab =
   | 'collision'
   | 'reports'
   | 'templates'
-  | 'storage'
   | 'settings';
 
 export type SidebarMenuItem<TView extends string = AppTab> = {
@@ -47,8 +45,7 @@ export const MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'collision', label: '碰撞一页纸', description: '制造评审材料', icon: BarChart3 },
   { id: 'reports', label: '报告导出', description: '报表与任务', icon: Download },
   { id: 'templates', label: '项目模板', description: '项目模板源数据', icon: SlidersHorizontal },
-  { id: 'baseConfig', label: '配置中心', description: '项目实例与基础数据', icon: SlidersHorizontal },
-  { id: 'storage', label: '附件共享盘', description: '全局附件存储', icon: HardDrive }
+  { id: 'baseConfig', label: '配置中心', description: '项目实例与基础数据', icon: SlidersHorizontal }
 ];
 
 interface SidebarProps {
