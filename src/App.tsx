@@ -12,6 +12,7 @@ import {
   FileDown,
   FileText,
   Flag,
+  Home,
   Image as ImageIcon,
   Lock,
   Moon,
@@ -115,6 +116,7 @@ import type {
   UserProfile,
   WorkspaceData
 } from './types';
+import { resolvePortalUrl } from './utils/portalUrl';
 
 type StatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'primary';
 
@@ -10775,6 +10777,10 @@ export default function App() {
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <a className="btn btn-ghost btn--sm inline-flex items-center gap-1.5" href={resolvePortalUrl()}>
+                <Home size={16} />
+                返回门户
+              </a>
               {profile ? (
                 <div className="header-user">
                   <UserRound className="h-4 w-4 text-primary" />
