@@ -10767,7 +10767,7 @@ export default function App() {
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <MobileMenuButton onClick={() => setSidebarOpen(true)} />
               <div className="min-w-0">
-                <p className="kicker">LI-BS-AUTO-STATUS</p>
+                <p className="kicker">理想BIW云上产线-AutoStatus</p>
                 <h1 className="truncate text-lg font-semibold sm:text-xl">
                   Auto Status 自动化项目状态
                 </h1>

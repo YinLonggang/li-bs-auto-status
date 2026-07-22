@@ -77,7 +77,7 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`fixed left-0 top-0 z-40 flex h-dvh w-72 flex-col border-r border-outline bg-surface shadow-card transition-[transform,width] duration-200 lg:translate-x-0 ${
+      className={`fixed left-0 top-0 z-40 flex h-dvh w-72 flex-col border-r border-outline bg-surface/95 shadow-card backdrop-blur-xl transition-[transform,width] duration-200 lg:translate-x-0 ${
         isDesktopCollapsed ? 'lg:w-20' : 'lg:w-72'
       } ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
     >
@@ -87,9 +87,9 @@ export default function Sidebar({
         }`}
       >
         <div className={isDesktopCollapsed ? 'lg:sr-only' : undefined}>
-          <div className="text-[11px] font-semibold uppercase text-ink-muted">LI-SICAR</div>
-          <div className="text-base font-semibold text-ink">焊装 Auto Status</div>
-          <div className="text-xs text-ink-muted">设备检查流程管理</div>
+          <div className="text-[11px] font-semibold uppercase text-ink-muted">LI-SICAR · BIW CLOUD LINE</div>
+          <div className="text-base font-semibold text-ink">理想BIW云上产线</div>
+          <div className="text-xs text-ink-muted">项目状态中心</div>
         </div>
         <div className="flex items-center gap-2">
           <button

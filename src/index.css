@@ -14,17 +14,24 @@
     --text: 241 245 249;
     --text-muted: 178 190 207;
     --text-subtle: 133 148 169;
-    --primary: 37 99 235;
-    --primary-strong: 29 78 216;
-    --accent: 20 184 166;
-    --accent-soft: 45 212 191;
+    --primary: 29 117 255;
+    --primary-strong: 0 94 231;
+    --accent: 32 244 196;
+    --accent-soft: 86 253 215;
     --success: 22 163 74;
-    --chart-blue: 37 99 235;
-    --chart-teal: 20 184 166;
+    --chart-blue: 29 117 255;
+    --chart-teal: 32 244 196;
     --chart-green: 22 163 74;
     --chart-amber: 217 119 6;
     --chart-red: 220 38 38;
     --chart-slate: 100 116 139;
+    --glow-primary: rgba(29, 117, 255, 0.28);
+    --glow-accent: rgba(32, 244, 196, 0.2);
+    --glow-bottom: rgba(14, 30, 80, 0.6);
+    --glow-opacity: 0.7;
+    --grid-line: rgba(255, 255, 255, 0.04);
+    --grid-line-strong: rgba(255, 255, 255, 0.03);
+    --grid-opacity: 0.2;
   }
 
   [data-theme='light'] {
@@ -38,17 +45,24 @@
     --text: 15 23 42;
     --text-muted: 71 85 105;
     --text-subtle: 100 116 139;
-    --primary: 29 78 216;
-    --primary-strong: 30 64 175;
-    --accent: 13 148 136;
-    --accent-soft: 20 184 166;
+    --primary: 0 74 192;
+    --primary-strong: 0 59 158;
+    --accent: 15 118 110;
+    --accent-soft: 13 148 136;
     --success: 22 101 52;
-    --chart-blue: 29 78 216;
-    --chart-teal: 13 148 136;
+    --chart-blue: 0 74 192;
+    --chart-teal: 15 118 110;
     --chart-green: 22 163 74;
     --chart-amber: 180 83 9;
     --chart-red: 185 28 28;
     --chart-slate: 71 85 105;
+    --glow-primary: rgba(37, 99, 235, 0.18);
+    --glow-accent: rgba(32, 244, 196, 0.12);
+    --glow-bottom: rgba(226, 236, 255, 0.9);
+    --glow-opacity: 0.45;
+    --grid-line: rgba(15, 23, 42, 0.08);
+    --grid-line-strong: rgba(15, 23, 42, 0.05);
+    --grid-opacity: 0.35;
   }
 
   html,
@@ -59,11 +73,39 @@
   }
 
   body {
-    @apply overflow-x-hidden transition-colors duration-200;
+    @apply relative overflow-x-hidden transition-colors duration-200;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(120% 140% at 18% 10%, var(--glow-primary), transparent 55%),
+      radial-gradient(100% 120% at 85% 20%, var(--glow-accent), transparent 60%),
+      radial-gradient(140% 120% at 50% 90%, var(--glow-bottom), transparent 60%);
+    opacity: var(--glow-opacity);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 0),
+      linear-gradient(90deg, var(--grid-line-strong) 1px, transparent 0);
+    background-size: 120px 120px, 120px 120px;
+    opacity: var(--grid-opacity);
+    pointer-events: none;
+    z-index: 0;
   }
 
   #root {
     @apply min-h-screen;
+    position: relative;
+    z-index: 1;
   }
 
   a {
@@ -94,7 +136,7 @@
   }
 
   .panel {
-    @apply rounded-lg border border-outline/90 bg-surface p-4 shadow-card sm:p-5;
+    @apply rounded-lg border border-outline/90 bg-surface/90 p-4 shadow-card sm:p-5;
   }
 
   .panel-header {
@@ -114,7 +156,7 @@
   }
 
   .btn-primary {
-    @apply bg-primary text-white hover:bg-primary-strong;
+    @apply bg-primary text-white shadow-glow hover:bg-primary-strong;
   }
 
   .btn-ghost {
@@ -138,7 +180,7 @@
   }
 
   .metric-card {
-    @apply rounded-lg border border-outline bg-surface-soft p-4;
+    @apply rounded-lg border border-outline bg-surface-soft/85 p-4;
   }
 
   .metric-value {
@@ -146,7 +188,7 @@
   }
 
   .table-shell {
-    @apply w-full overflow-x-auto rounded-lg border border-outline bg-surface;
+    @apply w-full overflow-x-auto rounded-lg border border-outline bg-surface/90;
   }
 
   .data-table {
@@ -194,7 +236,7 @@
   }
 
   .chart-card {
-    @apply rounded-lg border border-outline/90 bg-surface p-4 shadow-card sm:p-5;
+    @apply rounded-lg border border-outline/90 bg-surface/90 p-4 shadow-card sm:p-5;
   }
 
   .chart-card-header {
@@ -365,7 +407,7 @@
   }
 
   .project-phase-step.is-active .project-phase-dot {
-    @apply border-primary bg-primary text-white shadow-[0_0_0_4px_rgba(37,99,235,0.2)];
+    @apply border-primary bg-primary text-white shadow-[0_0_0_4px_rgba(29,117,255,0.2)];
   }
 
   .project-phase-step.is-blocked .project-phase-dot {
@@ -410,7 +452,7 @@
   }
 
   .project-context-bar {
-    @apply flex flex-wrap items-center justify-between gap-4 rounded-lg border border-outline/90 bg-surface p-4 shadow-card sm:p-5;
+    @apply flex flex-wrap items-center justify-between gap-4 rounded-lg border border-outline/90 bg-surface/90 p-4 shadow-card sm:p-5;
   }
 
   .project-context-controls {

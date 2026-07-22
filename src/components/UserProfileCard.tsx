@@ -39,14 +39,14 @@ export default function UserProfileCard({
       <div className={`min-w-0 flex-1 ${desktopCompact ? 'lg:sr-only' : ''}`}>
         <div className="truncate text-sm font-semibold text-ink">{displayName}</div>
         <div className="truncate text-xs text-ink-muted">{subline}</div>
+        <span
+          className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+            roleClass[role]
+          }`}
+        >
+          {profile?.permissionLabel ?? '未登录'}
+        </span>
       </div>
-      <span
-        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-          roleClass[role]
-        } ${desktopCompact ? 'lg:sr-only' : ''}`}
-      >
-        {profile?.permissionLabel ?? '未登录'}
-      </span>
     </div>
   );
 }

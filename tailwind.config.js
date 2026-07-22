@@ -45,7 +45,8 @@ export default {
         mono: ['"Fira Code"', ...defaultTheme.fontFamily.mono]
       },
       boxShadow: {
-        card: '0 12px 28px rgba(15, 23, 42, 0.08)'
+        card: '0 12px 28px rgba(15, 23, 42, 0.08)',
+        glow: '0 0 24px rgba(29, 117, 255, 0.35)'
       }
     }
   },
