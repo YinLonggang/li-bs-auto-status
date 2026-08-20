@@ -36,14 +36,19 @@ try {
   );
 
   let capturedOptions;
+  let createdCount = 0;
+  let destroyedCount = 0;
   globalThis.window.ZEUS = class WorkingZeus {
     constructor(options) {
       capturedOptions = options;
+      createdCount += 1;
     }
 
     collect() {}
     view() {}
-    destroy() {}
+    destroy() {
+      destroyedCount += 1;
+    }
   };
 
   zeusModule.initZeus({ userId: 'openid-1', ldapName: 'tester' });
@@ -54,6 +59,18 @@ try {
   assert.equal(capturedOptions.liUsername, 'tester');
   assert.equal(capturedOptions.liOpenId, 'openid-1');
   assert.equal(capturedOptions.uvKey(), 'openid-1');
+  zeusModule.initZeus({ userId: 'openid-1', ldapName: 'tester' });
+  assert.equal(createdCount, 1);
+  assert.equal(destroyedCount, 0);
+
+  zeusModule.initZeus({ userId: 'openid-2', ldapName: 'tester-2' });
+  assert.equal(createdCount, 2);
+  assert.equal(destroyedCount, 1);
+  assert.equal(capturedOptions.liOpenId, 'openid-2');
+  assert.equal(capturedOptions.uvKey(), 'openid-2');
+
+  zeusModule.destroyZeus();
+  assert.equal(destroyedCount, 2);
 
   process.stdout.write('Zeus contracts passed\n');
 } finally {

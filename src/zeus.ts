@@ -39,6 +39,7 @@ declare global {
 }
 
 let zeus: ZeusInstance | undefined;
+let zeusIdentity: string | undefined;
 
 const resolveZeusEnv = (): 'prod' | 'test' => {
   const env = (
@@ -49,10 +50,29 @@ const resolveZeusEnv = (): 'prod' | 'test' => {
   return env === 'production' ? 'prod' : 'test';
 };
 
-/** 在用户身份可取后调用一次；CDN 加载失败、缺身份或占位身份（unknown/readonly）时静默跳过。 */
+/** 清理当前用户的 Zeus 实例；SDK 异常不得阻断退出或身份切换。 */
+export function destroyZeus(): void {
+  const current = zeus;
+  zeus = undefined;
+  zeusIdentity = undefined;
+  try {
+    current?.destroy();
+  } catch {
+    // 可观测性是旁路能力，SDK 清理异常不得打断退出和业务状态切换。
+  }
+}
+
+/** 在用户身份可取后调用；同一身份复用，身份变化时销毁旧实例后重建。 */
 export function initZeus(user: UserProfile | null | undefined): void {
   const userId = user?.userId;
-  if (zeus || !window.ZEUS || !userId || userId === 'unknown' || userId === 'readonly') return;
+  if (!userId || userId === 'unknown' || userId === 'readonly') {
+    destroyZeus();
+    return;
+  }
+  const nextIdentity = String(userId);
+  if (zeus && zeusIdentity === nextIdentity) return;
+  destroyZeus();
+  if (!window.ZEUS) return;
   try {
     zeus = new window.ZEUS({
       appid: ZEUS_APP_ID,
@@ -62,15 +82,17 @@ export function initZeus(user: UserProfile | null | undefined): void {
       plugins: ['error', 'performance'],
       track: false,
       heartbeat: 60000,
-      uvKey: () => userId,
+      uvKey: () => nextIdentity,
       liUsername: user?.ldapName ?? '',
-      liOpenId: userId,
+      liOpenId: nextIdentity,
       module: ZEUS_MODULE,
       context: { tenant: 'li-sicar', module: ZEUS_MODULE },
     });
+    zeusIdentity = nextIdentity;
   } catch {
     // 可观测性是旁路能力，SDK 初始化异常不得打断登录和业务启动。
     zeus = undefined;
+    zeusIdentity = undefined;
   }
 }
 
