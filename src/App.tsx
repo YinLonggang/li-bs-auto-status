@@ -36,6 +36,7 @@ import { LOGIN_URL } from './config';
 import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollapse';
 import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
+import { initZeus } from './zeus';
 import {
   createChecklistTemplate,
   createInspectionModule,
@@ -9784,6 +9785,7 @@ export default function App() {
       const nextProfile = await fetchUserProfile();
       setProfile(nextProfile);
       setAuthWarning(null);
+      initZeus(nextProfile);
     } catch (err) {
       if (err instanceof AuthError && err.status === 403) {
         setAuthWarning(err.message);

@@ -79,6 +79,7 @@ export const normalizeUserProfile = (rawInput: RawProfile): UserProfile => {
       asString(user.username) ||
       asString(user.email) ||
       'unknown',
+    ldapName: asString(user.ldap_name) || undefined,
     displayName,
     email: asString(user.email),
     avatarUrl: asString(user.avatar_url) || asString(user.avatar) || asString(user.picture),

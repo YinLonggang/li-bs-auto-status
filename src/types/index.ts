@@ -11,6 +11,7 @@ export type UserRole = 'super_admin' | 'module_admin' | 'viewer';
 
 export type UserProfile = {
   userId: string;
+  ldapName?: string;
   displayName: string;
   email?: string;
   avatarUrl?: string;
