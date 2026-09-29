@@ -32,6 +32,11 @@ import {
 } from 'lucide-react';
 import AuthPromptCard from './components/AuthPromptCard';
 import TimelineGantt from './components/TimelineGantt';
+import Pagination from './components/Pagination';
+import { SideDrawer } from '@li-sicar/side-drawer';
+import { usePaginatedList } from './hooks/usePaginatedList';
+import { allowEditorNavigation, RelatedDraftContext, useRecordEditor } from './hooks/useRecordEditor';
+import { useCaptionDrafts } from './hooks/useCaptionDrafts';
 import Sidebar, { AppTab, MobileMenuButton } from './components/Sidebar';
 import { LOGIN_URL } from './config';
 import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollapse';
@@ -62,12 +67,15 @@ import {
   fetchAttachmentDownloadLink,
   fetchAttachmentPreview,
   fetchCheckItemAuditLogs,
-  fetchCollisionReportAuditLogs,
   fetchExportDownloadLink,
-  fetchKeyIssueAuditLogs,
   fetchProjectAuditLogs,
   fetchOwnerCandidates,
   fetchWorkspaceData,
+  fetchKeyIssue,
+  fetchCollisionReport,
+  listKeyIssues,
+  listCollisionReports,
+  listAuditLogs,
   importCollisionReportsCsv,
   importKeyIssuesCsv,
   seedProjectTemplate,
@@ -184,7 +192,11 @@ const STATUS_LABEL: Record<string, string> = {
   draft: '草稿',
   open: '打开',
   resolved: '已解决',
-  closed: '已关闭'
+  closed: '已关闭',
+  containment: '遏制中',
+  hold: '搁置',
+  returned: '已退回',
+  voided: '已作废'
 };
 
 const CHECK_ITEM_STATUS_OPTIONS: CheckItemStatus[] = [
@@ -662,6 +674,15 @@ function AuditHistoryPanel({
       ) : null}
     </div>
   );
+}
+
+function ObjectAuditHistory({ objectType, objectId, revision }: { objectType: string; objectId?: string | number; revision: number }) {
+  const list = usePaginatedList(listAuditLogs, { object_type: objectType, object_id: objectId }, objectId !== undefined);
+  useEffect(() => { list.refresh(); }, [revision, list.refresh]);
+  return <div className="mt-5 min-w-0">
+    <AuditHistoryPanel logs={list.data?.results ?? []} loading={list.loading} error={list.error} onRefresh={list.refresh} emptyMessage={objectId === undefined ? '保存后开始记录审计历史。' : '当前对象暂无审计记录。'} />
+    {objectId !== undefined && <Pagination page={list.page} pageSize={list.pageSize} count={list.data?.count ?? 0} loading={list.loading} onPageChange={list.setPage} onPageSizeChange={list.setPageSize} />}
+  </div>;
 }
 
 function UserAvatar({
@@ -1668,30 +1689,10 @@ function AttachmentPreviewModal({
   onDownload: (attachment: Attachment) => void;
   onDelete: (attachment: Attachment) => void;
 }) {
-  useEffect(() => {
-    if (!state) return undefined;
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [state, onClose]);
-
   if (!state) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`预览附件 ${state.attachment.fileName}`}
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <SideDrawer open title={`预览附件 ${state.attachment.fileName}`} size="wide" saving={deleting} onClose={onClose}>
       <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
           <div className="min-w-0">
@@ -1723,7 +1724,7 @@ function AttachmentPreviewModal({
               <Trash2 className="h-4 w-4" />
               {deleting ? '删除中' : '删除'}
             </button>
-            <button className="btn btn-ghost btn--sm" type="button" onClick={onClose} aria-label="关闭附件预览">
+            <button className="btn btn-ghost btn--sm" type="button" disabled={deleting} onClick={onClose} aria-label="关闭附件预览">
               <X className="h-4 w-4" />
               关闭
             </button>
@@ -1741,7 +1742,7 @@ function AttachmentPreviewModal({
           ) : null}
         </div>
       </div>
-    </div>
+    </SideDrawer>
   );
 }
 
@@ -1754,30 +1755,10 @@ function SheetImagePreviewModal({
   onClose: () => void;
   onDownload: () => void;
 }) {
-  useEffect(() => {
-    if (!state) return undefined;
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [state, onClose]);
-
   if (!state) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label="一页纸图片预览"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <SideDrawer open title="一页纸图片预览" size="wide" onClose={onClose}>
       <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
           <div className="min-w-0">
@@ -1809,7 +1790,7 @@ function SheetImagePreviewModal({
           ) : null}
         </div>
       </div>
-    </div>
+    </SideDrawer>
   );
 }
 
@@ -1834,7 +1815,6 @@ function AttachmentList({
 }) {
   const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
-  const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
@@ -1845,9 +1825,9 @@ function AttachmentList({
   const imageAttachmentKey = imageAttachments
     .map(attachment => `${attachment.id}:${attachment.fileName}:${attachment.createdAt ?? ''}:${attachment.fileSize ?? ''}`)
     .join('|');
-  const attachmentCaptionKey = attachments
-    .map(attachment => `${attachment.id}:${attachmentCaption(attachment)}`)
-    .join('|');
+  const { captionDrafts, setCaption, acceptCaption } = useCaptionDrafts(
+    attachments.map(attachment => [idOf(attachment.id), attachmentCaption(attachment)])
+  );
 
   const closePreview = () => {
     setPreview(current => {
@@ -1859,12 +1839,6 @@ function AttachmentList({
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
   }, [preview?.url]);
-
-  useEffect(() => {
-    setCaptionDrafts(Object.fromEntries(
-      attachments.map(attachment => [idOf(attachment.id), attachmentCaption(attachment)])
-    ));
-  }, [attachmentCaptionKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1948,6 +1922,7 @@ function AttachmentList({
     setMessage('');
     try {
       await onUpdateAttachmentCaption(attachment, caption);
+      acceptCaption(idOf(attachment.id), caption);
       setMessage('图片说明已保存。');
     } catch (err) {
       setMessage(mutationErrorMessage(err, '图片说明保存失败。'));
@@ -1991,7 +1966,7 @@ function AttachmentList({
             className="input min-w-0 flex-1"
             value={draft}
             disabled={!canEditCaption || savingCaptionId === attachment.id}
-            onChange={event => setCaptionDrafts(current => ({ ...current, [key]: event.target.value }))}
+            onChange={event => setCaption(key, event.target.value)}
             placeholder={isImageAttachment(attachment) ? '为这张图片填写说明' : '为附件填写说明'}
           />
           {onUpdateAttachmentCaption ? (
@@ -2190,7 +2165,6 @@ function CollisionBlockGallery({
 }) {
   const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
-  const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
@@ -2210,7 +2184,9 @@ function CollisionBlockGallery({
     .filter(item => item.attachment && canPreviewAttachment(item.attachment))
     .map(item => item.attachment ? `${item.key}:${item.attachment.id}:${item.attachment.fileName}:${item.attachment.createdAt ?? ''}:${item.attachment.fileSize ?? ''}` : item.key)
     .join('|');
-  const captionKey = blockItems.map(item => `${item.key}:${item.caption}`).join('|');
+  const { captionDrafts, setCaption, acceptCaption } = useCaptionDrafts(
+    blockItems.map(item => [item.key, item.caption])
+  );
   const isEmpty = !blockItems.length && !pendingImages.length;
 
   const closePreview = () => {
@@ -2223,10 +2199,6 @@ function CollisionBlockGallery({
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
   }, [preview?.url]);
-
-  useEffect(() => {
-    setCaptionDrafts(Object.fromEntries(blockItems.map(item => [item.key, item.caption])));
-  }, [captionKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2324,10 +2296,12 @@ function CollisionBlockGallery({
       setMessage('当前账号没有附件说明维护权限。');
       return;
     }
+    const caption = captionDrafts[blockKey] ?? '';
     setSavingCaptionId(attachment.id);
     setMessage('');
     try {
-      await onUpdateAttachmentCaption(attachment, captionDrafts[blockKey] ?? '');
+      await onUpdateAttachmentCaption(attachment, caption);
+      acceptCaption(blockKey, caption);
       setMessage('附件说明已保存。');
     } catch (err) {
       setMessage(mutationErrorMessage(err, '附件说明保存失败。'));
@@ -2427,7 +2401,7 @@ function CollisionBlockGallery({
                         <input
                           value={draft}
                           disabled={savingCaptionId === attachment.id}
-                          onChange={event => setCaptionDrafts(current => ({ ...current, [item.key]: event.target.value }))}
+                          onChange={event => setCaption(item.key, event.target.value)}
                           placeholder="填写说明"
                         />
                         <button
@@ -5846,11 +5820,11 @@ const collisionTextareaRows = (value: string, large = false) => {
 
 function IssuesCrudView({
   project,
-  issues,
   phases,
   modules,
   checkItems,
   canWrite,
+  workspaceLoading = false,
   onCreateIssue,
   onUpdateIssue,
   onDeleteIssue,
@@ -5859,17 +5833,16 @@ function IssuesCrudView({
   onUploadIssueAttachment,
   onDownloadAttachment,
   onDeleteAttachment,
-  onUpdateAttachmentCaption,
-  onFetchAuditLogs
+  onUpdateAttachmentCaption
 }: {
   project: Project | null;
-  issues: KeyIssue[];
   phases: ProjectPhase[];
   modules: InspectionModule[];
   checkItems: CheckItem[];
   canWrite: boolean;
+  workspaceLoading?: boolean;
   onCreateIssue: (draft: KeyIssueDraft) => Promise<KeyIssue | null>;
-  onUpdateIssue: (issue: KeyIssue, draft: KeyIssueDraft) => Promise<void>;
+  onUpdateIssue: (issue: KeyIssue, draft: KeyIssueDraft) => Promise<KeyIssue | null>;
   onDeleteIssue: (issue: KeyIssue) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
@@ -5877,72 +5850,27 @@ function IssuesCrudView({
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
-  onFetchAuditLogs: (issue: KeyIssue) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [selectedIssueId, setSelectedIssueId] = useState('new');
-  const [draft, setDraft] = useState<KeyIssueDraft>(() => emptyKeyIssueDraft(phases));
-  const [saving, setSaving] = useState(false);
+  const [mutationSaving, setSaving] = useState(false);
+  const saving = mutationSaving || workspaceLoading;
   const [message, setMessage] = useState('');
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [auditLoading, setAuditLoading] = useState(false);
-  const [auditError, setAuditError] = useState('');
-  const selectedIssue = issues.find(issue => idOf(issue.id) === selectedIssueId) ?? null;
-  const selectedIsNew = selectedIssueId === 'new' || !selectedIssue;
-  const statusOptions = statusOptionValues(issues.flatMap(issue => [issue.status, issue.currentProgress ?? '']));
-  const severityOptions = statusOptionValues(issues.map(issue => issue.severity));
-  const filteredIssues = issues.filter(issue => {
-    if (filters.phaseId && idOf(issue.projectPhaseId) !== filters.phaseId) return false;
-    if (filters.status && issue.status !== filters.status && issue.currentProgress !== filters.status) return false;
-    if (filters.severity && issue.severity !== filters.severity) return false;
-    if (filters.owner && !textMatches(filters.owner, [issue.ownerName, issue.confirmer])) return false;
-    if (!textMatches(filters.keyword, [issue.title, issue.description, issue.countermeasure, issue.supplier, issue.ownerName, issue.confirmer, issue.currentProgress, issue.remark, issue.moduleName, issue.checkItemTitle])) return false;
-    return dateRangeMatches(issue.dueDate, issue.dueDate, filters.startDate, filters.endDate);
-  });
+  const [auditRevision, setAuditRevision] = useState(0);
+  const editor = useRecordEditor<KeyIssue, KeyIssueDraft>(record => keyIssueDraftFromIssue(record, phases), fetchKeyIssue, saving);
+  const { draft, setDraft, record: selectedIssue } = editor;
+  const selectedIsNew = !selectedIssue;
+  const list = usePaginatedList(listKeyIssues, {
+    project: project?.id, phase: filters.phaseId, status: filters.status, severity: filters.severity,
+    owner: filters.owner, q: filters.keyword, start_date: filters.startDate, end_date: filters.endDate
+  }, !!project);
+  const statusOptions = ['open', 'in_progress', 'containment', 'waiting_confirm', 'hold', 'resolved', 'closed'];
+  const severityOptions = ['critical', 'high', 'medium', 'low'];
+  const filteredIssues = list.data?.results ?? [];
   const visibleCheckItems = checkItems.filter(item => !draft.projectPhaseId || idOf(item.projectPhaseId) === draft.projectPhaseId);
   const [activeIssueFieldKey, setActiveIssueFieldKey] = useState('description');
   const issueAttachments = selectedIssue?.attachments ?? [];
   const attachmentsForField = (fieldKey: string) =>
     issueAttachments.filter(attachment => issueAttachmentSlot(attachment) === fieldKey);
-
-  useEffect(() => {
-    if (selectedIssueId !== 'new' && !issues.some(issue => idOf(issue.id) === selectedIssueId)) {
-      setSelectedIssueId(issues[0] ? idOf(issues[0].id) : 'new');
-    }
-  }, [issues, selectedIssueId]);
-
-  useEffect(() => {
-    setDraft(keyIssueDraftFromIssue(selectedIssue, phases));
-  }, [selectedIssue, phases]);
-
-  const loadAuditLogs = async (issue: KeyIssue | null = selectedIssue) => {
-    if (!issue) {
-      setAuditLogs([]);
-      setAuditError('');
-      setAuditLoading(false);
-      return;
-    }
-    setAuditLoading(true);
-    setAuditError('');
-    try {
-      const logs = await onFetchAuditLogs(issue);
-      setAuditLogs(logs);
-    } catch (err) {
-      setAuditError(err instanceof Error ? err.message : '审计历史加载失败。');
-    } finally {
-      setAuditLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (selectedIsNew || !selectedIssue) {
-      setAuditLogs([]);
-      setAuditError('');
-      setAuditLoading(false);
-      return;
-    }
-    void loadAuditLogs(selectedIssue);
-  }, [selectedIssue?.id, selectedIsNew]);
 
   const runMutation = async (action: () => Promise<unknown>, successMessage: string) => {
     setSaving(true);
@@ -5950,9 +5878,29 @@ function IssuesCrudView({
     try {
       await action();
       setMessage(successMessage);
-      if (selectedIssue && !selectedIsNew) {
-        await loadAuditLogs(selectedIssue);
-      }
+      list.refresh();
+      setAuditRevision(value => value + 1);
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '操作失败，请重试。'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveIssue = async () => {
+    const snapshot = draft;
+    const saved = selectedIssue ? await onUpdateIssue(selectedIssue, snapshot) : await onCreateIssue(snapshot);
+    if (!saved) throw new Error('未能保存重点问题。');
+    editor.accept(saved, snapshot);
+  };
+
+  const updateAssets = async (action: () => Promise<void>) => {
+    setSaving(true);
+    try {
+      await action();
+      list.refresh();
+      setAuditRevision(value => value + 1);
+      await editor.refresh();
     } finally {
       setSaving(false);
     }
@@ -5966,16 +5914,12 @@ function IssuesCrudView({
   };
 
   const ensureIssueForAttachmentUpload = async () => {
-    if (selectedIssue && !selectedIsNew) return selectedIssue;
-    if (!draft.title.trim()) {
-      setMessage('填写标题后可上传附件。');
-      return null;
-    }
-    const createdIssue = await onCreateIssue(draft);
-    if (createdIssue) {
-      setSelectedIssueId(idOf(createdIssue.id));
-    }
-    return createdIssue;
+    const snapshot = draft;
+    if (!snapshot.title.trim()) throw new Error('填写标题后可上传附件；首次上传将创建并保存记录。');
+    const saved = selectedIssue ? await onUpdateIssue(selectedIssue, snapshot) : await onCreateIssue(snapshot);
+    if (!saved) throw new Error('正文保存失败，尚未上传附件。');
+    editor.accept(saved, snapshot);
+    return saved;
   };
 
   const uploadIssueFieldAttachments = async (
@@ -5984,25 +5928,40 @@ function IssuesCrudView({
     files: File[],
     source: string
   ) => {
-    if (!canWrite || !files.length) return;
-    if (!selectedIssue && !draft.title.trim()) {
+    if (!canWrite || saving || !files.length) return;
+    if (!draft.title.trim()) {
       setMessage('填写标题后可上传附件。');
       return;
     }
-    await runMutation(
-      async () => {
-        const targetIssue = await ensureIssueForAttachmentUpload();
-        if (!targetIssue) return;
-        for (const file of files) {
-          await onUploadIssueAttachment(targetIssue, file, {
-            key_issue_slot: fieldKey,
-            key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
-            source
-          });
+    setSaving(true);
+    setMessage('正在保存正文并上传附件…');
+    let targetIssue: KeyIssue | null = null;
+    let uploaded = 0;
+    try {
+      targetIssue = await ensureIssueForAttachmentUpload();
+      for (const file of files) {
+        await onUploadIssueAttachment(targetIssue, file, {
+          key_issue_slot: fieldKey,
+          key_issue_slot_label: KEY_ISSUE_FIELD_LABELS[fieldKey] ?? fieldLabel,
+          source
+        });
+        uploaded += 1;
+      }
+      setMessage(`${fieldLabel}已上传 ${uploaded} 个附件。`);
+    } catch (err) {
+      setMessage(`${targetIssue ? `正文已保存，附件已上传 ${uploaded}/${files.length} 个；其余未完成。` : ''}${mutationErrorMessage(err, '附件上传失败。')}`);
+    } finally {
+      if (targetIssue) {
+        list.refresh();
+        setAuditRevision(value => value + 1);
+        try {
+          await editor.refresh(targetIssue);
+        } catch (err) {
+          setMessage(current => `${current} 详情刷新失败：${mutationErrorMessage(err, '回读失败。')} 请重新打开记录核实附件，避免重复上传。`);
         }
-      },
-      `${fieldLabel}已上传 ${files.length} 个附件。`
-    );
+      }
+      setSaving(false);
+    }
   };
 
   const handleIssueFieldPaste = async (
@@ -6010,11 +5969,11 @@ function IssuesCrudView({
     fieldLabel: string,
     event: ClipboardEvent<HTMLElement>
   ) => {
-    if (!canWrite || !clipboardHasImagePayload(event.clipboardData)) return;
+    if (!canWrite || saving || !clipboardHasImagePayload(event.clipboardData)) return;
     event.preventDefault();
     const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
     if (!files.length) return;
-    if (!selectedIssue && !draft.title.trim()) {
+    if (!draft.title.trim()) {
       setMessage('填写标题后可粘贴图片。');
       return;
     }
@@ -6024,7 +5983,7 @@ function IssuesCrudView({
   const renderIssueFieldAssets = (fieldKey: string, fieldLabel: string) => {
     const fieldAttachments = attachmentsForField(fieldKey);
     if (!fieldAttachments.length && !canWrite) return null;
-    const uploadDisabled = !canWrite || saving || (!selectedIssue && !draft.title.trim());
+    const uploadDisabled = !canWrite || saving || !draft.title.trim();
     return (
       <div className="issue-field-assets">
         {canWrite ? (
@@ -6044,7 +6003,7 @@ function IssuesCrudView({
                 }}
               />
             </label>
-            {uploadDisabled && !selectedIssue && !draft.title.trim() ? (
+            {uploadDisabled && !draft.title.trim() ? (
               <span className="text-xs text-ink-muted">填写标题后可上传附件</span>
             ) : null}
           </div>
@@ -6053,11 +6012,11 @@ function IssuesCrudView({
           <AttachmentList
             attachments={fieldAttachments}
             canDownload={canWrite}
-            canDelete={canWrite}
-            canEditCaption={canWrite}
+            canDelete={canWrite && !saving}
+            canEditCaption={canWrite && !saving}
             onDownloadAttachment={onDownloadAttachment}
-            onDeleteAttachment={onDeleteAttachment}
-            onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+            onDeleteAttachment={attachment => updateAssets(() => onDeleteAttachment(attachment))}
+            onUpdateAttachmentCaption={(attachment, caption) => updateAssets(() => onUpdateAttachmentCaption(attachment, caption))}
             emptyMessage={`${fieldLabel}暂无附件`}
           />
         ) : null}
@@ -6077,7 +6036,7 @@ function IssuesCrudView({
         <textarea
           className="input min-h-20"
           value={value}
-          disabled={!canWrite}
+          disabled={!canWrite || saving}
           onFocus={() => setActiveIssueFieldKey(fieldKey)}
           onChange={event => onChange(event.target.value)}
           onPaste={event => {
@@ -6098,7 +6057,7 @@ function IssuesCrudView({
           <h2 className="text-xl font-semibold">重点问题</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="chip">{filteredIssues.length}/{issues.length} 条</span>
+          <span className="chip">共 {list.data?.count ?? 0} 条</span>
           <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => void runMutation(onExportCsv, '重点问题 CSV 已导出。')}>
             <FileDown className="h-4 w-4" />
             导出 CSV
@@ -6108,7 +6067,7 @@ function IssuesCrudView({
             导入 CSV
             <input className="hidden" type="file" accept=".csv,text/csv" disabled={!canWrite || !project || saving} onChange={event => void handleImport(event)} />
           </label>
-          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setSelectedIssueId('new'); setDraft(emptyKeyIssueDraft(phases)); }}>
+          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setMessage(''); void editor.openRecord(); }}>
             <Plus className="h-4 w-4" />
             新增
           </button>
@@ -6182,12 +6141,12 @@ function IssuesCrudView({
                 const checkItem = checkItems.find(item => idOf(item.id) === idOf(issue.checkItemId));
                 const selected = idOf(issue.id) === idOf(selectedIssue?.id);
                 return (
-                  <tr key={issue.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => setSelectedIssueId(idOf(issue.id))}>
+                  <tr key={issue.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => { setMessage(''); void editor.openRecord(issue.id); }}>
                     <td>{issue.phaseName || phase?.name || '-'}</td>
                     <td>{issue.moduleName || module?.name || '-'}</td>
                     <td className="max-w-[220px]">{issue.checkItemTitle || checkItem?.title || '-'}</td>
                     <td className="max-w-[280px]">
-                      <div className="font-semibold">{issue.title}</div>
+                      <button type="button" className="text-left font-semibold text-primary" disabled={saving} onClick={event => { event.stopPropagation(); setMessage(''); void editor.openRecord(issue.id); }}>{issue.title}</button>
                       <div className="mt-1 text-xs text-ink-muted">{issue.description || '-'}</div>
                     </td>
                     <td><StatusPill status={issue.severity} /></td>
@@ -6203,9 +6162,21 @@ function IssuesCrudView({
             </tbody>
           </table>
         </div>
-      ) : <div className="mt-4"><EmptyState message="当前筛选下暂无重点问题。" /></div>}
+      ) : <div className="mt-4"><EmptyState message={list.loading ? '正在加载重点问题…' : '当前筛选下暂无重点问题。'} /></div>}
+      {list.error && <div role="alert" className="mt-3 text-danger">{list.error}<button className="btn btn-ghost btn--sm" onClick={list.refresh}>重试</button></div>}
+      <Pagination page={list.page} pageSize={list.pageSize} count={list.data?.count ?? 0} loading={list.loading} onPageChange={list.setPage} onPageSizeChange={list.setPageSize} />
+      <RelatedDraftContext.Provider key={editor.sessionKey} value={editor.registerRelatedDraft}>
+      <SideDrawer open={editor.open} title={selectedIsNew ? '新增重点问题' : `重点问题 · ${selectedIssue.title}`} size="xl" saving={saving} onClose={editor.close}
+        footer={<>
+          <span className="mr-auto text-xs text-ink-muted">{editor.relatedDirty ? '附件说明有未保存的修改，请在对应附件旁保存' : editor.dirty ? '有未保存的修改' : selectedIssue ? '已保存' : '首次上传附件会先保存记录'}</span>
+          <button className="btn btn-ghost btn--sm" disabled={saving} onClick={editor.close}>关闭</button>
+          <button className="btn btn-primary btn--sm" disabled={!canWrite || saving || editor.loading || !!editor.error || !draft.title.trim()} onClick={() => void runMutation(saveIssue, '重点问题已保存。')}>保存</button>
+        </>}
+      >
+      {editor.loading ? <p role="status">正在加载详情…</p> : editor.error ? <div role="alert" className="text-danger">{editor.error}<button type="button" className="btn btn-ghost btn--sm" onClick={() => void editor.retry()}>重试</button></div> : <>
+      {message && <div role="status" className="mb-3 text-sm">{message}</div>}
       <div
-        className="mt-5 rounded-lg border border-outline bg-surface-soft p-4"
+        className="rounded-lg border border-outline bg-surface-soft p-4"
         onPaste={event => {
           if (!event.defaultPrevented) {
             const fieldKey = activeIssueFieldKey || 'description';
@@ -6219,13 +6190,9 @@ function IssuesCrudView({
             <h3 className="text-lg font-semibold">{selectedIsNew ? '新增重点问题' : '编辑重点问题'}</h3>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || saving || !project || !draft.title.trim()} onClick={() => void runMutation(() => selectedIssue && !selectedIsNew ? onUpdateIssue(selectedIssue, draft) : onCreateIssue(draft), selectedIssue && !selectedIsNew ? '重点问题已保存。' : '重点问题已新增。')}>
-              <Save className="h-4 w-4" />
-              保存
-            </button>
             <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving || selectedIsNew || !selectedIssue} onClick={() => {
               if (selectedIssue && window.confirm(`确认删除重点问题「${selectedIssue.title}」？`)) {
-                void runMutation(async () => { await onDeleteIssue(selectedIssue); setSelectedIssueId('new'); }, '重点问题已删除。');
+                void runMutation(async () => { await onDeleteIssue(selectedIssue); editor.removed(); }, '重点问题已删除。');
               }
             }}>
               <Trash2 className="h-4 w-4" />
@@ -6234,42 +6201,37 @@ function IssuesCrudView({
           </div>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label><span className="field-label">阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value, checkItemId: '' })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
-          <label><span className="field-label">模块</span><select className="select" value={draft.moduleId} disabled={!canWrite} onChange={event => setDraft({ ...draft, moduleId: event.target.value })}><option value="">未关联</option>{modules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}</select></label>
-          <label className="xl:col-span-2"><span className="field-label">检查项</span><select className="select" value={draft.checkItemId} disabled={!canWrite} onChange={event => setDraft({ ...draft, checkItemId: event.target.value })}><option value="">未关联</option>{visibleCheckItems.map(item => <option key={item.id} value={idOf(item.id)}>{item.title}</option>)}</select></label>
-          <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label><span className="field-label">严重度</span><select className="select" value={draft.severity} disabled={!canWrite} onChange={event => setDraft({ ...draft, severity: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
-          <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>{['open', 'in_progress', 'blocked', 'resolved', 'closed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label><span className="field-label">阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value, checkItemId: '' })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+          <label><span className="field-label">模块</span><select className="select" value={draft.moduleId} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, moduleId: event.target.value })}><option value="">未关联</option>{modules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}</select></label>
+          <label className="xl:col-span-2"><span className="field-label">检查项</span><select className="select" value={draft.checkItemId} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, checkItemId: event.target.value })}><option value="">未关联</option>{visibleCheckItems.map(item => <option key={item.id} value={idOf(item.id)}>{item.title}</option>)}</select></label>
+          <label className="md:col-span-2"><span className="field-label">标题</span><input className="input" value={draft.title} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+          <label><span className="field-label">严重度</span><select className="select" value={draft.severity} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, severity: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+          <label><span className="field-label">状态</span><select className="select" value={draft.status} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, status: event.target.value })}>{statusOptions.map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
           <div className="xl:col-span-4">
             {renderIssueTextArea('description', '描述', draft.description, value => setDraft({ ...draft, description: value }))}
           </div>
-          <label><span className="field-label">供应商</span><input className="input" value={draft.supplier} disabled={!canWrite} onChange={event => setDraft({ ...draft, supplier: event.target.value })} /></label>
-          <label><span className="field-label">负责人</span><input className="input" value={draft.ownerName} disabled={!canWrite} onChange={event => setDraft({ ...draft, ownerName: event.target.value })} /></label>
-          <label><span className="field-label">确认人</span><input className="input" value={draft.confirmer} disabled={!canWrite} onChange={event => setDraft({ ...draft, confirmer: event.target.value })} /></label>
-          <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
+          <label><span className="field-label">供应商</span><input className="input" value={draft.supplier} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, supplier: event.target.value })} /></label>
+          <label><span className="field-label">负责人</span><input className="input" value={draft.ownerName} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, ownerName: event.target.value })} /></label>
+          <label><span className="field-label">确认人</span><input className="input" value={draft.confirmer} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, confirmer: event.target.value })} /></label>
+          <label><span className="field-label">截止</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
           {renderIssueTextArea('countermeasure', '对策', draft.countermeasure, value => setDraft({ ...draft, countermeasure: value }))}
           {renderIssueTextArea('currentProgress', '进展', draft.currentProgress, value => setDraft({ ...draft, currentProgress: value }))}
           {renderIssueTextArea('remark', '备注', draft.remark, value => setDraft({ ...draft, remark: value }))}
         </div>
       </div>
-      <div className="mt-5">
-        <AuditHistoryPanel
-          logs={auditLogs}
-          loading={auditLoading}
-          error={auditError}
-          emptyMessage={selectedIsNew ? '保存重点问题后开始记录审计历史。' : '当前重点问题暂无审计记录。'}
-          onRefresh={() => void loadAuditLogs()}
-        />
-      </div>
+      <ObjectAuditHistory objectType="KeyIssue" objectId={selectedIssue?.id} revision={auditRevision} />
+      </>}
+      </SideDrawer>
+      </RelatedDraftContext.Provider>
     </section>
   );
 }
 
 function CollisionCrudView({
   project,
-  reports,
   phases,
   canWrite,
+  workspaceLoading = false,
   onCreateReport,
   onUpdateReport,
   onDeleteReport,
@@ -6280,15 +6242,14 @@ function CollisionCrudView({
   onUploadReportAttachment,
   onDownloadAttachment,
   onDeleteAttachment,
-  onUpdateAttachmentCaption,
-  onFetchAuditLogs
+  onUpdateAttachmentCaption
 }: {
   project: Project | null;
-  reports: CollisionReport[];
   phases: ProjectPhase[];
   canWrite: boolean;
+  workspaceLoading?: boolean;
   onCreateReport: (draft: CollisionDraft) => Promise<CollisionReport | null>;
-  onUpdateReport: (report: CollisionReport, draft: CollisionDraft) => Promise<void>;
+  onUpdateReport: (report: CollisionReport, draft: CollisionDraft) => Promise<CollisionReport | null>;
   onDeleteReport: (report: CollisionReport) => Promise<void>;
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
@@ -6298,32 +6259,26 @@ function CollisionCrudView({
   onDownloadAttachment: (attachment: Attachment) => Promise<void>;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
-  onFetchAuditLogs: (report: CollisionReport) => Promise<AuditLog[]>;
 }) {
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [selectedReportId, setSelectedReportId] = useState('new');
-  const [draft, setDraft] = useState<CollisionDraft>(() => emptyCollisionDraft(phases));
-  const [saving, setSaving] = useState(false);
+  const [mutationSaving, setSaving] = useState(false);
+  const saving = mutationSaving || workspaceLoading;
   const [message, setMessage] = useState('');
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [auditLoading, setAuditLoading] = useState(false);
-  const [auditError, setAuditError] = useState('');
+  const [auditRevision, setAuditRevision] = useState(0);
+  const editor = useRecordEditor<CollisionReport, CollisionDraft>(record => collisionDraftFromReport(record, phases), fetchCollisionReport, saving);
+  const { draft, setDraft, record: selectedReport } = editor;
+  const selectedIsNew = !selectedReport;
   const [sheetImagePreview, setSheetImagePreview] = useState<SheetImagePreviewState | null>(null);
   const collisionSheetRef = useRef<HTMLDivElement | null>(null);
-  const selectedReport = reports.find(report => idOf(report.id) === selectedReportId) ?? null;
-  const selectedIsNew = selectedReportId === 'new' || !selectedReport;
-  const statusOptions = statusOptionValues(reports.map(report => report.status));
-  const riskOptions = statusOptionValues(reports.map(report => report.riskLevel));
+  const statusOptions = ['draft', 'pending', 'in_progress', 'waiting_confirm', 'approved', 'rejected', 'signed', 'closed', 'hold', 'returned', 'voided'];
+  const riskOptions = ['critical', 'high', 'medium', 'low'];
   const [pendingCollisionImages, setPendingCollisionImages] = useState<Array<CollisionPendingImage & { sectionKey: string; slotKey: string }>>([]);
   const pendingCollisionImageUrlsRef = useRef<Record<string, string>>({});
-  const filteredReports = reports.filter(report => {
-    if (filters.phaseId && idOf(report.projectPhaseId) !== filters.phaseId) return false;
-    if (filters.status && report.status !== filters.status) return false;
-    if (filters.severity && report.riskLevel !== filters.severity) return false;
-    if (filters.owner && !textMatches(filters.owner, [report.owner])) return false;
-    if (!textMatches(filters.keyword, [report.title, report.summary, report.problemDefinition, report.parts, report.vehicleModel, report.responsibilityArea, report.progress, report.owner, report.rootCause, report.correctiveAction])) return false;
-    return dateRangeMatches(report.reportDate || report.dueDate, report.updatedAt, filters.startDate, filters.endDate);
-  });
+  const list = usePaginatedList(listCollisionReports, {
+    project: project?.id, phase: filters.phaseId, status: filters.status, risk_level: filters.severity,
+    owner: filters.owner, q: filters.keyword, start_date: filters.startDate, end_date: filters.endDate
+  }, !!project);
+  const filteredReports = list.data?.results ?? [];
   const [activeCollisionFieldKey, setActiveCollisionFieldKey] = useState('problemDescription');
   const [activeCollisionSectionKey, setActiveCollisionSectionKey] = useState('section_1');
   const blocksForField = (sectionKey: string, fieldKey: string) =>
@@ -6347,48 +6302,16 @@ function CollisionCrudView({
   };
 
   useEffect(() => {
-    if (selectedReportId !== 'new' && !reports.some(report => idOf(report.id) === selectedReportId)) {
-      setSelectedReportId(reports[0] ? idOf(reports[0].id) : 'new');
+    if (!saving) {
+      clearPendingImages(Object.keys(pendingCollisionImageUrlsRef.current));
+      setSheetImagePreview(null);
     }
-  }, [reports, selectedReportId]);
+  }, [editor.open, editor.sessionKey]);
 
   useEffect(() => () => {
     Object.values(pendingCollisionImageUrlsRef.current).forEach(url => URL.revokeObjectURL(url));
     pendingCollisionImageUrlsRef.current = {};
   }, []);
-
-  useEffect(() => {
-    setDraft(collisionDraftFromReport(selectedReport, phases));
-  }, [selectedReport, phases]);
-
-  const loadAuditLogs = async (report: CollisionReport | null = selectedReport) => {
-    if (!report) {
-      setAuditLogs([]);
-      setAuditError('');
-      setAuditLoading(false);
-      return;
-    }
-    setAuditLoading(true);
-    setAuditError('');
-    try {
-      const logs = await onFetchAuditLogs(report);
-      setAuditLogs(logs);
-    } catch (err) {
-      setAuditError(err instanceof Error ? err.message : '审计历史加载失败。');
-    } finally {
-      setAuditLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (selectedIsNew || !selectedReport) {
-      setAuditLogs([]);
-      setAuditError('');
-      setAuditLoading(false);
-      return;
-    }
-    void loadAuditLogs(selectedReport);
-  }, [selectedReport?.id, selectedIsNew]);
 
   const runMutation = async (action: () => Promise<unknown>, successMessage: string) => {
     setSaving(true);
@@ -6396,9 +6319,29 @@ function CollisionCrudView({
     try {
       await action();
       setMessage(successMessage);
-      if (selectedReport && !selectedIsNew) {
-        await loadAuditLogs(selectedReport);
-      }
+      list.refresh();
+      setAuditRevision(value => value + 1);
+    } catch (err) {
+      setMessage(mutationErrorMessage(err, '操作失败，请重试。'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveReport = async () => {
+    const snapshot = draft;
+    const saved = selectedReport ? await onUpdateReport(selectedReport, snapshot) : await onCreateReport(snapshot);
+    if (!saved) throw new Error('未能保存碰撞一页纸。');
+    editor.accept(saved, snapshot);
+  };
+
+  const updateAssets = async (action: () => Promise<void>) => {
+    setSaving(true);
+    try {
+      await action();
+      list.refresh();
+      setAuditRevision(value => value + 1);
+      await editor.refresh();
     } finally {
       setSaving(false);
     }
@@ -6412,16 +6355,12 @@ function CollisionCrudView({
   };
 
   const ensureReportForAttachmentUpload = async (draftSnapshot: CollisionDraft) => {
+    if (!draftSnapshot.title.trim()) throw new Error('请先填写标题；上传附件时会自动创建草稿报告并绑定附件。');
     if (selectedReport && !selectedIsNew) return { report: selectedReport, created: false };
-    if (!draftSnapshot.title.trim()) {
-      setMessage('请先填写标题；上传附件时会自动创建草稿报告并绑定附件。');
-      return null;
-    }
     const createdReport = await onCreateReport(draftSnapshot);
-    if (createdReport) {
-      setSelectedReportId(idOf(createdReport.id));
-    }
-    return createdReport ? { report: createdReport, created: true } : null;
+    if (!createdReport) throw new Error('正文保存失败，尚未上传附件。');
+    editor.accept(createdReport, draftSnapshot);
+    return { report: createdReport, created: true };
   };
 
   const uploadCollisionFieldAttachments = async (
@@ -6432,11 +6371,11 @@ function CollisionCrudView({
     source: 'clipboard_paste' | 'file_upload',
     fieldValue?: string
   ) => {
-    if (!canWrite || !files.length) return;
+    if (!canWrite || saving || !files.length) return;
     const draftSnapshot = fieldValue === undefined
       ? draft
       : collisionDraftWithLatestFieldValue(draft, fieldKey, fieldValue);
-    if (!selectedReport && !draftSnapshot.title.trim()) {
+    if (!draftSnapshot.title.trim()) {
       setMessage('请先填写标题；上传附件时会自动创建草稿报告并绑定附件。');
       return;
     }
@@ -6461,17 +6400,20 @@ function CollisionCrudView({
     setPendingCollisionImages(current => [...current, ...pendingImages]);
     setSaving(true);
     setMessage(`${fieldLabel}文字正在保存，附件正在上传...`);
+    let savedReport: CollisionReport | null = null;
+    let uploaded = 0;
+    const completedPendingIds = new Set<string>();
     try {
       const target = await ensureReportForAttachmentUpload(draftSnapshot);
-      if (!target) {
-        clearPendingImages(pendingImages.map(image => image.id));
-        return;
-      }
-      if (!target.created) {
-        await onUpdateReport(target.report, draftSnapshot);
+      if (target.created) savedReport = target.report;
+      else {
+        const saved = await onUpdateReport(target.report, draftSnapshot);
+        if (!saved) throw new Error('正文保存失败，尚未上传附件。');
+        savedReport = saved;
+        editor.accept(saved, draftSnapshot);
       }
       for (const [index, file] of files.entries()) {
-        await onUploadReportAttachment(target.report, file, {
+        await onUploadReportAttachment(savedReport, file, {
           section_key: sectionKey,
           collision_slot: fieldKey,
           collision_slot_label: COLLISION_FIELD_LABELS[fieldKey] ?? fieldLabel,
@@ -6479,22 +6421,30 @@ function CollisionCrudView({
           sort_order: baseSortOrder + index,
           source
         });
+        uploaded += 1;
+        completedPendingIds.add(`${sectionKey}-${fieldKey}-${uploadBatchId}-${index}`);
       }
-      clearPendingImages(pendingImages.map(image => image.id));
-      setMessage(`${target.created ? '已先创建草稿报告，' : ''}${fieldLabel}已上传 ${files.length} 个附件。`);
-      if (target.report && !target.created) {
-        await loadAuditLogs(target.report);
-      }
+      setMessage(`${target.created ? '已先创建草稿报告，' : ''}${fieldLabel}已上传 ${uploaded} 个附件。`);
     } catch (err) {
       setPendingCollisionImages(current =>
         current.map(image =>
-          pendingImages.some(item => item.id === image.id)
-            ? { ...image, error: mutationErrorMessage(err, '上传失败') }
+          pendingImages.some(item => item.id === image.id) && !completedPendingIds.has(image.id)
+            ? { ...image, error: `未完成：${mutationErrorMessage(err, '上传失败')}` }
             : image
         )
       );
-      setMessage(mutationErrorMessage(err, '一页纸附件上传失败。'));
+      setMessage(`${savedReport ? `正文已保存，附件已上传 ${uploaded}/${files.length} 个；其余未完成。` : ''}${mutationErrorMessage(err, '一页纸附件上传失败。')}`);
     } finally {
+      clearPendingImages([...completedPendingIds]);
+      if (savedReport) {
+        list.refresh();
+        setAuditRevision(value => value + 1);
+        try {
+          await editor.refresh(savedReport);
+        } catch (err) {
+          setMessage(current => `${current} 详情刷新失败：${mutationErrorMessage(err, '回读失败。')} 请重新打开记录核实附件，避免重复上传。`);
+        }
+      }
       setSaving(false);
     }
   };
@@ -6506,7 +6456,7 @@ function CollisionCrudView({
     event: ClipboardEvent<HTMLElement>,
     fieldValue?: string
   ) => {
-    if (!canWrite || !clipboardHasImagePayload(event.clipboardData)) return;
+    if (!canWrite || saving || !clipboardHasImagePayload(event.clipboardData)) return;
     event.preventDefault();
     const files = await pastedImageFilesFromClipboard(event.clipboardData, fieldKey);
     if (!files.length) return;
@@ -6581,7 +6531,7 @@ function CollisionCrudView({
     const allowImages = options.allowImages === true;
     const inputProps = {
       value,
-      disabled: !canWrite,
+      disabled: !canWrite || saving,
       onFocus: () => focusCollisionSlot(sectionKey, fieldKey),
       onPaste: (event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         event.stopPropagation();
@@ -6606,11 +6556,11 @@ function CollisionCrudView({
           <CollisionBlockGallery
             blocks={blocksForField(sectionKey, fieldKey)}
             pendingImages={pendingImagesForField(sectionKey, fieldKey)}
-            canWrite={canWrite}
+            canWrite={canWrite && !saving}
             canDownload={canWrite}
             onDownloadAttachment={onDownloadAttachment}
-            onDeleteAttachment={onDeleteAttachment}
-            onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+            onDeleteAttachment={attachment => updateAssets(() => onDeleteAttachment(attachment))}
+            onUpdateAttachmentCaption={(attachment, caption) => updateAssets(() => onUpdateAttachmentCaption(attachment, caption))}
             onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
             onPaste={event => {
               event.stopPropagation();
@@ -6638,7 +6588,7 @@ function CollisionCrudView({
         <textarea
           value={value}
           rows={collisionTextareaRows(value, options.large)}
-          disabled={!canWrite}
+          disabled={!canWrite || saving}
           onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
           onChange={event => onChange(event.target.value)}
           onPaste={event => {
@@ -6649,11 +6599,11 @@ function CollisionCrudView({
         <CollisionBlockGallery
           blocks={blocksForField(sectionKey, fieldKey)}
           pendingImages={pendingImagesForField(sectionKey, fieldKey)}
-          canWrite={canWrite}
+          canWrite={canWrite && !saving}
           canDownload={canWrite}
           onDownloadAttachment={onDownloadAttachment}
-          onDeleteAttachment={onDeleteAttachment}
-          onUpdateAttachmentCaption={onUpdateAttachmentCaption}
+          onDeleteAttachment={attachment => updateAssets(() => onDeleteAttachment(attachment))}
+          onUpdateAttachmentCaption={(attachment, caption) => updateAssets(() => onUpdateAttachmentCaption(attachment, caption))}
           onFocus={() => focusCollisionSlot(sectionKey, fieldKey)}
           onPaste={event => {
             event.stopPropagation();
@@ -6674,7 +6624,7 @@ function CollisionCrudView({
           <h2 className="text-xl font-semibold">碰撞一页纸</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="chip">{filteredReports.length}/{reports.length} 份</span>
+          <span className="chip">共 {list.data?.count ?? 0} 份</span>
           <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving} onClick={() => void runMutation(onDownloadTemplate, '碰撞一页纸模板已下载。')}>
             <Download className="h-4 w-4" />
             下载模板
@@ -6688,7 +6638,7 @@ function CollisionCrudView({
             导入 CSV
             <input className="hidden" type="file" accept=".csv,text/csv" disabled={!canWrite || !project || saving} onChange={event => void handleImport(event)} />
           </label>
-          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setSelectedReportId('new'); setDraft(emptyCollisionDraft(phases)); }}>
+          <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving} onClick={() => { setMessage(''); void editor.openRecord(); }}>
             <Plus className="h-4 w-4" />
             新增
           </button>
@@ -6703,8 +6653,8 @@ function CollisionCrudView({
           <label><span className="field-label">状态</span><select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option>{statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}</select></label>
           <label><span className="field-label">风险等级</span><select className="select" value={filters.severity} onChange={event => setFilters({ ...filters, severity: event.target.value })}><option value="">全部风险</option>{riskOptions.map(risk => <option key={risk} value={risk}>{STATUS_LABEL[risk] ?? risk}</option>)}</select></label>
           <label><span className="field-label">负责人</span><input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" /></label>
-          <label><span className="field-label">日期起</span><input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} /></label>
-          <label><span className="field-label">日期止</span><input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} /></label>
+          <label><span className="field-label">报告日期起</span><input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} /></label>
+          <label><span className="field-label">报告日期止</span><input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} /></label>
         </FilterShell>
       </div>
       {filteredReports.length ? (
@@ -6729,9 +6679,9 @@ function CollisionCrudView({
                 const phase = phases.find(item => idOf(item.id) === idOf(report.projectPhaseId));
                 const selected = idOf(report.id) === idOf(selectedReport?.id);
                 return (
-                  <tr key={report.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => setSelectedReportId(idOf(report.id))}>
+                  <tr key={report.id} className={`cursor-pointer transition ${selected ? 'bg-primary/10' : 'hover:bg-surface-soft'}`} onClick={() => { setMessage(''); void editor.openRecord(report.id); }}>
                     <td>{report.phaseName || phase?.name || '-'}</td>
-                    <td className="max-w-[280px]"><div className="font-semibold">{report.title}</div><div className="mt-1 text-xs text-ink-muted">{report.summary || '-'}</div></td>
+                    <td className="max-w-[280px]"><button type="button" className="text-left font-semibold text-primary" disabled={saving} onClick={event => { event.stopPropagation(); setMessage(''); void editor.openRecord(report.id); }}>{report.title}</button><div className="mt-1 text-xs text-ink-muted">{report.summary || '-'}</div></td>
                     <td>{formatDate(report.reportDate)}</td>
                     <td><StatusPill status={report.status} /></td>
                     <td><StatusPill status={report.riskLevel} /></td>
@@ -6746,8 +6696,20 @@ function CollisionCrudView({
             </tbody>
           </table>
         </div>
-      ) : <div className="mt-4"><EmptyState message="当前筛选下暂无碰撞一页纸。" /></div>}
-      <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+      ) : <div className="mt-4"><EmptyState message={list.loading ? '正在加载碰撞一页纸…' : '当前筛选下暂无碰撞一页纸。'} /></div>}
+      {list.error && <div role="alert" className="mt-3 text-danger">{list.error}<button className="btn btn-ghost btn--sm" onClick={list.refresh}>重试</button></div>}
+      <Pagination page={list.page} pageSize={list.pageSize} count={list.data?.count ?? 0} loading={list.loading} onPageChange={list.setPage} onPageSizeChange={list.setPageSize} />
+      <RelatedDraftContext.Provider key={editor.sessionKey} value={editor.registerRelatedDraft}>
+      <SideDrawer open={editor.open} title={selectedIsNew ? '新增碰撞一页纸' : `碰撞一页纸 · ${selectedReport.title}`} size="wide" saving={saving} onClose={editor.close}
+        footer={<>
+          <span className="mr-auto text-xs text-ink-muted">{editor.relatedDirty ? '附件说明有未保存的修改，请在对应附件旁保存' : editor.dirty ? '有未保存的修改' : selectedReport ? '已保存' : '首次上传附件会先保存记录'}</span>
+          <button className="btn btn-ghost btn--sm" disabled={saving} onClick={editor.close}>关闭</button>
+          <button className="btn btn-primary btn--sm" disabled={!canWrite || saving || editor.loading || !!editor.error || !draft.title.trim()} onClick={() => void runMutation(saveReport, '碰撞一页纸已保存。')}>保存</button>
+        </>}
+      >
+      {editor.loading ? <p role="status">正在加载详情…</p> : editor.error ? <div role="alert" className="text-danger">{editor.error}<button type="button" className="btn btn-ghost btn--sm" onClick={() => void editor.retry()}>重试</button></div> : <>
+      {message && <div role="status" className="mb-3 text-sm">{message}</div>}
+      <div className="rounded-lg border border-outline bg-surface-soft p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div><p className="kicker">{selectedIsNew ? 'Create' : 'Edit'}</p><h3 className="text-lg font-semibold">{selectedIsNew ? '新增碰撞一页纸' : '编辑碰撞一页纸'}</h3></div>
           <div className="flex flex-wrap gap-2">
@@ -6769,10 +6731,9 @@ function CollisionCrudView({
               <FileDown className="h-4 w-4" />
               导出 Excel
             </button>
-            <button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || saving || !project || !draft.title.trim()} onClick={() => void runMutation(() => selectedReport && !selectedIsNew ? onUpdateReport(selectedReport, draft) : onCreateReport(draft), selectedReport && !selectedIsNew ? '碰撞一页纸已保存。' : '碰撞一页纸已新增。')}><Save className="h-4 w-4" />保存</button>
             <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || saving || selectedIsNew || !selectedReport} onClick={() => {
               if (selectedReport && window.confirm(`确认删除碰撞一页纸「${selectedReport.title}」？`)) {
-                void runMutation(async () => { await onDeleteReport(selectedReport); setSelectedReportId('new'); }, '碰撞一页纸已删除。');
+                void runMutation(async () => { await onDeleteReport(selectedReport); editor.removed(); }, '碰撞一页纸已删除。');
               }
             }}><Trash2 className="h-4 w-4" />删除</button>
           </div>
@@ -6797,7 +6758,7 @@ function CollisionCrudView({
               <span className="sr-only">报告标题</span>
               <input
                 value={draft.title}
-                disabled={!canWrite}
+                disabled={!canWrite || saving}
                 onChange={event => setDraft({ ...draft, title: event.target.value })}
                 placeholder="制造工程重点问题一页纸报告——请输入问题标题"
               />
@@ -6812,17 +6773,17 @@ function CollisionCrudView({
               <div className="collision-meta-table">
                 <label>
                   <span>编制</span>
-                  <input value={draft.owner} disabled={!canWrite} onChange={event => setDraft({ ...draft, owner: event.target.value })} />
+                  <input value={draft.owner} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, owner: event.target.value })} />
                 </label>
                 <label>
                   <span>问题状态</span>
-                  <select value={draft.status} disabled={!canWrite} onChange={event => setDraft({ ...draft, status: event.target.value })}>
-                    {['draft', 'pending', 'approved', 'rejected', 'signed'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}
+                  <select value={draft.status} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, status: event.target.value })}>
+                    {statusOptions.map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}
                   </select>
                 </label>
                 <label>
                   <span>提出日期</span>
-                  <input type="date" value={draft.reportDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, reportDate: event.target.value })} />
+                  <input type="date" value={draft.reportDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, reportDate: event.target.value })} />
                 </label>
               </div>
             </div>
@@ -6839,9 +6800,9 @@ function CollisionCrudView({
             </div>
 
             <div className="collision-sheet-toolbar">
-              <label><span className="field-label">关联阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
-              <label><span className="field-label">风险等级</span><select className="select" value={draft.riskLevel} disabled={!canWrite} onChange={event => setDraft({ ...draft, riskLevel: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
-              <label><span className="field-label">断点计划</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
+              <label><span className="field-label">关联阶段</span><select className="select" value={draft.projectPhaseId} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, projectPhaseId: event.target.value })}><option value="">未关联</option>{activePhasesOf(phases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+              <label><span className="field-label">风险等级</span><select className="select" value={draft.riskLevel} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, riskLevel: event.target.value })}>{['critical', 'high', 'medium', 'low'].map(value => <option key={value} value={value}>{STATUS_LABEL[value] ?? value}</option>)}</select></label>
+              <label><span className="field-label">断点计划</span><input className="input" type="date" value={draft.dueDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label>
             </div>
 
             <div className="collision-body-grid">
@@ -6892,15 +6853,10 @@ function CollisionCrudView({
           }
         }}
       />
-      <div className="mt-5">
-        <AuditHistoryPanel
-          logs={auditLogs}
-          loading={auditLoading}
-          error={auditError}
-          emptyMessage={selectedIsNew ? '保存碰撞一页纸后开始记录审计历史。' : '当前碰撞一页纸暂无审计记录。'}
-          onRefresh={() => void loadAuditLogs()}
-        />
-      </div>
+      <ObjectAuditHistory objectType="CollisionReport" objectId={selectedReport?.id} revision={auditRevision} />
+      </>}
+      </SideDrawer>
+      </RelatedDraftContext.Provider>
     </section>
   );
 }
@@ -7989,49 +7945,36 @@ function ProjectTemplateView({
                         module,
                         phase
                       );
-                      const primaryTemplate = cellTemplates[0];
-                      const active = primaryTemplate && idOf(primaryTemplate.id) === selectedChecklistTemplateIdValue && !creatingCell;
                       return (
                         <td key={`${module.id}-${phase.key}`} className="min-w-[220px] align-top">
-                          <button
-                            className={`w-full rounded-lg border p-3 text-left transition ${
-                              active ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft hover:border-primary/50'
-                            }`}
-                            type="button"
-                            disabled={!primaryTemplate && !canWrite}
-                            onClick={() => {
-                              if (primaryTemplate) {
-                                selectChecklistTemplate(primaryTemplate);
-                              } else {
-                                startCreateChecklistTemplate({ module, phase });
-                              }
-                            }}
-                          >
-                            {primaryTemplate ? (
-                              <>
-                                <div className="font-semibold text-ink">{primaryTemplate.title}</div>
-                                <div className="mt-1 text-xs text-ink-muted">{primaryTemplate.code}</div>
+                          <div className="space-y-2">
+                            {cellTemplates.map(template => (
+                              <button
+                                key={template.id}
+                                className={`w-full rounded-lg border p-3 text-left transition ${
+                                  idOf(template.id) === selectedChecklistTemplateIdValue && !creatingCell
+                                    ? 'border-primary bg-primary/10'
+                                    : 'border-outline bg-surface-soft hover:border-primary/50'
+                                }`}
+                                type="button"
+                                aria-pressed={idOf(template.id) === selectedChecklistTemplateIdValue && !creatingCell}
+                                onClick={() => selectChecklistTemplate(template)}
+                              >
+                                <div className="font-semibold text-ink">{template.title}</div>
+                                <div className="mt-1 text-xs text-ink-muted">{template.code}</div>
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <StatusPill status={primaryTemplate.isActive !== false ? 'active' : 'disabled'} />
-                                  <span className="chip">{checklistItemsOf(primaryTemplate).length} 项</span>
-                                  {cellTemplates.length > 1 ? <span className="chip">+{cellTemplates.length - 1}</span> : null}
+                                  <StatusPill status={template.isActive !== false ? 'active' : 'disabled'} />
+                                  <span className="chip">{checklistItemsOf(template).length} 项</span>
                                 </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="font-semibold text-ink-muted">未配置</div>
-                                <div className="mt-2 text-xs text-ink-muted">{canWrite ? '点击新增清单模板' : '只读账号不可新增'}</div>
-                              </>
-                            )}
-                          </button>
-                          {primaryTemplate && canWrite ? (
+                              </button>
+                            ))}
+                            {!cellTemplates.length && <div className="p-3 text-sm text-ink-muted">未配置</div>}
+                          </div>
+                          {canWrite ? (
                             <button
                               className="btn btn-ghost btn--sm mt-2 w-full"
                               type="button"
-                              onClick={event => {
-                                event.stopPropagation();
-                                startCreateChecklistTemplate({ module, phase });
-                              }}
+                              onClick={() => startCreateChecklistTemplate({ module, phase })}
                             >
                               <Plus className="h-4 w-4" />
                               新增单元格清单
@@ -9701,7 +9644,9 @@ export default function App() {
     }
   };
 
+  const loadSequence = useRef(0);
   const loadData = async (projectId = selectedProjectId, filters = scope) => {
+    const sequence = ++loadSequence.current;
     if (projectId !== undefined) {
       setSelectedProjectId(projectId);
     }
@@ -9713,12 +9658,13 @@ export default function App() {
         workshopId: filters.workshopId || undefined,
         productionLineId: filters.productionLineId || undefined
       });
+      if (sequence !== loadSequence.current) return;
       setWorkspace(next);
       setSelectedProjectId(next.selectedProject?.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '数据加载失败');
+      if (sequence === loadSequence.current) setError(err instanceof Error ? err.message : '数据加载失败');
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
@@ -9727,27 +9673,31 @@ export default function App() {
     void loadData();
   }, []);
 
+  const previousView = useRef(currentView);
   useEffect(() => {
+    const prior = previousView.current;
+    previousView.current = currentView;
     if (currentView !== 'dashboard') return;
-    if (!scope.factoryId && !scope.workshopId && !scope.productionLineId) return;
+    if (prior === 'dashboard' && !scope.factoryId && !scope.workshopId && !scope.productionLineId) return;
     setScope(EMPTY_SCOPE);
     void loadData(selectedProjectId, EMPTY_SCOPE);
   }, [currentView]);
 
   const handleScopeChange = (nextScope: ScopeState) => {
+    if (!allowEditorNavigation()) return;
     setScope(nextScope);
     void loadData(undefined, nextScope);
   };
 
   const handleSelectCurrentProject = (projectId: string | number) => {
-    if (!projectId) return;
+    if (!projectId || !allowEditorNavigation()) return;
     setScope(EMPTY_SCOPE);
     setSelectedProjectId(projectId);
     void loadData(projectId, EMPTY_SCOPE);
   };
 
   const handleOpenProjectView = (projectId: string | number, view: DashboardJumpTarget) => {
-    if (!projectId) return;
+    if (!projectId || !allowEditorNavigation()) return;
     setScope(EMPTY_SCOPE);
     setSelectedProjectId(projectId);
     setCurrentView(view);
@@ -10067,7 +10017,6 @@ export default function App() {
         objectId: issue.id,
         metadata
       });
-      await loadData(workspace.selectedProject?.id);
     } catch (err) {
       setError(mutationErrorMessage(err, '重点问题附件上传失败'));
       throw err;
@@ -10084,7 +10033,6 @@ export default function App() {
         objectId: report.id,
         metadata
       });
-      await loadData(workspace.selectedProject?.id);
     } catch (err) {
       setError(mutationErrorMessage(err, '一页纸附件上传失败'));
       throw err;
@@ -10285,7 +10233,7 @@ export default function App() {
         problemPhotoObjectKey: draft.problemPhotoObjectKey,
         imageCaptions: draft.imageCaptions
       });
-      await loadData(workspace.selectedProject.id);
+      setWorkspace(current => current.selectedProject?.id === issue.projectId ? { ...current, keyIssues: [issue, ...current.keyIssues] } : current);
       return issue;
     } catch (err) {
       setError(mutationErrorMessage(err, '重点问题新增失败'));
@@ -10294,9 +10242,9 @@ export default function App() {
   };
 
   const handleUpdateKeyIssue = async (issue: KeyIssue, draft: KeyIssueDraft) => {
-    if (!canWrite) return;
+    if (!canWrite) return null;
     try {
-      await updateKeyIssue(issue.id, {
+      const updated = await updateKeyIssue(issue.id, {
         projectPhaseId: draft.projectPhaseId || null,
         moduleId: draft.moduleId || null,
         checkItemId: draft.checkItemId || null,
@@ -10316,7 +10264,8 @@ export default function App() {
         imageCaptions: draft.imageCaptions,
         metadata: issue.metadata
       });
-      await loadData();
+      setWorkspace(current => ({ ...current, keyIssues: current.keyIssues.map(item => item.id === updated.id ? updated : item) }));
+      return updated;
     } catch (err) {
       setError(mutationErrorMessage(err, '重点问题保存失败'));
       throw err;
@@ -10327,7 +10276,7 @@ export default function App() {
     if (!canWrite) return;
     try {
       await deleteKeyIssue(issue.id);
-      await loadData();
+      setWorkspace(current => ({ ...current, keyIssues: current.keyIssues.filter(item => item.id !== issue.id) }));
     } catch (err) {
       setError(mutationErrorMessage(err, '重点问题删除失败'));
       throw err;
@@ -10360,7 +10309,7 @@ export default function App() {
     if (!canWrite || !workspace.selectedProject) return null;
     try {
       const report = await createCollisionReport(workspace.selectedProject.id, { ...draft, projectPhaseId: draft.projectPhaseId || null });
-      await loadData(workspace.selectedProject.id);
+      setWorkspace(current => current.selectedProject?.id === report.projectId ? { ...current, collisionReports: [report, ...current.collisionReports] } : current);
       return report;
     } catch (err) {
       setError(mutationErrorMessage(err, '碰撞一页纸新增失败'));
@@ -10369,15 +10318,16 @@ export default function App() {
   };
 
   const handleUpdateCollisionReport = async (report: CollisionReport, draft: CollisionDraft) => {
-    if (!canWrite) return;
+    if (!canWrite) return null;
     try {
-      await updateCollisionReport(report.id, {
+      const updated = await updateCollisionReport(report.id, {
         ...draft,
         projectPhaseId: draft.projectPhaseId || null,
         content: report.content,
         metadata: report.metadata
       });
-      await loadData();
+      setWorkspace(current => ({ ...current, collisionReports: current.collisionReports.map(item => item.id === updated.id ? updated : item) }));
+      return updated;
     } catch (err) {
       setError(mutationErrorMessage(err, '碰撞一页纸保存失败'));
       throw err;
@@ -10388,7 +10338,7 @@ export default function App() {
     if (!canWrite) return;
     try {
       await deleteCollisionReport(report.id);
-      await loadData();
+      setWorkspace(current => ({ ...current, collisionReports: current.collisionReports.filter(item => item.id !== report.id) }));
     } catch (err) {
       setError(mutationErrorMessage(err, '碰撞一页纸删除失败'));
       throw err;
@@ -10466,7 +10416,7 @@ export default function App() {
   };
 
   const withProjectContext = (content: ReactNode) => (
-    <div className="grid gap-5">
+    <div className="grid min-w-0 grid-cols-1 gap-5">
       <ProjectContextBar
         projects={workspace.projects}
         selectedProject={workspace.selectedProject}
@@ -10586,12 +10536,13 @@ export default function App() {
     if (currentView === 'issues') {
       return withProjectContext(
         <IssuesCrudView
+          key={workspace.selectedProject?.id ?? 'no-project'}
           project={workspace.selectedProject}
-          issues={workspace.keyIssues}
           phases={workspace.phases}
           modules={workspace.inspectionModules}
           checkItems={workspace.checkItems}
           canWrite={canWrite}
+          workspaceLoading={loading}
           onCreateIssue={handleCreateKeyIssue}
           onUpdateIssue={handleUpdateKeyIssue}
           onDeleteIssue={handleDeleteKeyIssue}
@@ -10599,19 +10550,19 @@ export default function App() {
           onExportCsv={handleExportKeyIssues}
           onUploadIssueAttachment={handleUploadKeyIssueAttachment}
           onDownloadAttachment={handleDownloadAttachment}
-          onDeleteAttachment={handleDeleteAttachment}
-          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
-          onFetchAuditLogs={issue => fetchKeyIssueAuditLogs(issue.id)}
+          onDeleteAttachment={async attachment => { if (canWrite) await deleteAttachment(attachment.id); }}
+          onUpdateAttachmentCaption={async (attachment, caption) => { if (canWrite) await updateAttachmentMetadata(attachment.id, { ...(attachment.metadata ?? {}), caption }); }}
         />
       );
     }
     if (currentView === 'collision') {
       return withProjectContext(
         <CollisionCrudView
+          key={workspace.selectedProject?.id ?? 'no-project'}
           project={workspace.selectedProject}
-          reports={workspace.collisionReports}
           phases={workspace.phases}
           canWrite={canWrite}
+          workspaceLoading={loading}
           onCreateReport={handleCreateCollisionReport}
           onUpdateReport={handleUpdateCollisionReport}
           onDeleteReport={handleDeleteCollisionReport}
@@ -10621,9 +10572,8 @@ export default function App() {
           onExportExcel={handleExportCollisionReportExcel}
           onUploadReportAttachment={handleUploadCollisionReportAttachment}
           onDownloadAttachment={handleDownloadAttachment}
-          onDeleteAttachment={handleDeleteAttachment}
-          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
-          onFetchAuditLogs={report => fetchCollisionReportAuditLogs(report.id)}
+          onDeleteAttachment={async attachment => { if (canWrite) await deleteAttachment(attachment.id); }}
+          onUpdateAttachmentCaption={async (attachment, caption) => { if (canWrite) await updateAttachmentMetadata(attachment.id, { ...(attachment.metadata ?? {}), caption }); }}
         />
       );
     }
@@ -10651,7 +10601,7 @@ export default function App() {
       />
       <Sidebar
         currentView={currentView}
-        onChangeView={setCurrentView}
+        onChangeView={view => { if (view === currentView || allowEditorNavigation()) setCurrentView(view); }}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         profile={profile}

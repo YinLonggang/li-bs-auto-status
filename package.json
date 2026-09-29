@@ -13,9 +13,13 @@
     "type-check": "tsc --noEmit",
     "permission-regression": "node permission-regression.mjs",
     "test:zeus-contracts": "node test-zeus-contracts.mjs",
-    "test:timeline": "node test-timeline.mjs"
+    "test:timeline": "node test-timeline.mjs",
+    "test:pagination": "node test-pagination.mjs",
+    "test:template-matrix": "node test-template-matrix.mjs",
+    "test:drawer-interactions": "node test-drawer-interactions.mjs"
   },
   "dependencies": {
+    "@li-sicar/side-drawer": "file:vendor/li-sicar-side-drawer-0.1.0.tgz",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.555.0",
     "react": "^19.2.1",
@@ -27,6 +31,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.22",
+    "jsdom": "^26.1.0",
     "openapi-typescript": "^7.4.4",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.14",

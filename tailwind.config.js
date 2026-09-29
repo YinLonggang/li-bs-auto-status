@@ -4,6 +4,7 @@ export default {
   content: [
     './index.html',
     './src/**/*.{ts,tsx}',
+    './node_modules/@li-sicar/side-drawer/dist/**/*.{js,mjs}',
   ],
   darkMode: ['class', '[data-theme="dark"]'],
   theme: {
