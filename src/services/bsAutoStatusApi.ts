@@ -1,5 +1,6 @@
 import { BASE_CONFIG_PREFIX } from '../config';
 import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http';
+import { requestDirectory, requestPage } from './pagination';
 import type {
   ApiEnvelope,
   Attachment,
@@ -21,6 +22,7 @@ import type {
   InspectionModule,
   InspectionModuleInput,
   KeyIssue,
+  ListQuery,
   OwnerCandidate,
   PhaseDefinition,
   PhaseTemplate,
@@ -1492,8 +1494,29 @@ const csvPayloadText = (payload: unknown) => {
 };
 
 export async function listProjects(filters?: ProjectScopeFilters) {
-  return unwrap(await apiRequest<ApiEnvelope<unknown[]> | unknown[]>(withQuery('/projects/', filters))).map(normalizeProject);
+  return requestDirectory(withQuery('/projects/', filters), normalizeProject);
 }
+
+export async function fetchProject(projectId: string | number) {
+  return normalizeProject(unwrap(await apiRequest(`/projects/${encodeURIComponent(projectId)}/`)));
+}
+
+export const listKeyIssues = (query: ListQuery, signal?: AbortSignal) =>
+  requestPage('/key-issues/', query, normalizeKeyIssue, signal);
+
+export const listCollisionReports = (query: ListQuery, signal?: AbortSignal) =>
+  requestPage('/collision-reports/', query, normalizeCollisionReport, signal);
+
+export async function fetchKeyIssue(id: string | number, signal?: AbortSignal) {
+  return normalizeKeyIssue(unwrap(await apiRequest(`/key-issues/${encodeURIComponent(id)}/`, { signal })));
+}
+
+export async function fetchCollisionReport(id: string | number, signal?: AbortSignal) {
+  return normalizeCollisionReport(unwrap(await apiRequest(`/collision-reports/${encodeURIComponent(id)}/`, { signal })));
+}
+
+export const listAuditLogs = (query: ListQuery, signal?: AbortSignal) =>
+  requestPage('/audit-logs/', query, normalizeAuditLog, signal);
 
 export async function fetchDashboardSummary(filters?: ProjectScopeFilters): Promise<DashboardSummary | null> {
   try {
@@ -1567,16 +1590,12 @@ export async function fetchProjectTimeline(projectId: string | number): Promise<
 export async function fetchHierarchyOptions(): Promise<HierarchyOptions> {
   try {
     const [factories, workshops, productionLines] = await Promise.all([
-      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/factories/?is_active=true'),
-      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/workshops/?is_active=true'),
-      requestWithPrefix<ApiEnvelope<unknown[]> | unknown[]>(BASE_CONFIG_PREFIX, '/lines/?is_active=true')
+      requestDirectory('/factories/?is_active=true', normalizeFactoryOption, path => requestWithPrefix(BASE_CONFIG_PREFIX, path)),
+      requestDirectory('/workshops/?is_active=true', normalizeWorkshopOption, path => requestWithPrefix(BASE_CONFIG_PREFIX, path)),
+      requestDirectory('/lines/?is_active=true', normalizeProductionLineOption, path => requestWithPrefix(BASE_CONFIG_PREFIX, path))
     ]);
 
-    return {
-      factories: unwrap(factories).map(normalizeFactoryOption),
-      workshops: unwrap(workshops).map(normalizeWorkshopOption),
-      productionLines: unwrap(productionLines).map(normalizeProductionLineOption)
-    };
+    return { factories, workshops, productionLines };
   } catch (error) {
     if (error instanceof ApiError && [403, 404, 501].includes(error.status)) {
       return EMPTY_HIERARCHY;
@@ -1672,59 +1691,46 @@ export async function fetchOwnerCandidates(query = '', limit = 50) {
   }
 }
 
+type WorkspaceDirectories = Pick<WorkspaceData, 'phaseTemplates' | 'inspectionModules' | 'checklistTemplates' | 'ownerCandidates'>;
+
+async function fetchWorkspaceDirectories(): Promise<WorkspaceDirectories> {
+  const [phaseTemplates, inspectionModules, checklistTemplates, ownerCandidates] = await Promise.all([
+    requestDirectory('/phase-templates/', normalizePhaseTemplate),
+    requestDirectory('/inspection-modules/', normalizeInspectionModule),
+    requestDirectory('/checklist-templates/', normalizeChecklistTemplate),
+    fetchOwnerCandidates()
+  ]);
+  return { phaseTemplates, inspectionModules, checklistTemplates, ownerCandidates };
+}
+
 export async function fetchProjectBundle(
-  projectId: string | number
+  projectId: string | number,
+  directories?: WorkspaceDirectories
 ): Promise<Omit<WorkspaceData, 'projects' | 'selectedProject' | 'hierarchy' | 'dashboardSummary' | 'projectStats' | 'selectedProjectStats' | 'timeline'>> {
-  const [
-    phases,
-    phaseTemplates,
-    inspectionModules,
-    checklistTemplates,
-    checkItems,
-    keyIssues,
-    collisionReports,
-    reports,
-    exportTasks,
-    ownerCandidates
-  ] = await Promise.all([
+  const [phases, checkItems, keyIssues, collisionReports, reports, exportTasks, resolvedDirectories] = await Promise.all([
     apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/phases/`),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/phase-templates/'),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/inspection-modules/'),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/checklist-templates/'),
     apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/check-items/`),
     apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/key-issues/`),
     apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/collision-reports/`),
     apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/reports/`),
     apiRequest<ApiEnvelope<unknown[]> | unknown[]>(`/projects/${projectId}/exports/`),
-    fetchOwnerCandidates()
+    directories ?? fetchWorkspaceDirectories()
   ]);
 
   return {
+    ...resolvedDirectories,
     phases: unwrap(phases).map(normalizeProjectPhase),
-    phaseTemplates: unwrap(phaseTemplates).map(normalizePhaseTemplate),
-    inspectionModules: unwrap(inspectionModules).map(normalizeInspectionModule),
-    checklistTemplates: unwrap(checklistTemplates).map(normalizeChecklistTemplate),
     checkItems: unwrap(checkItems).map(normalizeCheckItem),
     keyIssues: unwrap(keyIssues).map(normalizeKeyIssue),
     collisionReports: unwrap(collisionReports).map(normalizeCollisionReport),
     reports: normalizeReportDefinitions(unwrap(reports)),
-    exportTasks: unwrap(exportTasks).map(normalizeExportTask),
-    ownerCandidates
+    exportTasks: unwrap(exportTasks).map(normalizeExportTask)
   };
 }
 
 export async function fetchWorkspaceData(projectId?: string | number, filters?: ProjectScopeFilters): Promise<WorkspaceData> {
   const effectiveFilters = projectId ? { ...filters, projectId } : filters;
-  const [
-    projects,
-    hierarchyPayload,
-    dashboardSummary,
-    dashboardProjectStats,
-    globalPhaseTemplates,
-    globalInspectionModules,
-    globalChecklistTemplates,
-    globalOwnerCandidates
-  ] = await Promise.all([
+  const [projects, hierarchyPayload, dashboardSummary, dashboardProjectStats, directories, requestedProject] = await Promise.all([
     listProjects(filters),
     fetchHierarchyOptions()
       .catch(error => {
@@ -1733,13 +1739,11 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
       }),
     fetchDashboardSummary(effectiveFilters),
     fetchDashboardProjectStatistics(filters),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/phase-templates/'),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/inspection-modules/'),
-    apiRequest<ApiEnvelope<unknown[]> | unknown[]>('/checklist-templates/'),
-    fetchOwnerCandidates()
+    fetchWorkspaceDirectories(),
+    projectId !== undefined && projectId !== null ? fetchProject(projectId) : null
   ]);
   const hierarchy = mergeHierarchyFallback(hierarchyPayload, projects);
-  const selectedProject = projects.find(project => `${project.id}` === `${projectId}`) ?? projects[0] ?? null;
+  const selectedProject = requestedProject ?? projects[0] ?? null;
   const projectStats = dashboardProjectStats.length ? dashboardProjectStats : dashboardSummary?.projectStats ?? [];
   const summaryWithProjectStats = dashboardSummary
     ? { ...dashboardSummary, projectStats: projectStats.length ? projectStats : dashboardSummary.projectStats }
@@ -1755,28 +1759,24 @@ export async function fetchWorkspaceData(projectId?: string | number, filters?: 
       selectedProjectStats: null,
       timeline: null,
       phases: [],
-      phaseTemplates: unwrap(globalPhaseTemplates).map(normalizePhaseTemplate),
-      inspectionModules: unwrap(globalInspectionModules).map(normalizeInspectionModule),
-      checklistTemplates: unwrap(globalChecklistTemplates).map(normalizeChecklistTemplate),
+      ...directories,
       checkItems: [],
       keyIssues: [],
       collisionReports: [],
       reports: [],
-      exportTasks: [],
-      ownerCandidates: globalOwnerCandidates
+      exportTasks: []
     };
   }
 
-  const [bundle, dashboardProjectDetail, projectTimeline] = await Promise.all([
-    fetchProjectBundle(selectedProject.id),
-    fetchDashboardProjectDetail(selectedProject.id),
-    fetchProjectTimeline(selectedProject.id)
+  const [bundle, dashboardProjectDetail] = await Promise.all([
+    fetchProjectBundle(selectedProject.id, directories),
+    fetchDashboardProjectDetail(selectedProject.id)
   ]);
   const selectedProjectStats =
     dashboardProjectDetail.stats ??
     projectStats.find(stat => `${stat.projectId}` === `${selectedProject.id}`) ??
     null;
-  const timeline = dashboardProjectDetail.timeline ?? projectTimeline;
+  const timeline = dashboardProjectDetail.timeline ?? await fetchProjectTimeline(selectedProject.id);
 
   return {
     projects,

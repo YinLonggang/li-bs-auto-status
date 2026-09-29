@@ -12,11 +12,11 @@ updated: 2026-09-29
 
 ## 组件参考
 
-- [阶段时间甘特：日期算法、布局边界与回归检查](../src/components/README.md)
+- [交互组件：分页列表、右侧抽屉、模板矩阵与阶段时间甘特](../src/components/README.md)
 
 ## 记忆目录
 
-- [2026-09-29 甘特可读性与 dev 验收](../memory/2026-09-29.md)
+- [2026-09-29 甘特验收与列表抽屉阶段进展](../memory/2026-09-29.md)
 
 - [架构记忆](../memory/architecture.md)
 - [进度记忆](../memory/progress.md)
