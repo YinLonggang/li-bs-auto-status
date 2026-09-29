@@ -31,6 +31,7 @@ import {
   X
 } from 'lucide-react';
 import AuthPromptCard from './components/AuthPromptCard';
+import TimelineGantt from './components/TimelineGantt';
 import Sidebar, { AppTab, MobileMenuButton } from './components/Sidebar';
 import { LOGIN_URL } from './config';
 import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollapse';
@@ -463,16 +464,6 @@ const formatWeekRangeText = (startDate?: string | null, endDate?: string | null)
   const weekRange = formatWeekRange(startDate, endDate);
   return weekRange.end ? `${weekRange.start} ${weekRange.end}` : weekRange.start;
 };
-
-const startOfIsoWeekMs = (value: number) => {
-  const date = new Date(value);
-  date.setHours(0, 0, 0, 0);
-  const weekday = date.getDay() || 7;
-  date.setDate(date.getDate() - weekday + 1);
-  return date.getTime();
-};
-
-const formatWeekLabelFromMs = (value: number) => formatWeekLabel(formatLocalDate(new Date(value)));
 
 const dateMs = (value?: string | null) => {
   if (!value) return null;
@@ -4319,7 +4310,7 @@ function TimelineView({
   const filteredCheckItems = checkItems.filter(item => {
     const phase = phaseById.get(idOf(item.projectPhaseId));
     const itemOwners = ownersOfItem(item);
-    if (!phase) return false;
+    if (!phase || item.isActive === false) return false;
     if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
     if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
     if (filters.status && item.status !== filters.status) return false;
@@ -4330,48 +4321,13 @@ function TimelineView({
   const filteredItemPhaseIds = new Set(filteredCheckItems.map(item => idOf(item.projectPhaseId)));
   const visiblePhases = sorted.filter(phase => {
     if (filters.phaseId && idOf(phase.id) !== filters.phaseId) return false;
+    if ((filters.moduleId || filters.owner) && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
     if (filters.status && phase.status !== filters.status && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
     if (!textMatches(filters.keyword, [phase.name, phase.code, phase.goal]) && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
     if (!dateRangeMatches(phase.plannedStartDate, phase.plannedEndDate, filters.startDate, filters.endDate) && !filteredItemPhaseIds.has(idOf(phase.id))) return false;
     return true;
   });
-  const dates = [
-    project?.plannedStartDate,
-    project?.plannedEndDate,
-    ...visiblePhases.flatMap(phase => [phase.plannedStartDate, phase.plannedEndDate]),
-    ...filteredCheckItems.flatMap(item => [item.plannedStartDate, item.plannedEndDate])
-  ].map(dateMs).filter((value): value is number => value !== null);
-  const fallbackStart = dateMs(today) ?? Date.now();
-  const rangeStart = dates.length ? Math.min(...dates) : fallbackStart;
-  const rangeEnd = dates.length ? Math.max(...dates) : fallbackStart + 7 * DAY_MS;
-  const paddedStart = rangeStart - DAY_MS;
-  const paddedEnd = rangeEnd + DAY_MS;
-  const totalDays = Math.max(1, Math.round((paddedEnd - paddedStart) / DAY_MS) + 1);
-  const todayMs = dateMs(today);
-  const todayPosition = todayMs === null ? null : ((todayMs - paddedStart) / (totalDays * DAY_MS)) * 100;
-  const showToday = todayPosition !== null && todayPosition >= 0 && todayPosition <= 100;
   const moduleById = new Map(modules.map(module => [idOf(module.id), module]));
-  const weekStart = startOfIsoWeekMs(paddedStart);
-  const weekEnd = startOfIsoWeekMs(paddedEnd);
-  const weekTicks = [];
-  for (let value = weekStart; value <= weekEnd; value += 7 * DAY_MS) {
-    const left = ((value - paddedStart) / (totalDays * DAY_MS)) * 100;
-    weekTicks.push({
-      left: `${Math.max(0, Math.min(100, left))}%`,
-      label: formatWeekLabelFromMs(value)
-    });
-  }
-  const ticks = weekTicks.length ? weekTicks : [{ left: '0%', label: formatWeekLabelFromMs(paddedStart) }];
-  const rangeStyle = (startDate?: string, endDate?: string) => {
-    const start = dateMs(startDate) ?? paddedStart;
-    const end = dateMs(endDate) ?? start;
-    const left = ((start - paddedStart) / (totalDays * DAY_MS)) * 100;
-    const width = ((Math.max(end, start) - start) / DAY_MS + 1) / totalDays * 100;
-    return {
-      left: `${Math.max(0, Math.min(100, left))}%`,
-      width: `${Math.max(1.5, Math.min(100, width))}%`
-    };
-  };
   const itemClass = (item: CheckItem) => {
     if (isComplete(item.status)) return 'bg-success text-white';
     if (isBlocked(item.status) || isOverdue(item.plannedEndDate, item.status, today)) return 'bg-danger text-white';
@@ -4466,16 +4422,16 @@ function TimelineView({
   };
 
   return (
-    <section className="panel">
+    <section className="panel min-w-0">
       <div className="panel-header">
         <div>
           <p className="kicker">Time Gantt</p>
           <h2 className="text-xl font-semibold">时间甘特</h2>
-          <p className="text-sm text-ink-muted">阶段和检查项均按计划开始/结束时间计算位置，横轴按周展示。</p>
+          <p className="text-sm text-ink-muted">阶段与检查项按真实计划日期定位，名称独立展示；横轴按周缩放、滚动。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="chip"><Clock3 className="h-3.5 w-3.5" />当前日期 {today}</span>
-          <span className="chip">周期 {formatWeekRangeText(formatLocalDate(new Date(paddedStart)), formatLocalDate(new Date(paddedEnd)))}</span>
+          <span className="chip">{visiblePhases.length} 个阶段 · {filteredCheckItems.length} 个检查项</span>
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 text-xs">
@@ -4526,92 +4482,34 @@ function TimelineView({
         </FilterShell>
       </div>
       {!visiblePhases.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无甘特数据。" /></div> : null}
-      <div className="mt-5 overflow-x-auto rounded-lg border border-outline">
-        <div className="min-w-[1040px]">
-          <div className="grid border-b border-outline bg-surface-strong text-xs font-semibold text-ink-muted lg:grid-cols-[240px_1fr]">
-            <div className="border-r border-outline px-3 py-3">阶段</div>
-            <div className="relative px-3 py-3">
-              <div className="relative h-7">
-                {ticks.map(tick => (
-                  <div key={tick.label} className="absolute top-0 -translate-x-1/2 text-center" style={{ left: tick.left }}>
-                    <div className="mx-auto h-2 w-px bg-outline" />
-                    <div className="mt-1 whitespace-nowrap">{tick.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          {visiblePhases.map(phase => {
+      {visiblePhases.length ? (
+        <TimelineGantt
+          key={project?.id ?? 'empty'}
+          project={project}
+          today={today}
+          selectedId={selectedCheckItemId}
+          onSelect={setSelectedCheckItemId}
+          phases={visiblePhases.map(phase => {
             const items = filteredCheckItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
-            const rowHeight = Math.max(108, 74 + items.length * 24);
-            return (
-              <div key={phase.id} className="grid border-b border-outline last:border-b-0 lg:grid-cols-[240px_1fr]">
-                <div className="border-r border-outline bg-surface-soft px-3 py-4" style={{ minHeight: rowHeight }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="font-semibold text-ink">{phase.name}</div>
-                      <div className="mt-1 text-xs text-ink-muted">Key: {phase.code}</div>
-                    </div>
-                    <StatusPill status={phase.status} />
-                  </div>
-                  <div className="mt-3 text-xs text-ink-muted">
-                    周期：{formatWeekRangeText(phase.plannedStartDate, phase.plannedEndDate)}
-                  </div>
-                  <div className="mt-2 text-xs text-ink-subtle">{items.length} 个检查项 · {percent(phase.progressPercent)}</div>
-                </div>
-                <div className="relative bg-surface px-3 py-4" style={{ minHeight: rowHeight }}>
-                  {ticks.map(tick => (
-                    <div key={`${phase.id}-${tick.label}`} className="absolute bottom-0 top-0 w-px bg-outline/50" style={{ left: tick.left }} />
-                  ))}
-                  {showToday ? (
-                    <div className="absolute bottom-0 top-0 z-10 w-px bg-danger" style={{ left: `${todayPosition}%` }}>
-                      <span className="absolute -top-1 left-1 rounded-full bg-danger px-2 py-0.5 text-[11px] font-semibold text-white">
-                        今天
-                      </span>
-                    </div>
-                  ) : null}
-                  <div
-                    className="absolute top-5 h-7 rounded-lg border border-primary/40 bg-primary/20"
-                    style={rangeStyle(phase.plannedStartDate, phase.plannedEndDate)}
-                    title={`${phase.name}: ${formatWeekRangeText(phase.plannedStartDate, phase.plannedEndDate)} · ${formatDate(phase.plannedStartDate)} 至 ${formatDate(phase.plannedEndDate)}`}
-                  >
-                    <div className="h-full rounded-lg bg-primary/50" style={{ width: percent(phase.progressPercent) }} />
-                  </div>
-                  {items.map((item, index) => {
-                    const module = moduleById.get(idOf(item.moduleId));
-                    const overdue = isOverdue(item.plannedEndDate, item.status, today);
-                    const selected = idOf(item.id) === selectedCheckItemId;
-                    return (
-                      <button
-                        key={item.id}
-                        className={`absolute h-5 min-w-[36px] cursor-pointer overflow-hidden rounded-full border-0 px-2 text-left text-[11px] font-semibold leading-5 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
-                          itemClass(item)
-                        } ${selected ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : 'hover:brightness-95'}`}
-                        style={{ ...rangeStyle(item.plannedStartDate, item.plannedEndDate), top: 58 + index * 24 }}
-                        title={`${item.title} · ${module?.name ?? '未设置模块'} · ${formatWeekRangeText(item.plannedStartDate, item.plannedEndDate)} · ${formatDate(item.plannedStartDate)} 至 ${formatDate(item.plannedEndDate)} · ${overdue ? '逾期' : STATUS_LABEL[item.status] ?? item.status}`}
-                        type="button"
-                        onClick={() => setSelectedCheckItemId(idOf(item.id))}
-                        aria-label={`选择检查项 ${item.title} 并查看状态审计`}
-                      >
-                        <span className="block truncate">
-                          {overdue ? '逾期 · ' : ''}{module?.name ?? '模块'} / {item.title}
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {!items.length ? (
-                    <div className="absolute left-3 right-3 top-16 rounded-lg border border-dashed border-outline bg-surface-soft px-3 py-4 text-center text-xs text-ink-muted">
-                      该阶段暂无检查项。
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            );
+            return {
+              ...phase,
+              id: idOf(phase.id),
+              status: <StatusPill status={phase.status} />,
+              completed: items.filter(item => isComplete(item.status)).length,
+              items: items.map(item => ({
+                ...item,
+                id: idOf(item.id),
+                moduleName: moduleById.get(idOf(item.moduleId))?.name ?? '未设置模块',
+                ownerLabel: ownersOfItem(item).map(owner => owner.displayName || owner.idaasId).filter(Boolean).join('、') || '未设置负责人',
+                statusLabel: isOverdue(item.plannedEndDate, item.status, today) ? `逾期 · ${STATUS_LABEL[item.status] ?? item.status}` : STATUS_LABEL[item.status] ?? item.status,
+                barClass: itemClass(item)
+              }))
+            };
           })}
-        </div>
-      </div>
+        />
+      ) : null}
       {selectedCheckItem ? (
-        <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
+        <div id="timeline-selected-detail" className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="kicker">Selected Check Item</p>
@@ -4633,7 +4531,7 @@ function TimelineView({
               )}
             </div>
           </div>
-          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
             <div className="rounded-lg border border-outline bg-surface p-3">
               <div className="mb-3 text-sm font-semibold text-ink">直接更新状态</div>
               <CheckItemStatusControl
@@ -4695,7 +4593,7 @@ function TimelineView({
           </div>
         </div>
       ) : null}
-      <div className="mt-5 grid gap-3">
+      <div className="mt-5 grid grid-cols-1 gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-ink">阶段检查项状态更新</h3>
@@ -10766,7 +10664,7 @@ export default function App() {
       <div className={`min-w-0 w-full flex-1 transition-[padding] duration-200 ${isCollapsed ? 'lg:pl-20' : 'lg:pl-72'}`}>
         <header className="sticky top-0 z-20 border-b border-outline bg-surface/95 px-4 py-3 backdrop-blur sm:px-5 lg:px-6 xl:px-7 2xl:px-8">
           <div className="flex w-full flex-wrap items-center justify-between gap-4">
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
               <MobileMenuButton onClick={() => setSidebarOpen(true)} />
               <div className="min-w-0">
                 <p className="kicker">理想BIW云上产线-AutoStatus</p>
