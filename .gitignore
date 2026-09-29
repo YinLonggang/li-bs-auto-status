@@ -7,4 +7,5 @@ dist/
 coverage/
 *.log
 .runtime/
+graphify-out/
 .DS_Store
