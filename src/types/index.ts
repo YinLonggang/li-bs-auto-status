@@ -101,6 +101,7 @@ export type Attachment = {
   uploadedBy?: string;
   createdAt?: string;
   canPreview?: boolean;
+  previewKind?: 'image' | 'pdf' | null;
   canDownload?: boolean;
   isImage?: boolean;
   metadata?: Record<string, unknown>;
@@ -324,6 +325,7 @@ export type CheckItem = {
   progressPercent: number;
   notes?: string;
   metadata?: Record<string, unknown>;
+  attachmentCount?: number;
   attachments: Attachment[];
 };
 

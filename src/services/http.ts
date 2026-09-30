@@ -1,4 +1,5 @@
 import { API_BASE_URL, API_PREFIX } from '../config';
+import { validateBinaryContent } from './attachmentContent';
 
 export class ApiError extends Error {
   status: number;
@@ -111,7 +112,7 @@ export async function requestBlobWithPrefix(
   const response = await fetch(`${API_BASE_URL}${prefix}${path}`, {
     credentials: 'include',
     method,
-    headers: buildHeaders(headers, method, body),
+    headers: buildHeaders({ Accept: 'application/octet-stream, */*', ...toHeaderRecord(headers) }, method, body),
     body,
     ...rest
   });
@@ -119,15 +120,19 @@ export async function requestBlobWithPrefix(
 
   if (!response.ok) {
     const payload = await parseBody(response);
-    const fallback = response.status === 403 ? '当前账号没有写权限。' : `请求失败：${response.status}`;
+    const fallback = response.status === 403 ? '当前账号没有文件访问权限。' : `请求失败：${response.status}`;
     throw new ApiError(messageFrom(payload, fallback), response.status, payload, requestId);
   }
 
   const disposition = response.headers.get('content-disposition') || '';
   const fileNameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
   const rawFileName = fileNameMatch?.[1] || fileNameMatch?.[2] || '';
-  const fileName = rawFileName ? decodeURIComponent(rawFileName) : undefined;
-  return { blob: await response.blob(), fileName };
+  let fileName = rawFileName;
+  try { fileName = decodeURIComponent(rawFileName); } catch { /* Keep a malformed server filename printable. */ }
+  fileName = fileName.replace(/[\u0000-\u001f\u007f\\/]/g, '_');
+  const blob = await response.blob();
+  await validateBinaryContent(blob, fileName);
+  return { blob, fileName: fileName || undefined };
 }
 
 export async function apiBlobRequest(path: string, init: RequestInit = {}) {

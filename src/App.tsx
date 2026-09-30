@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { toPng } from 'html-to-image';
 import {
@@ -35,8 +35,12 @@ import TimelineGantt from './components/TimelineGantt';
 import Pagination from './components/Pagination';
 import { SideDrawer } from '@li-sicar/side-drawer';
 import { usePaginatedList } from './hooks/usePaginatedList';
-import { allowEditorNavigation, RelatedDraftContext, useRecordEditor } from './hooks/useRecordEditor';
+import { allowEditorNavigation, RelatedDraftContext, useRecordEditor, useRelatedDraftDirty } from './hooks/useRecordEditor';
 import { useCaptionDrafts } from './hooks/useCaptionDrafts';
+import { useAttachmentPreview } from './hooks/useAttachmentPreview';
+import type { AttachmentPreviewState } from './hooks/useAttachmentPreview';
+import { useAttachmentDownload } from './hooks/useAttachmentDownload';
+import type { AttachmentDownloadHandler } from './hooks/useAttachmentDownload';
 import Sidebar, { AppTab, MobileMenuButton } from './components/Sidebar';
 import { LOGIN_URL } from './config';
 import { usePersistentSidebarCollapse } from './hooks/usePersistentSidebarCollapse';
@@ -64,8 +68,10 @@ import {
   exportCollisionReportExcel,
   exportCollisionReportsCsv,
   exportKeyIssuesCsv,
-  fetchAttachmentDownloadLink,
+  fetchAttachmentDownload,
   fetchAttachmentPreview,
+  fetchCheckItem,
+  listCheckItems,
   fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
   fetchProjectAuditLogs,
@@ -285,15 +291,12 @@ const formatFileSize = (value?: number) => {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 };
 
-const IMAGE_EXTENSION_PATTERN = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+const PdfAttachmentPreview = lazy(() => import('./components/PdfAttachmentPreview'));
 
-const isImageAttachment = (attachment: Attachment) =>
-  attachment.isImage === true ||
-  attachment.contentType?.toLowerCase().startsWith('image/') ||
-  IMAGE_EXTENSION_PATTERN.test(attachment.fileName);
+const isImageAttachment = (attachment: Attachment) => attachment.previewKind === 'image';
 
 const canPreviewAttachment = (attachment: Attachment) =>
-  attachment.canPreview !== false && isImageAttachment(attachment);
+  attachment.canPreview === true && (attachment.previewKind === 'image' || attachment.previewKind === 'pdf');
 
 const attachmentCaption = (attachment: Attachment) => {
   const metadata = attachment.metadata ?? {};
@@ -313,7 +316,8 @@ const downloadBlobFile = (fileName: string, blob: Blob) => {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Allow the browser to consume the Blob before releasing its URL.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 const safeDownloadFileName = (value: string, fallback: string) => {
@@ -738,7 +742,7 @@ function CheckItemAttachmentPanel({
   item: CheckItem;
   canWrite: boolean;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
-  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment: AttachmentDownloadHandler;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
   compact?: boolean;
@@ -1650,13 +1654,6 @@ function CreateProjectInstancePanel({
   );
 }
 
-type AttachmentPreviewState = {
-  attachment: Attachment;
-  url?: string;
-  loading: boolean;
-  error?: string;
-};
-
 type AttachmentThumbnailState = {
   url?: string;
   loading?: boolean;
@@ -1676,6 +1673,8 @@ function AttachmentPreviewModal({
   canDelete,
   downloading,
   deleting,
+  downloadError,
+  onCancelDownload,
   onClose,
   onDownload,
   onDelete
@@ -1685,6 +1684,8 @@ function AttachmentPreviewModal({
   canDelete: boolean;
   downloading: boolean;
   deleting: boolean;
+  downloadError: string;
+  onCancelDownload: () => void;
   onClose: () => void;
   onDownload: (attachment: Attachment) => void;
   onDelete: (attachment: Attachment) => void;
@@ -1692,10 +1693,10 @@ function AttachmentPreviewModal({
   if (!state) return null;
 
   return (
-    <SideDrawer open title={`预览附件 ${state.attachment.fileName}`} size="wide" saving={deleting} onClose={onClose}>
-      <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
-          <div className="min-w-0">
+    <SideDrawer open title={`预览附件 ${state.attachment.fileName}`} size="wide" saving={deleting} onClose={onClose} overlayClassName="!m-0" bodyClassName="flex flex-col">
+      <div className="flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden rounded-lg border border-outline bg-surface shadow-card">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-outline px-4 py-3">
+          <div className="min-w-0 max-w-full">
             <div className="truncate text-sm font-semibold text-ink" title={state.attachment.fileName}>
               {state.attachment.fileName}
             </div>
@@ -1707,12 +1708,12 @@ function AttachmentPreviewModal({
             <button
               className="btn btn-ghost btn--sm"
               type="button"
-              disabled={!canDownload || downloading}
-              onClick={() => onDownload(state.attachment)}
+              disabled={!canDownload && !downloading}
+              onClick={() => downloading ? onCancelDownload() : onDownload(state.attachment)}
               title={!canDownload ? '当前账号没有附件下载权限。' : undefined}
             >
               <Download className="h-4 w-4" />
-              {downloading ? '获取中' : '下载'}
+              {downloading ? '取消下载' : '下载'}
             </button>
             <button
               className="btn btn-ghost btn--sm text-danger"
@@ -1730,12 +1731,18 @@ function AttachmentPreviewModal({
             </button>
           </div>
         </div>
-        <div className="flex min-h-[320px] flex-1 items-center justify-center bg-surface-soft p-3 sm:p-5">
-          {state.loading ? <div className="text-sm text-ink-muted">图片加载中...</div> : null}
-          {state.error ? <div className="max-w-md text-center text-sm text-danger">{state.error}</div> : null}
+        {downloadError ? <p className="shrink-0 px-4 py-2 text-sm text-danger" role="alert">{downloadError}</p> : null}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-surface-soft p-3 sm:p-5">
+          {state.loading ? <div className="text-sm text-ink-muted">附件加载中...</div> : null}
+          {state.error ? <div className="max-w-md text-center text-sm text-danger" role="alert">{state.error}</div> : null}
+          {state.blob && state.attachment.previewKind === 'pdf' && !state.loading && !state.error ? (
+            <Suspense fallback={<p role="status">正在加载 PDF 预览器…</p>}>
+              <PdfAttachmentPreview blob={state.blob} fileName={state.attachment.fileName} />
+            </Suspense>
+          ) : null}
           {state.url && !state.loading && !state.error ? (
             <img
-              className="max-h-[76dvh] max-w-full rounded-lg object-contain"
+              className="min-h-0 max-h-full max-w-full rounded-lg object-contain"
               src={state.url}
               alt={state.attachment.fileName}
             />
@@ -1796,6 +1803,7 @@ function SheetImagePreviewModal({
 
 function AttachmentList({
   attachments,
+  loadThumbnails = true,
   canDownload = false,
   canDelete = false,
   canEditCaption = false,
@@ -1805,23 +1813,27 @@ function AttachmentList({
   emptyMessage = '无附件'
 }: {
   attachments: Attachment[];
+  loadThumbnails?: boolean;
   canDownload?: boolean;
   canDelete?: boolean;
   canEditCaption?: boolean;
-  onDownloadAttachment?: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment?: AttachmentDownloadHandler;
   onDeleteAttachment?: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption?: (attachment: Attachment, caption: string) => Promise<void>;
   emptyMessage?: string;
 }) {
-  const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
   const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [message, setMessage] = useState('');
   const thumbnailUrlsRef = useRef<string[]>([]);
-  const imageAttachments = attachments.filter(canPreviewAttachment);
-  const fileAttachments = attachments.filter(attachment => !canPreviewAttachment(attachment));
+  const imageAttachments = attachments.filter(attachment => canPreviewAttachment(attachment) && isImageAttachment(attachment));
+  const fileAttachments = attachments.filter(attachment => !canPreviewAttachment(attachment) || !isImageAttachment(attachment));
+  const attachmentKey = attachments.map(attachment => `${attachment.id}:${attachment.previewKind}:${attachment.canPreview}`).join('|');
+  const { preview, openPreview, closePreview } = useAttachmentPreview(attachmentKey);
+  const { downloadingId, downloadError, download: handleDownload, cancelDownload } = useAttachmentDownload(
+    `${attachmentKey}:${preview?.attachment.id ?? 'list'}`, canDownload, onDownloadAttachment
+  );
   const imageAttachmentKey = imageAttachments
     .map(attachment => `${attachment.id}:${attachment.fileName}:${attachment.createdAt ?? ''}:${attachment.fileSize ?? ''}`)
     .join('|');
@@ -1829,27 +1841,18 @@ function AttachmentList({
     attachments.map(attachment => [idOf(attachment.id), attachmentCaption(attachment)])
   );
 
-  const closePreview = () => {
-    setPreview(current => {
-      if (current?.url) URL.revokeObjectURL(current.url);
-      return null;
-    });
-  };
-
-  useEffect(() => () => {
-    if (preview?.url) URL.revokeObjectURL(preview.url);
-  }, [preview?.url]);
-
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     thumbnailUrlsRef.current = [];
     setThumbnails({});
+    if (!loadThumbnails) return;
 
     imageAttachments.forEach(attachment => {
       const key = idOf(attachment.id);
       setThumbnails(current => ({ ...current, [key]: { loading: true } }));
-      void fetchAttachmentPreview(attachment.id)
+      void fetchAttachmentPreview(attachment.id, controller.signal)
         .then(result => {
           const url = URL.createObjectURL(result.blob);
           if (cancelled) {
@@ -1872,49 +1875,16 @@ function AttachmentList({
     });
 
     return () => {
+      controller.abort();
       cancelled = true;
       thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       thumbnailUrlsRef.current = [];
     };
-  }, [imageAttachmentKey]);
-
-  const openPreview = async (attachment: Attachment) => {
-    if (!canPreviewAttachment(attachment)) return;
-    setMessage('');
-    closePreview();
-    setPreview({ attachment, loading: true });
-    try {
-      const result = await fetchAttachmentPreview(attachment.id);
-      const url = URL.createObjectURL(result.blob);
-      setPreview({ attachment, url, loading: false });
-    } catch (err) {
-      setPreview({
-        attachment,
-        loading: false,
-        error: mutationErrorMessage(err, '附件预览加载失败。')
-      });
-    }
-  };
-
-  const handleDownload = async (attachment: Attachment) => {
-    if (!onDownloadAttachment || !canDownload || attachment.canDownload === false) {
-      setMessage('当前账号没有附件下载权限。');
-      return;
-    }
-    setDownloadingId(attachment.id);
-    setMessage('');
-    try {
-      await onDownloadAttachment(attachment);
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
-    } finally {
-      setDownloadingId(null);
-    }
-  };
+  }, [imageAttachmentKey, loadThumbnails]);
 
   const handleSaveCaption = async (attachment: Attachment) => {
     if (!onUpdateAttachmentCaption || !canEditCaption) {
-      setMessage('当前账号没有图片说明维护权限。');
+      setMessage('当前账号没有附件说明维护权限。');
       return;
     }
     const caption = captionDrafts[idOf(attachment.id)] ?? '';
@@ -1923,9 +1893,9 @@ function AttachmentList({
     try {
       await onUpdateAttachmentCaption(attachment, caption);
       acceptCaption(idOf(attachment.id), caption);
-      setMessage('图片说明已保存。');
+      setMessage('附件说明已保存。');
     } catch (err) {
-      setMessage(mutationErrorMessage(err, '图片说明保存失败。'));
+      setMessage(mutationErrorMessage(err, '附件说明保存失败。'));
     } finally {
       setSavingCaptionId(null);
     }
@@ -1995,6 +1965,8 @@ function AttachmentList({
 
   return (
     <div className="space-y-3">
+      {downloadingId !== null ? <button className="btn btn-ghost btn--sm" type="button" onClick={cancelDownload}>取消下载</button> : null}
+      {downloadError && !preview ? <p className="text-sm text-danger" role="alert">{downloadError}</p> : null}
       {imageAttachments.length ? (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {imageAttachments.map(attachment => {
@@ -2086,6 +2058,11 @@ function AttachmentList({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {canPreviewAttachment(attachment) ? (
+                <button className="btn btn-ghost btn--sm" type="button" onClick={() => void openPreview(attachment)} aria-label={`预览 ${attachment.fileName}`}>
+                  <FileText className="h-4 w-4" />预览 PDF
+                </button>
+              ) : <span className="text-xs text-ink-muted">此格式仅支持下载</span>}
               {onDownloadAttachment ? (
                 <button
                   className="btn btn-ghost btn--sm"
@@ -2122,7 +2099,9 @@ function AttachmentList({
         canDelete={!!onDeleteAttachment && canDelete}
         downloading={preview ? downloadingId === preview.attachment.id : false}
         deleting={preview ? deletingId === preview.attachment.id : false}
-        onClose={closePreview}
+        downloadError={downloadError}
+        onCancelDownload={cancelDownload}
+        onClose={() => { cancelDownload(); closePreview(); }}
         onDownload={attachment => void handleDownload(attachment)}
         onDelete={attachment => void handleDelete(attachment)}
       />
@@ -2155,7 +2134,7 @@ function CollisionBlockGallery({
   pendingImages?: CollisionPendingImage[];
   canWrite: boolean;
   canDownload: boolean;
-  onDownloadAttachment?: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment?: AttachmentDownloadHandler;
   onDeleteAttachment?: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption?: (attachment: Attachment, caption: string) => Promise<void>;
   onUploadFiles?: (files: File[]) => void | Promise<void>;
@@ -2163,10 +2142,8 @@ function CollisionBlockGallery({
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   emptyMessage?: string;
 }) {
-  const [preview, setPreview] = useState<AttachmentPreviewState | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, AttachmentThumbnailState>>({});
   const [savingCaptionId, setSavingCaptionId] = useState<string | number | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [message, setMessage] = useState('');
   const thumbnailUrlsRef = useRef<string[]>([]);
@@ -2180,8 +2157,13 @@ function CollisionBlockGallery({
       caption: collisionBlockCaption(block, attachment)
     };
   });
+  const attachmentKey = blockItems.map(item => `${item.key}:${item.attachment?.id}:${item.attachment?.previewKind}:${item.attachment?.canPreview}`).join('|');
+  const { preview, openPreview, closePreview } = useAttachmentPreview(attachmentKey);
+  const { downloadingId, downloadError, download: handleDownload, cancelDownload } = useAttachmentDownload(
+    `${attachmentKey}:${preview?.attachment.id ?? 'list'}`, canDownload, onDownloadAttachment
+  );
   const imageAttachmentKey = blockItems
-    .filter(item => item.attachment && canPreviewAttachment(item.attachment))
+    .filter(item => item.attachment && canPreviewAttachment(item.attachment) && isImageAttachment(item.attachment))
     .map(item => item.attachment ? `${item.key}:${item.attachment.id}:${item.attachment.fileName}:${item.attachment.createdAt ?? ''}:${item.attachment.fileSize ?? ''}` : item.key)
     .join('|');
   const { captionDrafts, setCaption, acceptCaption } = useCaptionDrafts(
@@ -2189,27 +2171,17 @@ function CollisionBlockGallery({
   );
   const isEmpty = !blockItems.length && !pendingImages.length;
 
-  const closePreview = () => {
-    setPreview(current => {
-      if (current?.url) URL.revokeObjectURL(current.url);
-      return null;
-    });
-  };
-
-  useEffect(() => () => {
-    if (preview?.url) URL.revokeObjectURL(preview.url);
-  }, [preview?.url]);
-
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     thumbnailUrlsRef.current = [];
     setThumbnails({});
 
     blockItems.forEach(item => {
-      if (!item.attachment || !canPreviewAttachment(item.attachment)) return;
+      if (!item.attachment || !canPreviewAttachment(item.attachment) || !isImageAttachment(item.attachment)) return;
       setThumbnails(current => ({ ...current, [item.key]: { loading: true } }));
-      void fetchAttachmentPreview(item.attachment.id)
+      void fetchAttachmentPreview(item.attachment.id, controller.signal)
         .then(result => {
           const url = URL.createObjectURL(result.blob);
           if (cancelled) {
@@ -2232,45 +2204,12 @@ function CollisionBlockGallery({
     });
 
     return () => {
+      controller.abort();
       cancelled = true;
       thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       thumbnailUrlsRef.current = [];
     };
   }, [imageAttachmentKey]);
-
-  const openPreview = async (attachment: Attachment) => {
-    if (!canPreviewAttachment(attachment)) return;
-    setMessage('');
-    closePreview();
-    setPreview({ attachment, loading: true });
-    try {
-      const result = await fetchAttachmentPreview(attachment.id);
-      const url = URL.createObjectURL(result.blob);
-      setPreview({ attachment, url, loading: false });
-    } catch (err) {
-      setPreview({
-        attachment,
-        loading: false,
-        error: mutationErrorMessage(err, '附件预览加载失败。')
-      });
-    }
-  };
-
-  const handleDownload = async (attachment: Attachment) => {
-    if (!onDownloadAttachment || !canDownload || attachment.canDownload === false) {
-      setMessage('当前账号没有附件下载权限。');
-      return;
-    }
-    setDownloadingId(attachment.id);
-    setMessage('');
-    try {
-      await onDownloadAttachment(attachment);
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '附件下载链接获取失败。'));
-    } finally {
-      setDownloadingId(null);
-    }
-  };
 
   const handleDelete = async (attachment: Attachment) => {
     if (!onDeleteAttachment || !canWrite) {
@@ -2376,7 +2315,7 @@ function CollisionBlockGallery({
                     {thumbnail?.url ? (
                       <img src={thumbnail.url} alt={previewAttachment.fileName} loading="lazy" />
                     ) : (
-                      <span>{thumbnail?.error ? '缩略图加载失败' : '图片加载中...'}</span>
+                      <span>{previewAttachment.previewKind === 'pdf' ? '预览 PDF' : thumbnail?.error ? '缩略图加载失败' : '图片加载中...'}</span>
                     )}
                   </button>
                 ) : (
@@ -2396,7 +2335,7 @@ function CollisionBlockGallery({
                   ) : null}
                   {canWrite && attachment && onUpdateAttachmentCaption ? (
                     <label className="collision-block-caption">
-                      <span>{previewAttachment ? '图片说明' : '附件说明'}</span>
+                      <span>{attachment.previewKind === 'image' ? '图片说明' : '附件说明'}</span>
                       <div className="flex gap-2">
                         <input
                           value={draft}
@@ -2452,6 +2391,8 @@ function CollisionBlockGallery({
           })}
         </div>
       )}
+      {downloadingId !== null ? <button className="btn btn-ghost btn--sm" type="button" onClick={cancelDownload}>取消下载</button> : null}
+      {downloadError && !preview ? <p className="mt-2 text-sm text-danger" role="alert">{downloadError}</p> : null}
       {message ? <div className="mt-2 text-xs text-ink-muted">{message}</div> : null}
       <AttachmentPreviewModal
         state={preview}
@@ -2459,7 +2400,9 @@ function CollisionBlockGallery({
         canDelete={!!onDeleteAttachment && canWrite}
         downloading={preview ? downloadingId === preview.attachment.id : false}
         deleting={preview ? deletingId === preview.attachment.id : false}
-        onClose={closePreview}
+        downloadError={downloadError}
+        onCancelDownload={cancelDownload}
+        onClose={() => { cancelDownload(); closePreview(); }}
         onDownload={attachment => void handleDownload(attachment)}
         onDelete={attachment => void handleDelete(attachment)}
       />
@@ -4126,9 +4069,10 @@ function ProjectContextBar({
       </div>
       <div className="project-context-controls">
         <label className="min-w-[260px] flex-1">
-          <span className="field-label">项目筛选</span>
+          <span className="field-label">当前项目</span>
           <select
             className="select"
+            aria-label="当前项目"
             value={idOf(selectedProject?.id)}
             onChange={event => onSelectProject(event.target.value)}
             disabled={!projects.length}
@@ -4266,7 +4210,7 @@ function TimelineView({
   onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
   onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => Promise<void>;
   onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
-  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment: AttachmentDownloadHandler;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
 }) {
@@ -4924,406 +4868,245 @@ function OwnerEditorDrawer({
   );
 }
 
-function ChecksView({
-  checkItems,
-  phases,
-  modules,
-  ownerCandidates,
-  canWrite,
-  defaultOwner,
-  onCreateCheckItem,
-  onUpdateOwner,
-  onUpdateStatus,
-  onUploadAttachment,
-  onDownloadAttachment,
-  onDeleteAttachment,
-  onUpdateAttachmentCaption
-}: {
-  checkItems: CheckItem[];
+type CheckItemDraft = CheckItemConfigDraft & { description: string; acceptanceCriteria: string };
+
+function CheckItemAttachmentsEditor({ item, active, canWrite, saving, validation, onUpload, onDownload, onDelete, onCaption }: {
+  item: CheckItem | null;
+  active: boolean;
+  canWrite: boolean;
+  saving: boolean;
+  validation: string;
+  onUpload: (files: File[]) => Promise<number>;
+  onDownload: AttachmentDownloadHandler;
+  onDelete: (attachment: Attachment) => Promise<void>;
+  onCaption: (attachment: Attachment, caption: string) => Promise<void>;
+}) {
+  const [files, setFiles] = useState<File[]>([]);
+  useRelatedDraftDirty(files.length > 0);
+  return <section className="space-y-4" aria-label="检查项附件">
+    <p className="text-sm text-ink-muted">图片和 PDF 可在线预览；其他文件使用受控下载。上传、删除和说明保存立即生效，不会随正文取消而撤销。</p>
+    {canWrite && <div className="rounded-lg border border-outline bg-surface-soft p-3">
+      <label><span className="field-label">选择附件（可多选）</span><input className="input" type="file" multiple disabled={saving} aria-label="检查项选择附件" onChange={event => { setFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} /></label>
+      {!!files.length && <ul className="my-2 space-y-1 text-sm text-ink-muted">{files.map((file, index) => <li key={`${file.name}:${index}`} className="flex min-w-0 items-center gap-2"><span className="truncate">{file.name} · {formatFileSize(file.size)}</span><button type="button" className="btn btn-ghost btn--sm" disabled={saving} aria-label={`移除待上传 ${file.name}`} onClick={() => setFiles(current => current.filter((_, itemIndex) => itemIndex !== index))}>移除</button></li>)}</ul>}
+      <button className="btn btn-primary btn--sm mt-3" type="button" disabled={saving || !files.length || (!item && !!validation)} onClick={async () => { const count = await onUpload(files); setFiles(current => current.slice(count)); }}><Paperclip className="h-4 w-4" />{saving ? '处理中…' : item ? '上传附件' : '保存检查项并上传'}</button>
+      {!item && <p className="mt-2 text-xs text-ink-muted">首次上传会先保存基本信息，取得检查项 ID 后归档。{validation}</p>}
+      {item && <p className="mt-2 text-xs text-ink-muted">上传不自动保存基本信息草稿。</p>}
+    </div>}
+    <AttachmentList attachments={item?.attachments ?? []} loadThumbnails={active} canDownload={canWrite} canDelete={canWrite && !saving} canEditCaption={canWrite && !saving} onDownloadAttachment={onDownload} onDeleteAttachment={onDelete} onUpdateAttachmentCaption={onCaption} emptyMessage="当前检查项暂无附件。" />
+  </section>;
+}
+
+function ChecksView({ project, phases, modules, ownerCandidates, canWrite, workspaceLoading = false, defaultOwner, onSaved, onRemoved, onDownloadAttachment }: {
+  project: Project | null;
   phases: ProjectPhase[];
   modules: InspectionModule[];
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
+  workspaceLoading?: boolean;
   defaultOwner?: OwnerCandidate;
-  onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
-  onUpdateOwner: (item: CheckItem, owners: CheckItemOwner[]) => Promise<void>;
-  onUpdateStatus: (item: CheckItem, status: CheckItemStatus, source: string) => Promise<void>;
-  onUploadAttachment: (item: CheckItem, file: File) => Promise<void>;
-  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
-  onDeleteAttachment: (attachment: Attachment) => Promise<void>;
-  onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
+  onSaved: (item: CheckItem) => void;
+  onRemoved: (item: CheckItem) => void;
+  onDownloadAttachment: AttachmentDownloadHandler;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, { owners: CheckItemOwner[]; ownerName: string; ownerIdaasId?: string }>>({});
   const [filters, setFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [newDraft, setNewDraft] = useState<CheckItemConfigDraft | null>(null);
-  const [ownerDrawerItemId, setOwnerDrawerItemId] = useState<string | null>(null);
-  const [createMessage, setCreateMessage] = useState('');
-  const [savingCreate, setSavingCreate] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [mutationSaving, setSaving] = useState(false);
+  const busy = useRef(false);
+  const saving = mutationSaving || workspaceLoading;
+  const [message, setMessage] = useState('');
+  const [auditRevision, setAuditRevision] = useState(0);
+  const [tab, setTab] = useState('basic');
+  const requestedTab = useRef('basic');
   const visiblePhases = activePhasesOf(phases);
   const orderedModules = bySequence(modules);
-  const visiblePhaseKey = visiblePhases.map(phase => idOf(phase.id)).join('|');
-  const moduleKey = orderedModules.map(module => idOf(module.id)).join('|');
-  const defaultPhase = visiblePhases[0];
-  const defaultModule = orderedModules[0];
-  const phaseById = new Map(visiblePhases.map(phase => [`${phase.id}`, phase]));
-  const moduleById = new Map(modules.map(module => [`${module.id}`, module]));
-  const filteredCheckItems = checkItems.filter(item => {
-    const phase = phaseById.get(idOf(item.projectPhaseId));
-    const module = moduleById.get(idOf(item.moduleId));
-    if (!phase) return false;
-    if (filters.phaseId && idOf(item.projectPhaseId) !== filters.phaseId) return false;
-    if (filters.moduleId && idOf(item.moduleId) !== filters.moduleId) return false;
-    if (filters.status && item.status !== filters.status) return false;
-    const itemOwners = ownersOfItem(item);
-    if (filters.owner && !textMatches(filters.owner, ownersForSearch(itemOwners))) return false;
-    if (filters.activeState === 'enabled' && item.isActive === false) return false;
-    if (filters.activeState === 'disabled' && item.isActive !== false) return false;
-    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, ...ownersForSearch(itemOwners)])) return false;
-    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
+  const defaultPhase = visiblePhases.find(phase => idOf(phase.id) === filters.phaseId) ?? visiblePhases[0];
+  const defaultModule = orderedModules.find(module => idOf(module.id) === filters.moduleId) ?? orderedModules[0];
+  const toDraft = (item: CheckItem | null): CheckItemDraft => ({
+    title: item?.title ?? '', description: item?.description ?? '', acceptanceCriteria: item?.acceptanceCriteria ?? '',
+    moduleId: idOf(item?.moduleId ?? defaultModule?.id), projectPhaseId: idOf(item?.projectPhaseId ?? defaultPhase?.id),
+    tags: (item?.tags ?? []).join(', '), plannedStartDate: dateInputValue(item?.plannedStartDate ?? defaultPhase?.plannedStartDate),
+    plannedEndDate: dateInputValue(item?.plannedEndDate ?? defaultPhase?.plannedEndDate), ownerName: '', ownerIdaasId: undefined,
+    owners: item ? ownersOfItem(item) : defaultModule && ownersOfModule(defaultModule).length ? ownersOfModule(defaultModule) : defaultOwner?.idaasId ? [ownerCandidateToOwner(defaultOwner)] : [],
+    status: item?.status ?? 'pending', isActive: item?.isActive !== false
   });
-  const ownerDrawerItem = ownerDrawerItemId
-    ? checkItems.find(item => idOf(item.id) === ownerDrawerItemId)
-    : undefined;
-  const ownerDrawerDraft = ownerDrawerItem
-    ? drafts[ownerDrawerItemId ?? ''] ?? {
-      owners: ownersOfItem(ownerDrawerItem),
-      ownerName: '',
-      ownerIdaasId: undefined
-    }
-    : null;
-  const statusOptions = statusOptionValues(checkItems.map(item => item.status));
-  const selectedNewPhase = visiblePhases.find(phase => idOf(phase.id) === newDraft?.projectPhaseId) ?? defaultPhase;
-  const selectedNewModule = orderedModules.find(module => idOf(module.id) === newDraft?.moduleId) ?? defaultModule;
-  const selectedNewModuleOwners = selectedNewModule ? ownersOfModule(selectedNewModule) : [];
-  const defaultOwners = selectedNewModuleOwners.length
-    ? selectedNewModuleOwners
-    : defaultOwner?.idaasId
-      ? [ownerCandidateToOwner(defaultOwner)]
-      : [];
-  const createDisabledReason = !canWrite
-    ? '当前账号只读，写操作已禁用。'
-    : !newDraft?.title.trim()
-      ? '请先输入检查项标题。'
-      : !newDraft?.projectPhaseId
-        ? '请先选择阶段。'
-        : !newDraft?.moduleId
-          ? '请先选择模块。'
-          : '';
+  const retrieve = async (id: string | number, signal?: AbortSignal) => {
+    const item = await fetchCheckItem(id, signal);
+    if (!project || idOf(item.projectId) !== idOf(project.id)) throw new Error('检查项不属于当前项目，请刷新列表。');
+    return item;
+  };
+  const editor = useRecordEditor<CheckItem, CheckItemDraft>(toDraft, retrieve, saving);
+  const { draft, setDraft, record: selectedItem } = editor;
+  const list = usePaginatedList(listCheckItems, {
+    project: project?.id, phase_enabled: true, phase: filters.phaseId, module: filters.moduleId,
+    status: filters.status, owner: filters.owner, q: filters.keyword,
+    is_enabled: filters.activeState === 'enabled' ? true : filters.activeState === 'disabled' ? false : undefined,
+    start_date: filters.startDate, end_date: filters.endDate
+  }, !!project);
+  const rows = list.data?.results ?? [];
+  const phaseById = new Map(phases.map(phase => [idOf(phase.id), phase]));
+  const moduleById = new Map(modules.map(module => [idOf(module.id), module]));
+  const validation = !draft.title.trim() ? '请填写检查项标题。'
+    : !draft.projectPhaseId || !draft.moduleId ? '请选择阶段和模块。'
+    : !draft.plannedStartDate || !draft.plannedEndDate ? '请填写计划开始和结束日期。'
+    : draft.plannedStartDate > draft.plannedEndDate ? '计划结束不得早于开始。' : '';
 
-  useEffect(() => {
-    if (!defaultPhase || !defaultModule) {
-      setNewDraft(null);
-      return;
-    }
-    setNewDraft(current => {
-      const currentPhaseExists = current && visiblePhases.some(phase => idOf(phase.id) === current.projectPhaseId);
-      const currentModuleExists = current && orderedModules.some(module => idOf(module.id) === current.moduleId);
-      if (currentPhaseExists && currentModuleExists) return current;
-      return {
-        title: '',
-        moduleId: idOf(defaultModule.id),
-        projectPhaseId: idOf(defaultPhase.id),
-        tags: '',
-        plannedStartDate: dateInputValue(defaultPhase.plannedStartDate),
-        plannedEndDate: dateInputValue(defaultPhase.plannedEndDate),
-        ownerName: '',
-        ownerIdaasId: undefined,
-        owners: defaultOwners,
-        status: 'pending',
-        isActive: true
-      };
-    });
-  }, [defaultPhase?.id, defaultModule?.id, defaultOwner?.idaasId, defaultOwner?.displayName, visiblePhaseKey, moduleKey]);
+  useEffect(() => { setTab(requestedTab.current); setMessage(''); }, [editor.sessionKey]);
 
-  const handleCreate = async () => {
-    if (!newDraft) return;
-    if (createDisabledReason) {
-      setCreateMessage(createDisabledReason);
-      return;
-    }
-    setSavingCreate(true);
-    setCreateMessage('');
+  const open = (id?: string | number, nextTab = 'basic') => {
+    if (saving || busy.current) return;
+    requestedTab.current = nextTab;
+    void editor.openRecord(id);
+  };
+  const beginMutation = () => {
+    if (!canWrite || saving || busy.current || editor.loading || editor.error || !project) return false;
+    busy.current = true;
+    setSaving(true);
+    setMessage('');
+    return true;
+  };
+  const endMutation = () => { busy.current = false; setSaving(false); };
+  const changed = () => { list.refresh(); setAuditRevision(value => value + 1); };
+  const saveRecord = async () => {
+    if (!project || validation) throw new Error(validation || '请先选择项目。');
+    const snapshot = draft;
+    const payload = {
+      title: snapshot.title.trim(), description: snapshot.description, acceptanceCriteria: snapshot.acceptanceCriteria,
+      moduleId: snapshot.moduleId, projectPhaseId: snapshot.projectPhaseId,
+      tags: snapshot.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
+      plannedStartDate: snapshot.plannedStartDate, plannedEndDate: snapshot.plannedEndDate,
+      owners: ownersFromDraft(snapshot), status: snapshot.status, isActive: snapshot.isActive,
+      progressPercent: isComplete(snapshot.status) ? 100 : selectedItem?.progressPercent ?? 0, metadata: selectedItem?.metadata
+    };
+    const saved = selectedItem ? await updateCheckItem(selectedItem.id, payload) : await createCheckItem(project.id, payload);
+    editor.accept(saved, toDraft(saved));
+    onSaved(saved);
+    changed();
+    return saved;
+  };
+  const save = async () => {
+    if (!beginMutation()) return;
+    try { await saveRecord(); setMessage('检查项已保存。'); }
+    catch (error) { setMessage(mutationErrorMessage(error, '检查项保存失败。')); }
+    finally { endMutation(); }
+  };
+  const refreshAssets = async (target: CheckItem) => {
+    changed();
+    const updated = await editor.refresh(target);
+    if (updated) onSaved(updated);
+  };
+  const mutateAsset = async (action: () => Promise<unknown>) => {
+    if (!selectedItem || !beginMutation()) throw new Error('当前检查项正在处理，请稍后重试。');
+    let applied = false;
     try {
-      await onCreateCheckItem(newDraft);
-      setNewDraft({
-        ...newDraft,
-        title: '',
-        tags: '',
-        plannedStartDate: dateInputValue(selectedNewPhase?.plannedStartDate),
-        plannedEndDate: dateInputValue(selectedNewPhase?.plannedEndDate),
-        ownerName: '',
-        ownerIdaasId: undefined,
-        owners: ownersFromDraft(newDraft),
-        status: 'pending',
-        isActive: true
-      });
-      setCreateMessage('已新增检查项。');
-    } catch (err) {
-      setCreateMessage(mutationErrorMessage(err, '检查项新增失败。'));
+      await action();
+      applied = true;
+      await refreshAssets(selectedItem);
+    } catch (error) {
+      if (applied) throw new Error('附件操作已生效，但详情回读失败。请重新打开核实，勿重复操作。');
+      throw error;
+    } finally { endMutation(); }
+  };
+  const upload = async (files: File[]) => {
+    if (!files.length || !beginMutation()) return 0;
+    let target = selectedItem;
+    let completed = 0;
+    try {
+      if (!target) target = await saveRecord();
+      for (const file of files) {
+        await uploadAttachment({ file, projectId: target.projectId, objectType: 'check_item', objectId: target.id, metadata: { source: 'file_upload' } });
+        completed += 1;
+      }
+      setMessage(`已上传 ${completed} 个附件。`);
+    } catch (error) {
+      setMessage(`${target ? `检查项已保存；附件成功 ${completed}/${files.length} 个，其余未完成。` : ''}${mutationErrorMessage(error, '附件上传失败。')}`);
     } finally {
-      setSavingCreate(false);
+      if (target) {
+        try { await refreshAssets(target); }
+        catch { setMessage(current => `${current} 附件回读失败，请重新打开核实，避免重复上传。`); }
+      }
+      endMutation();
     }
+    return completed;
+  };
+  const remove = async () => {
+    if (!selectedItem?.canDelete || !window.confirm(`确认删除检查项「${selectedItem.title}」？未保存草稿也会放弃。`)) return;
+    if (!beginMutation()) return;
+    try {
+      await deleteCheckItem(selectedItem.id);
+      onRemoved(selectedItem);
+      editor.removed();
+      changed();
+      setMessage('检查项已删除，审计记录保留。');
+    } catch (error) { setMessage(mutationErrorMessage(error, '检查项删除失败。')); }
+    finally { endMutation(); }
   };
 
-  return (
-    <>
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2 className="text-xl font-semibold">检查项表格</h2>
-          <p className="text-sm text-ink-muted">支持新增检查项、筛选台账和维护负责人。</p>
-        </div>
-        <ReadOnlyNotice canWrite={canWrite} />
+  return <section className="panel min-w-0">
+    <div className="panel-header">
+      <div><h2 className="text-xl font-semibold">检查项</h2><p className="text-sm text-ink-muted">筛选列表，点击检查项查看详情、附件与操作记录。</p></div>
+      <div className="flex flex-wrap items-center gap-2"><span className="chip">共 {list.data?.count ?? 0} 条</span><button className="btn btn-primary btn--sm" type="button" disabled={!canWrite || !project || saving || !defaultPhase || !defaultModule} onClick={() => open()}><Plus className="h-4 w-4" />新增检查项</button></div>
+    </div>
+    <ReadOnlyNotice canWrite={canWrite} />
+    {!editor.open && message && <p role="status" className="mt-3 text-sm">{message}</p>}
+    <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-3" aria-label="检查项筛选">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <label className="xl:col-span-2"><span className="field-label">关键字</span><input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="检查项、要求、阶段、模块" aria-label="检查项关键字筛选" /></label>
+        <label><span className="field-label">阶段</span><select className="select" aria-label="检查项阶段筛选" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}><option value="">全部启用阶段</option>{visiblePhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}</select></label>
+        <label><span className="field-label">模块</span><select className="select" aria-label="检查项模块筛选" value={filters.moduleId} onChange={event => setFilters({ ...filters, moduleId: event.target.value })}><option value="">全部模块</option>{orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}</select></label>
+        <label><span className="field-label">状态</span><select className="select" aria-label="检查项状态筛选" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option>{CHECK_ITEM_STATUS_OPTIONS.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}</select></label>
+        <div className="flex items-end gap-2"><button className="btn btn-ghost btn--sm" type="button" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>高级筛选{filters.owner || filters.activeState || filters.startDate || filters.endDate ? ' · 已生效' : ''}</button><button className="btn btn-ghost btn--sm" type="button" onClick={() => setFilters(EMPTY_FILTERS)}>重置</button></div>
       </div>
-      {newDraft ? (
-        <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-ink">新增检查项</div>
-              <div className="text-xs text-ink-muted">默认归属 {selectedNewPhase?.name ?? '当前阶段'} / {selectedNewModule?.name ?? '当前模块'}。</div>
+      {advanced && <div className="mt-3 grid gap-3 border-t border-outline pt-3 sm:grid-cols-2 xl:grid-cols-4">
+        <label><span className="field-label">负责人</span><input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="姓名、邮箱或 IDaaS ID" aria-label="检查项负责人筛选" /></label>
+        <label><span className="field-label">检查项启用状态</span><select className="select" value={filters.activeState} onChange={event => setFilters({ ...filters, activeState: event.target.value })}><option value="">全部</option><option value="enabled">启用</option><option value="disabled">停用</option></select></label>
+        <label><span className="field-label">计划区间起</span><input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} /></label>
+        <label><span className="field-label">计划区间止</span><input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} /></label>
+      </div>}
+    </div>
+    {rows.length ? <div className="table-shell mt-4"><table className="data-table min-w-[900px]">
+      <thead><tr><th>检查项</th><th>阶段 / 模块</th><th>负责人</th><th>计划</th><th>状态</th><th>附件</th><th>操作</th></tr></thead>
+      <tbody>{rows.map(item => <tr key={item.id} className={idOf(selectedItem?.id) === idOf(item.id) ? 'bg-primary/10' : undefined}>
+        <td className="max-w-[270px]"><button className="block max-w-full truncate text-left font-semibold text-primary" type="button" disabled={saving} title={item.title} onClick={() => open(item.id)}>{item.title}</button>{item.acceptanceCriteria && <div className="mt-1 truncate text-xs text-ink-muted" title={item.acceptanceCriteria}>{item.acceptanceCriteria}</div>}</td>
+        <td className="max-w-[160px]"><div className="truncate">{phaseById.get(idOf(item.projectPhaseId))?.name ?? '-'}</div><div className="truncate text-xs text-ink-muted">{moduleById.get(idOf(item.moduleId))?.name ?? '-'}</div></td>
+        <td><OwnerAvatarStack owners={ownersOfItem(item)} maxVisible={3} /></td>
+        <td className="whitespace-nowrap text-xs"><div>{formatDate(item.plannedStartDate)}</div><div className="text-ink-muted">至 {formatDate(item.plannedEndDate)}</div></td>
+        <td><StatusPill status={item.status} />{item.isActive === false && <div className="mt-1 text-xs text-ink-muted">已停用</div>}</td>
+        <td><button className="btn btn-ghost btn--sm" type="button" disabled={saving} aria-label={`${item.title} 的附件`} onClick={() => open(item.id, 'attachments')}><Paperclip className="h-4 w-4" />{item.attachmentCount ?? item.attachments.length}</button></td>
+        <td><button className="btn btn-ghost btn--sm whitespace-nowrap" type="button" disabled={saving} aria-label={`查看检查项 ${item.title}`} onClick={() => open(item.id)}>{canWrite ? '查看 / 编辑' : '查看'}</button></td>
+      </tr>)}</tbody>
+    </table></div> : <div className="mt-4"><EmptyState message={!project ? '请先选择项目。' : list.loading ? '正在加载检查项…' : list.error ? '检查项列表暂不可用。' : '当前筛选下暂无检查项。'} /></div>}
+    {list.error && <div role="alert" className="mt-3 text-danger">{list.error}<button className="btn btn-ghost btn--sm" type="button" onClick={list.refresh}>重试</button></div>}
+    <Pagination page={list.page} pageSize={list.pageSize} count={list.data?.count ?? 0} loading={list.loading || saving} onPageChange={list.setPage} onPageSizeChange={list.setPageSize} />
+    <RelatedDraftContext.Provider key={editor.sessionKey} value={editor.registerRelatedDraft}>
+      <SideDrawer open={editor.open} title={selectedItem ? `检查项 · ${selectedItem.title}` : editor.loading || editor.error ? '检查项详情' : '新增检查项'} size="xl" saving={saving} onClose={editor.close}
+        footer={<><span className="mr-auto text-xs text-ink-muted">{editor.relatedDirty ? '有附件说明或待上传文件尚未提交' : editor.dirty ? '基本信息有未保存修改' : selectedItem ? '已保存' : '保存后归档到当前项目'}</span><button className="btn btn-ghost btn--sm" type="button" disabled={saving} onClick={editor.close}>关闭</button>{canWrite && <button className="btn btn-primary btn--sm" type="button" disabled={saving || editor.loading || !!editor.error || !!validation} onClick={() => void save()}>{saving ? '处理中…' : '保存检查项'}</button>}</>}
+      >
+        {editor.loading ? <p role="status">正在加载详情…</p> : editor.error ? <div role="alert" className="text-danger">{editor.error}<button className="btn btn-ghost btn--sm" type="button" onClick={() => void editor.retry()}>重试</button></div> : <>
+          <nav className="mb-4 flex flex-wrap gap-2 border-b border-outline pb-3" aria-label="检查项详情分区">{[['basic', '基本信息'], ['attachments', `附件 (${selectedItem?.attachments.length ?? 0})`], ['audit', '操作记录']].map(([value, label]) => <button key={value} type="button" className={`btn btn--sm ${tab === value ? 'btn-primary' : 'btn-ghost'}`} aria-pressed={tab === value} onClick={() => setTab(value)}>{label}</button>)}</nav>
+          {message && <p className="mb-3 text-sm" role="status">{message}</p>}
+          <div hidden={tab !== 'basic'}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="sm:col-span-2"><span className="field-label">检查项标题 *</span><input className="input" aria-label="检查项标题" value={draft.title} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+              <label><span className="field-label">阶段 *</span><select className="select" aria-label="检查项所属阶段" value={draft.projectPhaseId} disabled={!canWrite || saving} onChange={event => { const phase = phaseById.get(event.target.value); setDraft({ ...draft, projectPhaseId: event.target.value, ...(!selectedItem ? { plannedStartDate: dateInputValue(phase?.plannedStartDate), plannedEndDate: dateInputValue(phase?.plannedEndDate) } : {}) }); }}><option value="" disabled>选择阶段</option>{bySequence(phases).filter(phase => phase.isActive !== false || idOf(phase.id) === draft.projectPhaseId).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}{phase.isActive === false ? '（已停用）' : ''}</option>)}</select></label>
+              <label><span className="field-label">模块 *</span><select className="select" aria-label="检查项所属模块" value={draft.moduleId} disabled={!canWrite || saving} onChange={event => { const module = moduleById.get(event.target.value); setDraft({ ...draft, moduleId: event.target.value, ...(!selectedItem ? { owners: module ? ownersOfModule(module) : [] } : {}) }); }}><option value="" disabled>选择模块</option>{orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}</select></label>
+              <label><span className="field-label">计划开始 *</span><input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, plannedStartDate: event.target.value })} /></label>
+              <label><span className="field-label">计划结束 *</span><input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, plannedEndDate: event.target.value })} /></label>
+              <label><span className="field-label">状态</span><select className="select" aria-label="检查项状态" value={draft.status} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, status: event.target.value })}>{statusOptionValues([...CHECK_ITEM_STATUS_OPTIONS, draft.status]).map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}</select></label>
+              <label><span className="field-label">启用状态</span><select className="select" aria-label="检查项启用状态" value={String(draft.isActive)} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, isActive: event.target.value === 'true' })}><option value="true">启用</option><option value="false">停用</option></select></label>
+              <label className="sm:col-span-2"><span className="field-label">标签</span><input className="input" value={draft.tags} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, tags: event.target.value })} placeholder="逗号分隔" /></label>
+              <label className="sm:col-span-2"><span className="field-label">描述</span><textarea className="input min-h-24" value={draft.description} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+              <label className="sm:col-span-2"><span className="field-label">检查要求</span><textarea className="input min-h-24" value={draft.acceptanceCriteria} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, acceptanceCriteria: event.target.value })} /></label>
+              <div className="sm:col-span-2"><span className="field-label">负责人（IDaaS）</span><OwnerListEditor owners={draft.owners} ownerCandidates={ownerCandidates} canWrite={canWrite && !saving} candidateLabel="检查项 IDaaS 负责人" onChange={next => setDraft({ ...draft, ...next })} /></div>
             </div>
-            {createMessage ? <span className="text-sm text-ink-muted">{createMessage}</span> : null}
+            {canWrite && validation && <p className="mt-3 text-sm text-warning">{validation}</p>}
+            {canWrite && selectedItem && <div className="mt-5 border-t border-outline pt-3">{selectedItem.canDelete ? <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={saving} onClick={() => void remove()}><Trash2 className="h-4 w-4" />删除检查项</button> : <p className="text-xs text-ink-muted">该检查项受删除保护，如不再使用请设置为停用。</p>}</div>}
           </div>
-          <div className="mt-3 grid gap-3 lg:grid-cols-4">
-            <label className="lg:col-span-2">
-              <span className="field-label">检查项标题</span>
-              <input
-                className="input"
-                value={newDraft.title}
-                disabled={!canWrite}
-                onChange={event => setNewDraft({ ...newDraft, title: event.target.value })}
-                placeholder="输入检查项标题"
-                aria-label="检查项页面新增标题"
-              />
-            </label>
-            <label>
-              <span className="field-label">阶段</span>
-              <select
-                className="select"
-                value={newDraft.projectPhaseId}
-                disabled={!canWrite}
-                onChange={event => {
-                  const phase = visiblePhases.find(item => idOf(item.id) === event.target.value);
-                  setNewDraft({
-                    ...newDraft,
-                    projectPhaseId: event.target.value,
-                    plannedStartDate: dateInputValue(phase?.plannedStartDate),
-                    plannedEndDate: dateInputValue(phase?.plannedEndDate)
-                  });
-                }}
-              >
-                {visiblePhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span className="field-label">模块</span>
-              <select
-                className="select"
-                value={newDraft.moduleId}
-                disabled={!canWrite}
-                onChange={event => {
-                  const nextModule = orderedModules.find(module => idOf(module.id) === event.target.value);
-                  const nextOwners = nextModule ? ownersOfModule(nextModule) : [];
-                  setNewDraft({
-                    ...newDraft,
-                    moduleId: event.target.value,
-                    owners: nextOwners
-                  });
-                }}
-              >
-                {orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span className="field-label">标签</span>
-              <input className="input" value={newDraft.tags} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, tags: event.target.value })} placeholder="逗号分隔" />
-            </label>
-            <label>
-              <span className="field-label">计划开始</span>
-              <input className="input" type="date" value={newDraft.plannedStartDate} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, plannedStartDate: event.target.value })} />
-            </label>
-            <label>
-              <span className="field-label">计划结束</span>
-              <input className="input" type="date" value={newDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewDraft({ ...newDraft, plannedEndDate: event.target.value })} />
-            </label>
-            <div>
-              <span className="field-label">责任人</span>
-              <OwnerListEditor
-                owners={newDraft.owners}
-                ownerCandidates={ownerCandidates}
-                canWrite={canWrite}
-                candidateLabel="检查项页面新增 IDaaS 责任人"
-                onChange={next => setNewDraft({ ...newDraft, ...next })}
-              />
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              className="btn btn-primary btn--sm"
-              type="button"
-              disabled={savingCreate}
-              onClick={() => void handleCreate()}
-              aria-label="在检查项页面新增检查项"
-              title={createDisabledReason || undefined}
-            >
-              <Plus className="h-4 w-4" />
-              {savingCreate ? '新增中' : '新增检查项'}
-            </button>
-            {createDisabledReason ? <span className="text-xs text-ink-muted">{createDisabledReason}</span> : null}
-          </div>
-        </div>
-      ) : null}
-      <div className="mt-4">
-        <FilterShell>
-          <label className="xl:col-span-2">
-            <span className="field-label">关键字</span>
-            <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="检查项、阶段、模块" aria-label="检查项关键字筛选" />
-          </label>
-          <label>
-            <span className="field-label">阶段</span>
-            <select className="select" value={filters.phaseId} onChange={event => setFilters({ ...filters, phaseId: event.target.value })}>
-              <option value="">全部阶段</option>
-              {visiblePhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">模块</span>
-            <select className="select" value={filters.moduleId} onChange={event => setFilters({ ...filters, moduleId: event.target.value })}>
-              <option value="">全部模块</option>
-              {orderedModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">状态</span>
-            <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
-              <option value="">全部状态</option>
-              {statusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">负责人</span>
-            <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="检查项负责人筛选" />
-          </label>
-          <label>
-            <span className="field-label">启用状态</span>
-            <select className="select" value={filters.activeState} onChange={event => setFilters({ ...filters, activeState: event.target.value })}>
-              <option value="">全部</option>
-              <option value="enabled">启用</option>
-              <option value="disabled">停用</option>
-            </select>
-          </label>
-          <label>
-            <span className="field-label">开始日期</span>
-            <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">结束日期</span>
-            <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
-          </label>
-        </FilterShell>
-      </div>
-      {!filteredCheckItems.length ? <div className="mt-4"><EmptyState message="当前筛选下暂无检查项。" /></div> : null}
-      <div className="table-shell mt-4">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>检查项</th>
-              <th>阶段</th>
-              <th>模块</th>
-              <th>负责人</th>
-              <th>计划</th>
-              <th>状态</th>
-              <th>附件</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredCheckItems.map(item => {
-              const draft = drafts[`${item.id}`] ?? {
-                owners: ownersOfItem(item),
-                ownerName: '',
-                ownerIdaasId: undefined
-              };
-              return (
-                <tr key={item.id}>
-                  <td className="max-w-[280px]">
-                    <div className="font-semibold">{item.title}</div>
-                    <div className="mt-1 text-xs text-ink-muted">{item.acceptanceCriteria}</div>
-                  </td>
-                  <td>{phaseById.get(`${item.projectPhaseId}`)?.name ?? '-'}</td>
-                  <td>{moduleById.get(`${item.moduleId}`)?.name ?? '-'}</td>
-                  <td className="min-w-[170px]">
-                    <CompactOwnerListEditor
-                      owners={draft.owners}
-                      candidateLabel={`检查项 ${item.title} IDaaS 责任人`}
-                      isActive={ownerDrawerItemId === idOf(item.id)}
-                      onOpen={() => setOwnerDrawerItemId(idOf(item.id))}
-                    />
-                  </td>
-                  <td>{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
-                  <td className="min-w-[240px]">
-                    <div className="mb-2">
-                      <StatusPill status={item.status} />
-                    </div>
-                    <CheckItemStatusControl
-                      item={item}
-                      canWrite={canWrite}
-                      source="check-items"
-                      onUpdateStatus={onUpdateStatus}
-                    />
-                  </td>
-                  <td className="min-w-[240px]">
-                    <CheckItemAttachmentPanel
-                      item={item}
-                      canWrite={canWrite}
-                      compact
-                      onUploadAttachment={onUploadAttachment}
-                      onDownloadAttachment={onDownloadAttachment}
-                      onDeleteAttachment={onDeleteAttachment}
-                      onUpdateAttachmentCaption={onUpdateAttachmentCaption}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      className="btn btn-primary btn--sm"
-                      type="button"
-                      disabled={!canWrite}
-                      onClick={() => void onUpdateOwner(item, ownersFromDraft(draft))}
-                    >
-                      <Save className="h-4 w-4" />
-                      保存
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <OwnerEditorDrawer
-      open={Boolean(ownerDrawerItem && ownerDrawerDraft)}
-      title={ownerDrawerItem?.title ?? '检查项负责人'}
-      subtitle={[
-        ownerDrawerItem ? phaseById.get(idOf(ownerDrawerItem.projectPhaseId))?.name : '',
-        ownerDrawerItem ? moduleById.get(idOf(ownerDrawerItem.moduleId))?.name : ''
-      ].filter(Boolean).join(' / ')}
-      owners={ownerDrawerDraft?.owners ?? []}
-      ownerCandidates={ownerCandidates}
-      canWrite={canWrite}
-      candidateLabel={`检查项 ${ownerDrawerItem?.title ?? ''} IDaaS 责任人`}
-      onChange={next => {
-        if (!ownerDrawerItem) return;
-        const itemId = idOf(ownerDrawerItem.id);
-        setDrafts(current => ({
-          ...current,
-          [itemId]: next
-        }));
-      }}
-      onClose={() => setOwnerDrawerItemId(null)}
-    />
-    </>
-  );
+          <div hidden={tab !== 'attachments'}><CheckItemAttachmentsEditor item={selectedItem} active={tab === 'attachments'} canWrite={canWrite} saving={saving} validation={validation} onUpload={upload} onDownload={onDownloadAttachment} onDelete={attachment => mutateAsset(() => deleteAttachment(attachment.id))} onCaption={(attachment, caption) => mutateAsset(() => updateAttachmentMetadata(attachment.id, { ...(attachment.metadata ?? {}), caption }))} /></div>
+          <div hidden={tab !== 'audit'}><ObjectAuditHistory objectType="CheckItem" objectId={selectedItem?.id} revision={auditRevision} /></div>
+        </>}
+      </SideDrawer>
+    </RelatedDraftContext.Provider>
+  </section>;
 }
 
 function IssuesView({ issues, phases }: { issues: KeyIssue[]; phases: ProjectPhase[] }) {
@@ -5847,7 +5630,7 @@ function IssuesCrudView({
   onImportCsv: (file: File) => Promise<void>;
   onExportCsv: () => Promise<void>;
   onUploadIssueAttachment: (issue: KeyIssue, file: File, metadata?: Record<string, unknown>) => Promise<void>;
-  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment: AttachmentDownloadHandler;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
 }) {
@@ -6256,7 +6039,7 @@ function CollisionCrudView({
   onDownloadTemplate: () => Promise<void>;
   onExportExcel: (report: CollisionReport) => Promise<void>;
   onUploadReportAttachment: (report: CollisionReport, file: File, metadata?: Record<string, unknown>) => Promise<void>;
-  onDownloadAttachment: (attachment: Attachment) => Promise<void>;
+  onDownloadAttachment: AttachmentDownloadHandler;
   onDeleteAttachment: (attachment: Attachment) => Promise<void>;
   onUpdateAttachmentCaption: (attachment: Attachment, caption: string) => Promise<void>;
 }) {
@@ -9741,6 +9524,26 @@ export default function App() {
     }
   };
 
+  const handleCheckItemSaved = (item: CheckItem) => {
+    const upsert = (items: CheckItem[]) => items.some(current => idOf(current.id) === idOf(item.id))
+      ? items.map(current => idOf(current.id) === idOf(item.id) ? item : current)
+      : [...items, item];
+    setWorkspace(current => idOf(current.selectedProject?.id) !== idOf(item.projectId) ? current : {
+      ...current,
+      checkItems: upsert(current.checkItems),
+      timeline: current.timeline ? { ...current.timeline, checkItems: upsert(current.timeline.checkItems) } : null
+    });
+  };
+
+  const handleCheckItemRemoved = (item: CheckItem) => {
+    const without = (items: CheckItem[]) => items.filter(current => idOf(current.id) !== idOf(item.id));
+    setWorkspace(current => idOf(current.selectedProject?.id) !== idOf(item.projectId) ? current : {
+      ...current,
+      checkItems: without(current.checkItems),
+      timeline: current.timeline ? { ...current.timeline, checkItems: without(current.timeline.checkItems) } : null
+    });
+  };
+
   const handleUpdateOwner = async (item: CheckItem, owners: CheckItemOwner[]) => {
     if (!canWrite) return;
     try {
@@ -10039,22 +9842,11 @@ export default function App() {
     }
   };
 
-  const handleDownloadAttachment = async (attachment: Attachment) => {
-    if (!canWrite) return;
-    try {
-      const url = await fetchAttachmentDownloadLink(attachment.id);
-      if (!url) throw new Error('后端未返回附件下载链接');
-      const link = document.createElement('a');
-      link.href = url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (err) {
-      setError(mutationErrorMessage(err, '附件下载链接获取失败'));
-      throw err;
-    }
+  const handleDownloadAttachment: AttachmentDownloadHandler = async (attachment, signal) => {
+    if (!canWrite) throw new Error('当前账号没有附件下载权限。');
+    const result = await fetchAttachmentDownload(attachment.id, attachment.fileName, signal);
+    signal?.throwIfAborted();
+    downloadBlobFile(safeDownloadFileName(result.fileName || attachment.fileName, 'attachment'), result.blob);
   };
 
   const handleDeleteAttachment = async (attachment: Attachment) => {
@@ -10513,23 +10305,21 @@ export default function App() {
     if (currentView === 'checks') {
       return withProjectContext(
         <ChecksView
-          checkItems={workspace.checkItems}
+          key={workspace.selectedProject?.id ?? 'no-project'}
+          project={workspace.selectedProject}
           phases={workspace.phases}
           modules={workspace.inspectionModules}
           ownerCandidates={workspace.ownerCandidates}
           canWrite={canWrite}
+          workspaceLoading={loading}
           defaultOwner={
             profile?.userId
               ? { idaasId: profile.userId, displayName: profile.displayName, email: profile.email, avatarUrl: profile.avatarUrl }
               : undefined
           }
-          onCreateCheckItem={handleCreateCheckItemConfig}
-          onUpdateOwner={handleUpdateOwner}
-          onUpdateStatus={handleUpdateCheckItemStatus}
-          onUploadAttachment={handleUploadCheckItemAttachment}
+          onSaved={handleCheckItemSaved}
+          onRemoved={handleCheckItemRemoved}
           onDownloadAttachment={handleDownloadAttachment}
-          onDeleteAttachment={handleDeleteAttachment}
-          onUpdateAttachmentCaption={handleUpdateAttachmentCaption}
         />
       );
     }
