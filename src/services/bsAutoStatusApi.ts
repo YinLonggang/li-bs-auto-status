@@ -1,6 +1,7 @@
 import { BASE_CONFIG_PREFIX } from '../config';
 import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http';
 import { requestDirectory, requestPage } from './pagination';
+import { attachmentPreviewKind, validateBinaryContent } from './attachmentContent';
 import type {
   ApiEnvelope,
   Attachment,
@@ -341,6 +342,10 @@ const mergeHierarchyFallback = (hierarchy: HierarchyOptions, projects: Project[]
 
 const normalizeAttachment = (input: unknown): Attachment => {
   const raw = asRecord(input);
+  const contentType = firstString(raw, ['contentType', 'content_type']);
+  const declaredKind = raw.previewKind ?? raw.preview_kind;
+  const safeKind = attachmentPreviewKind(contentType);
+  const previewKind = declaredKind === undefined ? safeKind : declaredKind === safeKind ? safeKind : null;
   return {
     id: firstId(raw, ['id']),
     fileName: firstString(raw, ['fileName', 'file_name']),
@@ -348,23 +353,19 @@ const normalizeAttachment = (input: unknown): Attachment => {
     objectKey: firstString(raw, ['objectKey', 'object_key']),
     downloadUrl: firstString(raw, ['downloadUrl', 'download_url']) || null,
     previewUrl: firstString(raw, ['previewUrl', 'preview_url']) || null,
-    contentType: firstString(raw, ['contentType', 'content_type']),
+    contentType,
     fileSize: firstNumber(raw, ['fileSize', 'file_size']),
     uploadedBy: firstString(raw, ['uploadedBy', 'uploaded_by_name']),
     createdAt: firstString(raw, ['createdAt', 'created_at']),
-    canPreview: asBoolean(raw.canPreview, asBoolean(raw.can_preview, true)),
+    previewKind,
+    canPreview: !!previewKind && asBoolean(raw.canPreview, asBoolean(raw.can_preview, true)),
     canDownload: asBoolean(raw.canDownload, asBoolean(raw.can_download, true)),
-    isImage: asBoolean(raw.isImage, asBoolean(raw.is_image, false)),
+    isImage: previewKind === 'image',
     metadata: asRecord(raw.metadata)
   };
 };
 
-const IMAGE_ATTACHMENT_PATTERN = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
-
-const isImageAttachmentForBlocks = (attachment: Attachment) =>
-  attachment.isImage === true ||
-  attachment.contentType?.toLowerCase().startsWith('image/') ||
-  IMAGE_ATTACHMENT_PATTERN.test(attachment.fileName);
+const isImageAttachmentForBlocks = (attachment: Attachment) => attachment.previewKind === 'image';
 
 const collisionDefaultSectionKey = (slotKey: string) => {
   if (['problemDescription', 'vehicleModel', 'source'].includes(slotKey)) return 'section_1';
@@ -690,9 +691,10 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
     isDefault: asBoolean(raw.isDefault, asBoolean(raw.is_default, false)),
     result: firstString(raw, ['result', 'result_note']),
     blockerReason: firstString(raw, ['blockerReason', 'blocker_reason']),
-    progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent']) || firstNumber(metadata, ['progressPercent', 'progress_percent']),
+    progressPercent: firstNumber(raw, ['progressPercent', 'progress_percent'], firstNumber(metadata, ['progressPercent', 'progress_percent'])),
     notes: firstString(metadata, ['notes']),
     metadata,
+    attachmentCount: firstNumber(raw, ['attachmentCount', 'attachment_count'], asArray(raw.attachments).length),
     attachments: asArray(raw.attachments).map(normalizeAttachment)
   };
 };
@@ -1066,6 +1068,8 @@ export type UpdateProjectPhaseInput = {
 
 export type UpdateCheckItemInput = {
   title?: string;
+  description?: string;
+  acceptanceCriteria?: string;
   moduleId?: string | number;
   projectPhaseId?: string | number;
   tags?: string[];
@@ -1499,6 +1503,13 @@ export async function listProjects(filters?: ProjectScopeFilters) {
 
 export async function fetchProject(projectId: string | number) {
   return normalizeProject(unwrap(await apiRequest(`/projects/${encodeURIComponent(projectId)}/`)));
+}
+
+export const listCheckItems = (query: ListQuery, signal?: AbortSignal) =>
+  requestPage('/check-items/', query, normalizeCheckItem, signal);
+
+export async function fetchCheckItem(id: string | number, signal?: AbortSignal) {
+  return normalizeCheckItem(unwrap(await apiRequest(`/check-items/${encodeURIComponent(id)}/`, { signal })));
 }
 
 export const listKeyIssues = (query: ListQuery, signal?: AbortSignal) =>
@@ -2043,12 +2054,18 @@ export async function fetchAttachmentDownloadLink(attachmentId: string | number)
   return firstString(raw, ['download_url', 'downloadUrl', 'url']);
 }
 
-export async function fetchAttachmentPreview(attachmentId: string | number): Promise<AttachmentPreview> {
-  const result = await apiBlobRequest(`/attachments/${attachmentId}/preview/`);
-  return {
-    blob: result.blob,
-    fileName: result.fileName
-  };
+export async function fetchAttachmentDownload(attachmentId: string | number, fileName = '', signal?: AbortSignal) {
+  const result = await apiBlobRequest(`/attachments/${encodeURIComponent(attachmentId)}/download/`, { signal });
+  await validateBinaryContent(result.blob, result.fileName || fileName);
+  signal?.throwIfAborted();
+  return result;
+}
+
+export async function fetchAttachmentPreview(attachmentId: string | number, signal?: AbortSignal): Promise<AttachmentPreview> {
+  const result = await apiBlobRequest(`/attachments/${encodeURIComponent(attachmentId)}/preview/`, { signal });
+  await validateBinaryContent(result.blob, result.fileName, true);
+  signal?.throwIfAborted();
+  return result;
 }
 
 export async function updateAttachmentMetadata(
@@ -2099,6 +2116,7 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
       method: 'PATCH',
       body: JSON.stringify({
         title: payload.title,
+        description: payload.description,
         module: payload.moduleId,
         project_phase: payload.projectPhaseId,
         phase: payload.projectPhaseId,
@@ -2107,18 +2125,19 @@ export async function updateCheckItem(checkItemId: string | number, payload: Upd
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
         owners: payload.owners === undefined ? undefined : owners,
-        owner_name: primaryOwner?.display_name,
-        owner_idaas_id: primaryOwner?.idaas_id,
         status: payload.status,
         is_enabled: payload.isActive,
-        progress_percent: payload.progressPercent,
         metadata: {
           ...(payload.metadata ?? {}),
+          ...(payload.progressPercent !== undefined ? { progressPercent: payload.progressPercent, progress_percent: payload.progressPercent } : {}),
+          ...(payload.acceptanceCriteria !== undefined ? { acceptanceCriteria: payload.acceptanceCriteria, acceptance_criteria: payload.acceptanceCriteria } : {}),
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
           planned_end_date: optionalDate(payload.plannedEndDate),
-          owner_name: primaryOwner?.display_name,
-          owner_idaas_id: primaryOwner?.idaas_id
+          ...(payload.owners !== undefined ? {
+            owner_name: primaryOwner?.display_name ?? '',
+            owner_idaas_id: primaryOwner?.idaas_id ?? ''
+          } : {})
         }
       })
     })
@@ -2136,23 +2155,25 @@ export async function createCheckItem(projectId: string | number, payload: Creat
         project_phase: payload.projectPhaseId,
         module: payload.moduleId,
         title: payload.title,
+        description: payload.description,
         tags: payload.tags,
         planned_start: optionalDate(payload.plannedStartDate),
         planned_end: optionalDate(payload.plannedEndDate),
         due_date: optionalDate(payload.plannedEndDate),
         owners,
-        owner_name: primaryOwner?.display_name,
-        owner_idaas_id: primaryOwner?.idaas_id,
         status: payload.status ?? 'pending',
         is_enabled: payload.isActive ?? true,
-        progress_percent: payload.progressPercent,
         metadata: {
           ...(payload.metadata ?? {}),
+          ...(payload.progressPercent !== undefined ? { progressPercent: payload.progressPercent, progress_percent: payload.progressPercent } : {}),
+          ...(payload.acceptanceCriteria !== undefined ? { acceptanceCriteria: payload.acceptanceCriteria, acceptance_criteria: payload.acceptanceCriteria } : {}),
           tags: payload.tags,
           planned_start_date: optionalDate(payload.plannedStartDate),
           planned_end_date: optionalDate(payload.plannedEndDate),
-          owner_name: primaryOwner?.display_name,
-          owner_idaas_id: primaryOwner?.idaas_id
+          ...(payload.owners !== undefined ? {
+            owner_name: primaryOwner?.display_name ?? '',
+            owner_idaas_id: primaryOwner?.idaas_id ?? ''
+          } : {})
         }
       })
     })

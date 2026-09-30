@@ -12,16 +12,21 @@
     "preview": "vite preview --host 127.0.0.1",
     "type-check": "tsc --noEmit",
     "permission-regression": "node permission-regression.mjs",
+    "permission-browser": "node permission-browser.mjs",
+    "test:permission-regression": "node --test test-permission-regression.mjs test-permission-browser.mjs",
     "test:zeus-contracts": "node test-zeus-contracts.mjs",
     "test:timeline": "node test-timeline.mjs",
     "test:pagination": "node test-pagination.mjs",
     "test:template-matrix": "node test-template-matrix.mjs",
-    "test:drawer-interactions": "node test-drawer-interactions.mjs"
+    "test:drawer-interactions": "node test-drawer-interactions.mjs",
+    "test:attachment-content": "node test-attachment-content.mjs",
+    "test:check-items": "node test-check-items.mjs"
   },
   "dependencies": {
     "@li-sicar/side-drawer": "file:vendor/li-sicar-side-drawer-0.1.0.tgz",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.555.0",
+    "pdfjs-dist": "6.3.289",
     "react": "^19.2.1",
     "react-dom": "^19.2.1"
   },

@@ -22,7 +22,7 @@ const check = async (name, run) => { await run(); checks++; process.stdout.write
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const pageOf = (results, count = results.length) => ({ results, count, next: null, previous: null });
 const modules = {
-  config: 'src/config.ts', http: 'src/services/http.ts', pagination: 'src/services/pagination.ts',
+  config: 'src/config.ts', http: 'src/services/http.ts', pagination: 'src/services/pagination.ts', attachmentContent: 'src/services/attachmentContent.ts',
   bsAutoStatusApi: 'src/services/bsAutoStatusApi.ts', usePaginatedList: 'src/hooks/usePaginatedList.ts', useRecordEditor: 'src/hooks/useRecordEditor.ts'
 };
 const mounted = new Set();

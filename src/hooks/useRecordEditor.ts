@@ -102,7 +102,10 @@ export function useRecordEditor<T extends { id: string | number }, D>(
     requestRef.current = controller;
     try {
       const next = await retrieve(target.id, controller.signal);
-      if (!controller.signal.aborted) setRecord(next);
+      if (!controller.signal.aborted) {
+        setRecord(next);
+        return next;
+      }
       // Refresh related assets without replacing unsaved form fields.
     } catch (err) {
       if (!controller.signal.aborted) throw err;
