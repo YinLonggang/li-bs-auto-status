@@ -19,6 +19,7 @@
     "test:pagination": "node test-pagination.mjs",
     "test:template-matrix": "node test-template-matrix.mjs",
     "test:drawer-interactions": "node test-drawer-interactions.mjs",
+    "test:config-drawers": "node test-config-drawers.mjs",
     "test:attachment-content": "node test-attachment-content.mjs",
     "test:check-items": "node test-check-items.mjs"
   },
