@@ -18,6 +18,8 @@
     "test:timeline": "node test-timeline.mjs",
     "test:pagination": "node test-pagination.mjs",
     "test:template-matrix": "node test-template-matrix.mjs",
+    "test:template-drawers": "node test-template-drawers.mjs",
+    "test:check-item-library": "node test-check-item-library.mjs",
     "test:drawer-interactions": "node test-drawer-interactions.mjs",
     "test:config-drawers": "node test-config-drawers.mjs",
     "test:attachment-content": "node test-attachment-content.mjs",

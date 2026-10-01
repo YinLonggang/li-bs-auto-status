@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { toPng } from 'html-to-image';
 import {
@@ -51,6 +51,7 @@ import { initZeus } from './zeus';
 import {
   applyInspectionModuleOwner,
   cancelProjectPhysicalDeletion,
+  createCheckItemLibraryEntry,
   createChecklistTemplate,
   createInspectionModule,
   createPhaseTemplate,
@@ -60,6 +61,7 @@ import {
   createKeyIssue,
   createProject,
   deleteAttachment,
+  deleteCheckItemLibraryEntry,
   deleteChecklistTemplate,
   deleteCollisionReport,
   deleteCheckItem,
@@ -75,6 +77,11 @@ import {
   fetchAttachmentDownload,
   fetchAttachmentPreview,
   fetchCheckItem,
+  fetchCheckItemLibraryEntries,
+  fetchCheckItemLibraryEntry,
+  fetchChecklistTemplate,
+  fetchInspectionModule,
+  fetchPhaseTemplate,
   listCheckItems,
   fetchCheckItemAuditLogs,
   fetchExportDownloadLink,
@@ -94,6 +101,8 @@ import {
   preflightProjectPhysicalDeletion,
   projectDeletionJobFromError,
   seedProjectTemplate,
+  setChecklistTemplateItems,
+  updateCheckItemLibraryEntry,
   updateCollisionReport,
   updateAttachmentMetadata,
   updateCheckItem,
@@ -119,8 +128,11 @@ import { ApiError } from './services/http';
 import type {
   AuditLog,
   Attachment,
+  CheckItemLibraryEntry,
+  CheckItemLibraryEntryInput,
   ChecklistTemplate,
-  ChecklistTemplateItem,
+  ChecklistTemplateItemLink,
+  ChecklistTemplateSetItemInput,
   CheckItem,
   CheckItemOwner,
   CheckItemStatus,
@@ -969,36 +981,24 @@ const phaseDefinitionsOf = (template: PhaseTemplate) =>
     (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.key.localeCompare(right.key)
   );
 
+// 全局阶段标签：按模板排序取各 phase_key 的首个名称，用于检查项库与清单模板的阶段展示。
+const phaseLabelMapOf = (templates: PhaseTemplate[]) => {
+  const map = new Map<string, string>();
+  for (const template of bySequence(templates)) {
+    for (const phase of phaseDefinitionsOf(template)) {
+      if (!map.has(phase.key)) map.set(phase.key, phase.name);
+    }
+  }
+  return map;
+};
+
 const checklistItemsOf = (template: ChecklistTemplate) =>
-  [...(template.itemTemplates ?? [])].sort((left, right) =>
+  [...(template.items ?? [])].sort((left, right) =>
     (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.title.localeCompare(right.title)
   );
 
 const checklistTemplateItemCount = (templates: ChecklistTemplate[]) =>
   templates.reduce((total, template) => total + checklistItemsOf(template).length, 0);
-
-const emptyChecklistTemplateItem = (sortOrder: number): ChecklistTemplateItem => ({
-  title: '',
-  description: '',
-  sortOrder,
-  plannedStart: null,
-  plannedEnd: null,
-  dueDate: null,
-  priority: '',
-  isActive: true,
-  metadata: {}
-});
-
-const normalizeTemplateItemsForDraft = (items: ChecklistTemplateItem[]) =>
-  items.map((item, index) => ({
-    ...item,
-    title: item.title ?? '',
-    description: item.description ?? '',
-    sortOrder: item.sortOrder ?? (index + 1) * 10,
-    priority: item.priority ?? '',
-    isActive: item.isActive !== false,
-    metadata: item.metadata ?? {}
-  }));
 
 type PhaseTemplateDraft = {
   code: string;
@@ -1010,6 +1010,18 @@ type PhaseTemplateDraft = {
   metadata: Record<string, unknown>;
 };
 
+// 清单模板检查项草稿：以检查项库条目为源，模板级仅保留排序与启停覆盖。
+type ChecklistTemplateItemDraft = {
+  entryId: string;
+  title: string;
+  description: string;
+  priority: string;
+  phaseKey: string;
+  entryIsActive: boolean;
+  sortOrder: number;
+  isEnabled: boolean;
+};
+
 type ChecklistTemplateDraft = {
   code: string;
   name: string;
@@ -1018,7 +1030,7 @@ type ChecklistTemplateDraft = {
   phaseKey: string;
   version: string;
   isActive: boolean;
-  itemTemplates: ChecklistTemplateItem[];
+  items: ChecklistTemplateItemDraft[];
   metadata: Record<string, unknown>;
 };
 
@@ -1094,8 +1106,29 @@ const checklistTemplateDraftFrom = (template: ChecklistTemplate): ChecklistTempl
   phaseKey: template.phaseKey ?? '',
   version: String(template.version ?? 1),
   isActive: template.isActive !== false,
-  itemTemplates: normalizeTemplateItemsForDraft(checklistItemsOf(template)),
+  items: checklistItemsOf(template).map((link, index) => ({
+    entryId: idOf(link.entryId),
+    title: link.title,
+    description: link.description ?? '',
+    priority: link.priority ?? '',
+    phaseKey: link.phaseKey ?? '',
+    entryIsActive: link.entryIsActive !== false,
+    sortOrder: link.sortOrder ?? (index + 1) * 10,
+    isEnabled: link.isEnabled !== false
+  })),
   metadata: template.metadata ?? {}
+});
+
+const emptyChecklistTemplateDraft = (): ChecklistTemplateDraft => ({
+  code: '',
+  name: '',
+  moduleId: '',
+  phaseTemplateId: '',
+  phaseKey: '',
+  version: '1',
+  isActive: true,
+  items: [],
+  metadata: {}
 });
 
 const inspectionModuleDraftFrom = (module: InspectionModule): InspectionModuleDraft => ({
@@ -1137,9 +1170,52 @@ const makeChecklistTemplateDraft = (
   phaseKey: phase.key,
   version: '1',
   isActive: true,
-  itemTemplates: [emptyChecklistTemplateItem(10)],
+  items: [],
   metadata: {}
 });
+
+type CheckItemLibraryEntryDraft = {
+  phaseKey: string;
+  title: string;
+  description: string;
+  priority: string;
+  sortOrder: string;
+  isActive: boolean;
+  metadata: Record<string, unknown>;
+};
+
+const libraryEntryDraftFrom = (entry: CheckItemLibraryEntry): CheckItemLibraryEntryDraft => ({
+  phaseKey: entry.phaseKey,
+  title: entry.title,
+  description: entry.description ?? '',
+  priority: entry.priority ?? '',
+  sortOrder: String(entry.sortOrder ?? 0),
+  isActive: entry.isActive !== false,
+  metadata: entry.metadata ?? {}
+});
+
+const emptyLibraryEntryDraft = (): CheckItemLibraryEntryDraft => ({
+  phaseKey: '',
+  title: '',
+  description: '',
+  priority: '',
+  sortOrder: '0',
+  isActive: true,
+  metadata: {}
+});
+
+const libraryEntryInputFrom = (draft: CheckItemLibraryEntryDraft): CheckItemLibraryEntryInput => {
+  const sortOrder = Number(draft.sortOrder);
+  return {
+    phaseKey: draft.phaseKey.trim(),
+    title: draft.title.trim(),
+    description: draft.description.trim() || undefined,
+    priority: draft.priority.trim() || undefined,
+    sortOrder: Number.isFinite(sortOrder) ? Math.trunc(sortOrder) : 0,
+    isActive: draft.isActive,
+    metadata: draft.metadata
+  };
+};
 
 const toPositiveInteger = (value: string, fallback = 1) => {
   const parsed = Number.parseInt(value, 10);
@@ -7773,6 +7849,815 @@ type CheckItemConfigDraft = {
 const ownersFromDraft = (draft: Pick<CheckItemConfigDraft, 'owners' | 'ownerName' | 'ownerIdaasId'>) =>
   normalizeOwners(draft.owners);
 
+type PhaseTemplateEditor = ReturnType<typeof useRecordEditor<PhaseTemplate, PhaseTemplateDraft>>;
+type InspectionModuleEditor = ReturnType<typeof useRecordEditor<InspectionModule, InspectionModuleDraft>>;
+type ChecklistTemplateEditor = ReturnType<typeof useRecordEditor<ChecklistTemplate, ChecklistTemplateDraft>>;
+type CheckItemLibraryEntryEditor = ReturnType<typeof useRecordEditor<CheckItemLibraryEntry, CheckItemLibraryEntryDraft>>;
+
+const checklistItemsPayload = (items: ChecklistTemplateItemDraft[]): ChecklistTemplateSetItemInput[] =>
+  items.map((item, index) => ({
+    entryId: item.entryId,
+    sortOrder: Number.isFinite(item.sortOrder) ? item.sortOrder : (index + 1) * 10,
+    isEnabled: item.isEnabled
+  }));
+
+function PhaseTemplateDrawer({ editor, canWrite, onSave, onCopy, onDelete }: {
+  editor: PhaseTemplateEditor;
+  canWrite: boolean;
+  onSave: (record: PhaseTemplate | null, draft: PhaseTemplateDraft) => Promise<PhaseTemplate>;
+  onCopy: (template: PhaseTemplate) => Promise<PhaseTemplate>;
+  onDelete: (template: PhaseTemplate) => Promise<void>;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setActionError('');
+  }, [sessionKey]);
+
+  const invalid =
+    !draft.code.trim() ||
+    !draft.name.trim() ||
+    !Number.isFinite(toPositiveInteger(draft.version)) ||
+    !draft.phaseDefinitions.length ||
+    draft.phaseDefinitions.some(phase => !phase.key.trim() || !phase.name.trim());
+
+  const updatePhaseDefinition = (index: number, patch: Partial<PhaseDefinition>) => {
+    const next = [...draft.phaseDefinitions];
+    next[index] = { ...next[index], ...patch };
+    setDraft({ ...draft, phaseDefinitions: next });
+  };
+  const addPhaseDefinition = () => {
+    const nextSortOrder = draft.phaseDefinitions.length
+      ? Math.max(...draft.phaseDefinitions.map(phase => phase.sortOrder ?? 0)) + 10
+      : 10;
+    setDraft({
+      ...draft,
+      phaseDefinitions: [...draft.phaseDefinitions, emptyPhaseDefinition(nextSortOrder)]
+    });
+  };
+  const removePhaseDefinition = (index: number) => {
+    setDraft({
+      ...draft,
+      phaseDefinitions: draft.phaseDefinitions.filter((_, phaseIndex) => phaseIndex !== index)
+    });
+  };
+
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => run(async () => {
+    const saved = await onSave(record, draft);
+    editor.accept(saved, phaseTemplateDraftFrom(saved));
+  });
+  const copy = () => {
+    if (!record) return;
+    void run(async () => {
+      const copied = await onCopy(record);
+      await editor.openRecord(copied.id);
+    });
+  };
+  const remove = () => {
+    if (!record) return;
+    if (!window.confirm(`确认删除项目模板源数据「${record.name}」？将同步删除该模板下的关联清单模板。`)) return;
+    void run(async () => {
+      await onDelete(record);
+      editor.removed();
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    editor.close();
+  };
+
+  return (
+    <SideDrawer
+      open={editor.open}
+      title={record ? `项目模板 · ${record.name}` : '新建项目模板源数据'}
+      subtitle={record ? `${record.code} · ${draft.phaseDefinitions.length} 阶段` : '保存后可在矩阵中维护模块阶段清单模板'}
+      size="xl"
+      saving={busy}
+      onClose={requestClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-muted">
+            {dirty ? '有未保存修改' : record ? '已保存' : '保存后生成模板'}
+          </span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite && record ? (
+            <button className="btn btn-ghost btn--sm" type="button" disabled={busy || loading || Boolean(error)} onClick={copy}>
+              <Copy className="h-4 w-4" />
+              复制草稿
+            </button>
+          ) : null}
+          {canWrite && record ? (
+            <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={busy || loading || Boolean(error)} onClick={remove}>
+              <Trash2 className="h-4 w-4" />
+              删除模板
+            </button>
+          ) : null}
+          {canWrite ? (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={busy || loading || Boolean(error) || invalid || !dirty}
+              onClick={() => void save()}
+            >
+              <Save className="h-4 w-4" />
+              {busy ? '保存中…' : '保存模板'}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      {loading ? <p className="text-sm text-ink-muted">正在加载项目模板…</p> : null}
+      {error ? (
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <label>
+              <span className="field-label">模板编码</span>
+              <input className="input" value={draft.code} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, code: event.target.value })} />
+            </label>
+            <label className="xl:col-span-2">
+              <span className="field-label">模板名称</span>
+              <input className="input" value={draft.name} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, name: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">版本</span>
+              <input className="input" type="number" min={1} value={draft.version} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, version: event.target.value })} />
+            </label>
+            <label className="flex items-end gap-2 text-sm text-ink-muted">
+              <input type="checkbox" checked={draft.isActive} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, isActive: event.target.checked })} />
+              启用
+            </label>
+            <label className="sm:col-span-2 xl:col-span-5">
+              <span className="field-label">说明</span>
+              <textarea className="input min-h-20" value={draft.description} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, description: event.target.value })} />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-ink">阶段定义</h3>
+              <p className="text-xs text-ink-muted">阶段 key 会用于矩阵列、清单模板 phase_key 与检查项库条目归属。</p>
+            </div>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || busy} onClick={addPhaseDefinition}>
+              <Plus className="h-4 w-4" />
+              新增阶段
+            </button>
+          </div>
+          <div className="table-shell">
+            <table className="data-table min-w-[1080px]">
+              <thead>
+                <tr>
+                  <th>排序</th>
+                  <th>阶段 Key</th>
+                  <th>阶段名称</th>
+                  <th>说明</th>
+                  <th>计划开始</th>
+                  <th>计划结束</th>
+                  <th>持续天数</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draft.phaseDefinitions.map((phase, index) => (
+                  <tr key={`${phase.key || 'phase'}-${index}`}>
+                    <td className="min-w-[100px]">
+                      <input className="input" type="number" value={phase.sortOrder ?? (index + 1) * 10} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { sortOrder: Number(event.target.value) })} />
+                    </td>
+                    <td className="min-w-[150px]">
+                      <input className="input" value={phase.key} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { key: event.target.value })} />
+                    </td>
+                    <td className="min-w-[180px]">
+                      <input className="input" value={phase.name} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { name: event.target.value })} />
+                    </td>
+                    <td className="min-w-[240px]">
+                      <input className="input" value={phase.description ?? ''} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { description: event.target.value })} />
+                    </td>
+                    <td className="min-w-[150px]">
+                      <input className="input" type="date" value={dateInputValue(phase.plannedStart)} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { plannedStart: event.target.value || null })} />
+                    </td>
+                    <td className="min-w-[150px]">
+                      <input className="input" type="date" value={dateInputValue(phase.plannedEnd)} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { plannedEnd: event.target.value || null })} />
+                    </td>
+                    <td className="min-w-[120px]">
+                      <input className="input" type="number" value={phase.durationDays ?? ''} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { durationDays: event.target.value ? Number(event.target.value) : null })} />
+                    </td>
+                    <td>
+                      <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || busy || draft.phaseDefinitions.length <= 1} onClick={() => removePhaseDefinition(index)}>
+                        <Trash2 className="h-4 w-4" />
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCount, checkItemCount, onSave, onDelete }: {
+  editor: InspectionModuleEditor;
+  canWrite: boolean;
+  ownerCandidates: OwnerCandidate[];
+  checklistCount: number;
+  checkItemCount: number;
+  onSave: (record: InspectionModule | null, draft: InspectionModuleDraft) => Promise<InspectionModule>;
+  onDelete: (module: InspectionModule) => Promise<void>;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setActionError('');
+  }, [sessionKey]);
+
+  const sequenceValue = Number(draft.sequence);
+  const invalid =
+    !draft.code.trim() ||
+    !draft.name.trim() ||
+    !Number.isFinite(sequenceValue) ||
+    sequenceValue < 0;
+
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => run(async () => {
+    const saved = await onSave(record, draft);
+    editor.accept(saved, inspectionModuleDraftFrom(saved));
+  });
+  const remove = () => {
+    if (!record || checkItemCount > 0) return;
+    const cascadeNote = checklistCount ? `，并级联删除其下 ${checklistCount} 组清单模板` : '';
+    if (!window.confirm(`确认删除检查模块「${record.name}」${cascadeNote}？删除后不可恢复。`)) return;
+    void run(async () => {
+      await onDelete(record);
+      editor.removed();
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    editor.close();
+  };
+
+  return (
+    <SideDrawer
+      open={editor.open}
+      title={record ? `检查模块 · ${record.name}` : '新增检查模块'}
+      subtitle={record ? `${record.code} · 排序 ${record.sequence ?? 0}` : '保存后可在矩阵中维护该模块的阶段清单模板'}
+      size="lg"
+      saving={busy}
+      onClose={requestClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-muted">
+            {dirty ? '有未保存修改' : record ? '已保存' : '保存后进入模块列表'}
+          </span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite ? (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={busy || loading || Boolean(error) || invalid || !dirty}
+              onClick={() => void save()}
+            >
+              <Save className="h-4 w-4" />
+              {busy ? '保存中…' : '保存模块'}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      {loading ? <p className="text-sm text-ink-muted">正在加载检查模块…</p> : null}
+      {error ? (
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span className="field-label">模块编码</span>
+              <input className="input" value={draft.code} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, code: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">模块名称</span>
+              <input className="input" value={draft.name} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, name: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">排序</span>
+              <input className="input" type="number" min={0} value={draft.sequence} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, sequence: event.target.value })} />
+            </label>
+            <label className="flex items-end gap-2 text-sm text-ink-muted">
+              <input type="checkbox" checked={draft.isActive} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, isActive: event.target.checked })} />
+              启用
+            </label>
+            <label className="sm:col-span-2">
+              <span className="field-label">说明</span>
+              <textarea className="input min-h-20" value={draft.description} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, description: event.target.value })} />
+            </label>
+            <div className="sm:col-span-2">
+              <span className="field-label">负责人</span>
+              <OwnerListEditor
+                owners={draft.owners}
+                ownerCandidates={ownerCandidates}
+                canWrite={canWrite && !busy}
+                candidateLabel={`检查模块 ${draft.name || draft.code || '新增模块'} IDaaS 负责人`}
+                onChange={next => setDraft({ ...draft, owners: next.owners })}
+              />
+            </div>
+          </div>
+          {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+          {canWrite && record ? (
+            <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
+              <div className="flex flex-wrap items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-danger" />
+                <h3 className="text-sm font-semibold text-danger">删除模块</h3>
+              </div>
+              <p className="mt-1 text-xs text-ink-muted">
+                删除模块会级联删除其下 {checklistCount} 组清单模板；仍被项目检查项引用的模块不可删除。
+              </p>
+              {checkItemCount > 0 ? (
+                <p className="mt-2 text-xs text-danger" role="note">
+                  当前模块仍被 {checkItemCount} 个项目检查项引用，无法删除。请先将相关检查项迁移到其他模块或停用。
+                </p>
+              ) : null}
+              <button
+                className="btn btn-ghost btn--sm mt-3 text-danger"
+                type="button"
+                disabled={busy || checkItemCount > 0}
+                onClick={remove}
+                title={checkItemCount > 0 ? `仍被 ${checkItemCount} 个项目检查项引用` : undefined}
+              >
+                <Trash2 className="h-4 w-4" />
+                删除模块
+              </button>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+function LibraryEntryPickerDrawer({ open, phaseKey, phaseLabel, phaseLabels, existingEntryIds, onAdd, onClose }: {
+  open: boolean;
+  phaseKey: string;
+  phaseLabel?: string;
+  phaseLabels: Map<string, string>;
+  existingEntryIds: Set<string>;
+  onAdd: (entries: CheckItemLibraryEntry[]) => void;
+  onClose: () => void;
+}) {
+  const [entries, setEntries] = useState<CheckItemLibraryEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setEntries(await fetchCheckItemLibraryEntries({ phaseKey: phaseKey || undefined, isActive: true }));
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项库加载失败。'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setKeyword('');
+    setSelectedIds([]);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, phaseKey]);
+
+  const visibleEntries = entries.filter(entry => textMatches(keyword, [entry.title, entry.description, entry.priority]));
+  const selectedCount = selectedIds.length;
+  const toggleEntry = (entry: CheckItemLibraryEntry) => {
+    const key = idOf(entry.id);
+    if (existingEntryIds.has(key)) return;
+    setSelectedIds(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
+  };
+  const addSelected = () => {
+    const selectedSet = new Set(selectedIds);
+    onAdd(entries.filter(entry => selectedSet.has(idOf(entry.id))));
+  };
+
+  return (
+    <SideDrawer
+      open={open}
+      title="从检查项库选择"
+      subtitle={phaseKey ? `仅显示 ${phaseLabel || phaseKey} 阶段的启用条目` : '显示全部阶段的启用条目'}
+      size="lg"
+      onClose={onClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-muted">已选 {selectedCount} 项</span>
+          <button className="btn btn-ghost btn--sm" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn btn-primary btn--sm" type="button" disabled={!selectedCount} onClick={addSelected}>
+            <Plus className="h-4 w-4" />
+            添加所选
+          </button>
+        </>
+      }
+    >
+      <div className="rounded-lg border border-outline bg-surface-soft p-3">
+        <label>
+          <span className="field-label">搜索库条目</span>
+          <input className="input" value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="标题、说明、优先级" aria-label="检查项库选择搜索" />
+        </label>
+      </div>
+      {loading ? <p className="mt-3 text-sm text-ink-muted">正在加载检查项库…</p> : null}
+      {error ? (
+        <div role="alert" className="mt-3 rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void load()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error ? (
+        <div className="table-shell mt-3">
+          <table className="data-table min-w-[720px]">
+            <thead>
+              <tr>
+                <th>选择</th>
+                <th>检查项</th>
+                <th>阶段</th>
+                <th>优先级</th>
+                <th>引用模板</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleEntries.map(entry => {
+                const key = idOf(entry.id);
+                const added = existingEntryIds.has(key);
+                const checked = added || selectedIds.includes(key);
+                return (
+                  <tr key={entry.id}>
+                    <td>
+                      <label className="flex items-center gap-2 text-sm text-ink-muted">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={added}
+                          onChange={() => toggleEntry(entry)}
+                          aria-label={`选择检查项 ${entry.title}`}
+                        />
+                        {added ? '已添加' : ''}
+                      </label>
+                    </td>
+                    <td className="min-w-[260px]">
+                      <div className="font-semibold text-ink">{entry.title}</div>
+                      {entry.description ? <div className="mt-1 text-xs text-ink-muted">{entry.description}</div> : null}
+                    </td>
+                    <td className="text-xs text-ink-muted">{phaseLabels.get(entry.phaseKey) || entry.phaseKey}</td>
+                    <td>{entry.priority || '-'}</td>
+                    <td>{entry.linkedTemplateCount ?? 0} 组</td>
+                  </tr>
+                );
+              })}
+              {!visibleEntries.length ? (
+                <tr>
+                  <td colSpan={5} className="text-center text-ink-muted">
+                    {entries.length ? '当前筛选下暂无库条目。' : '检查项库暂无该阶段的启用条目，可先在“检查项库”视图中维护。'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabels, canWrite, onSave, onDelete, onSetItems }: {
+  editor: ChecklistTemplateEditor;
+  modules: InspectionModule[];
+  phaseDefinitions: PhaseDefinition[];
+  phaseLabels: Map<string, string>;
+  canWrite: boolean;
+  onSave: (record: ChecklistTemplate | null, draft: ChecklistTemplateDraft) => Promise<ChecklistTemplate>;
+  onDelete: (template: ChecklistTemplate) => Promise<void>;
+  onSetItems: (template: ChecklistTemplate, items: ChecklistTemplateSetItemInput[]) => Promise<ChecklistTemplate>;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setActionError('');
+    setPickerOpen(false);
+  }, [sessionKey]);
+
+  const invalid =
+    !draft.code.trim() ||
+    !draft.name.trim() ||
+    !draft.moduleId ||
+    !draft.phaseTemplateId ||
+    !draft.phaseKey;
+  const phaseOptions = draft.phaseKey && !phaseDefinitions.some(phase => phase.key === draft.phaseKey)
+    ? [{ key: draft.phaseKey, name: `${draft.phaseKey}（当前）` }, ...phaseDefinitions]
+    : phaseDefinitions;
+
+  const updateItem = (index: number, patch: Partial<ChecklistTemplateItemDraft>) => {
+    const next = [...draft.items];
+    next[index] = { ...next[index], ...patch };
+    setDraft({ ...draft, items: next });
+  };
+  const removeItem = (index: number) => {
+    setDraft({ ...draft, items: draft.items.filter((_, itemIndex) => itemIndex !== index) });
+  };
+  const addEntries = (entries: CheckItemLibraryEntry[]) => {
+    const existing = new Set(draft.items.map(item => item.entryId));
+    const nextSortOrder = draft.items.length
+      ? Math.max(...draft.items.map(item => item.sortOrder)) + 10
+      : 10;
+    const additions = entries
+      .filter(entry => !existing.has(idOf(entry.id)))
+      .map((entry, index) => ({
+        entryId: idOf(entry.id),
+        title: entry.title,
+        description: entry.description ?? '',
+        priority: entry.priority ?? '',
+        phaseKey: entry.phaseKey,
+        entryIsActive: entry.isActive !== false,
+        sortOrder: nextSortOrder + index * 10,
+        isEnabled: true
+      }));
+    if (!additions.length) return;
+    setDraft({ ...draft, items: [...draft.items, ...additions] });
+    setPickerOpen(false);
+  };
+
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => run(async () => {
+    const saved = await onSave(record, draft);
+    const baselineItems = record ? checklistTemplateDraftFrom(record).items : [];
+    const itemsChanged = JSON.stringify(checklistItemsPayload(draft.items)) !== JSON.stringify(checklistItemsPayload(baselineItems));
+    const finalRecord = itemsChanged ? await onSetItems(saved, checklistItemsPayload(draft.items)) : saved;
+    editor.accept(finalRecord, checklistTemplateDraftFrom(finalRecord));
+  });
+  const remove = () => {
+    if (!record) return;
+    if (!window.confirm(`确认删除清单模板「${record.title}」？`)) return;
+    void run(async () => {
+      await onDelete(record);
+      editor.removed();
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    editor.close();
+  };
+  const moduleName = modules.find(module => idOf(module.id) === draft.moduleId)?.name;
+  const phaseLabel = phaseOptions.find(phase => phase.key === draft.phaseKey)?.name;
+
+  return (
+    <>
+      <SideDrawer
+        open={editor.open}
+        title={record ? `清单模板 · ${record.title}` : '新增清单模板'}
+        subtitle={`${moduleName || '未设置模块'} / ${phaseLabel || draft.phaseKey || '未设置阶段'}`}
+        size="xl"
+        saving={busy}
+        onClose={requestClose}
+        footer={
+          <>
+            <span className="mr-auto text-xs text-ink-muted">
+              {dirty ? '有未保存修改' : record ? '已保存' : '保存后可继续从检查项库选择检查项'}
+            </span>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+              取消
+            </button>
+            {canWrite && record ? (
+              <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={busy || loading || Boolean(error)} onClick={remove}>
+                <Trash2 className="h-4 w-4" />
+                删除清单
+              </button>
+            ) : null}
+            {canWrite ? (
+              <button
+                className="btn btn-primary btn--sm"
+                type="button"
+                disabled={busy || loading || Boolean(error) || invalid || !dirty}
+                onClick={() => void save()}
+              >
+                <Save className="h-4 w-4" />
+                {busy ? '保存中…' : '保存清单'}
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        {loading ? <p className="text-sm text-ink-muted">正在加载清单模板…</p> : null}
+        {error ? (
+          <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+            <p>{error}</p>
+            <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+              重试加载
+            </button>
+          </div>
+        ) : null}
+        {!loading && !error ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              <label>
+                <span className="field-label">清单编码</span>
+                <input className="input" value={draft.code} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, code: event.target.value })} />
+              </label>
+              <label className="xl:col-span-2">
+                <span className="field-label">清单名称</span>
+                <input className="input" value={draft.name} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, name: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">模块</span>
+                <select className="select" value={draft.moduleId} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, moduleId: event.target.value })}>
+                  <option value="">选择模块</option>
+                  {modules.map(module => (
+                    <option key={module.id} value={idOf(module.id)}>{module.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">阶段</span>
+                <select className="select" value={draft.phaseKey} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, phaseKey: event.target.value })}>
+                  <option value="">选择阶段</option>
+                  {phaseOptions.map(phase => (
+                    <option key={phase.key} value={phase.key}>{phase.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="field-label">版本</span>
+                <input className="input" type="number" min={1} value={draft.version} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, version: event.target.value })} />
+              </label>
+              <label className="flex items-end gap-2 text-sm text-ink-muted">
+                <input type="checkbox" checked={draft.isActive} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, isActive: event.target.checked })} />
+                启用
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-ink">已选检查项（{draft.items.length}）</h3>
+                <p className="text-xs text-ink-muted">检查项来自检查项库；模板级仅维护排序与启停，内容请到“检查项库”视图维护。</p>
+              </div>
+              <button
+                className="btn btn-ghost btn--sm"
+                type="button"
+                disabled={!canWrite || busy || !draft.phaseKey}
+                title={draft.phaseKey ? undefined : '先选择阶段后从检查项库选择'}
+                onClick={() => setPickerOpen(true)}
+              >
+                <Plus className="h-4 w-4" />
+                从检查项库选择
+              </button>
+            </div>
+            <div className="table-shell">
+              <table className="data-table min-w-[900px]">
+                <thead>
+                  <tr>
+                    <th>排序</th>
+                    <th>检查项</th>
+                    <th>阶段</th>
+                    <th>优先级</th>
+                    <th>启用</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draft.items.map((item, index) => (
+                    <tr key={item.entryId || index}>
+                      <td className="min-w-[110px]">
+                        <input
+                          className="input"
+                          type="number"
+                          value={item.sortOrder}
+                          disabled={!canWrite || busy}
+                          onChange={event => updateItem(index, { sortOrder: Number(event.target.value) })}
+                          aria-label={`检查项 ${item.title} 排序`}
+                        />
+                      </td>
+                      <td className="min-w-[280px]">
+                        <div className="font-semibold text-ink">{item.title}</div>
+                        {item.description ? <div className="mt-1 text-xs text-ink-muted">{item.description}</div> : null}
+                        {!item.entryIsActive ? <div className="mt-1 text-xs text-warning">库条目已停用，种子生成时会跳过</div> : null}
+                      </td>
+                      <td className="text-xs text-ink-muted">{phaseLabels.get(item.phaseKey) || item.phaseKey || '-'}</td>
+                      <td>{item.priority || '-'}</td>
+                      <td>
+                        <label className="flex items-center gap-2 text-sm text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={item.isEnabled}
+                            disabled={!canWrite || busy}
+                            onChange={event => updateItem(index, { isEnabled: event.target.checked })}
+                          />
+                          启用
+                        </label>
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={!canWrite || busy}
+                          onClick={() => removeItem(index)}
+                          aria-label={`移除检查项 ${item.title}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          移除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!draft.items.length ? (
+                    <tr>
+                      <td colSpan={6} className="text-center text-ink-muted">该清单模板暂未选择检查项，可点击“从检查项库选择”。</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+          </div>
+        ) : null}
+      </SideDrawer>
+      <LibraryEntryPickerDrawer
+        open={pickerOpen}
+        phaseKey={draft.phaseKey}
+        phaseLabel={phaseLabel}
+        phaseLabels={phaseLabels}
+        existingEntryIds={new Set(draft.items.map(item => item.entryId))}
+        onAdd={addEntries}
+        onClose={() => setPickerOpen(false)}
+      />
+    </>
+  );
+}
+
 function ProjectTemplateView({
   data,
   canWrite,
@@ -7783,6 +8668,7 @@ function ProjectTemplateView({
   onCreateChecklistTemplate,
   onDeleteChecklistTemplate,
   onUpdateChecklistTemplate,
+  onSetChecklistTemplateItems,
   onCreateInspectionModule,
   onUpdateInspectionModule,
   onDeleteInspectionModule
@@ -7796,36 +8682,18 @@ function ProjectTemplateView({
   onCreateChecklistTemplate: (input: CreateChecklistTemplateInput) => Promise<ChecklistTemplate>;
   onDeleteChecklistTemplate: (template: ChecklistTemplate) => Promise<void>;
   onUpdateChecklistTemplate: (template: ChecklistTemplate, input: UpdateChecklistTemplateInput) => Promise<ChecklistTemplate>;
+  onSetChecklistTemplateItems: (template: ChecklistTemplate, items: ChecklistTemplateSetItemInput[]) => Promise<ChecklistTemplate>;
   onCreateInspectionModule: (input: InspectionModuleInput) => Promise<InspectionModule>;
   onUpdateInspectionModule: (module: InspectionModule, input: InspectionModuleInput) => Promise<InspectionModule>;
   onDeleteInspectionModule: (module: InspectionModule) => Promise<void>;
 }) {
   const [selectedPhaseTemplateId, setSelectedPhaseTemplateId] = useState('');
-  const [phaseEditorMode, setPhaseEditorMode] = useState<'edit' | 'create'>('edit');
-  const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseTemplateDraft>>({});
-  const [newPhaseDraft, setNewPhaseDraft] = useState<PhaseTemplateDraft>(() => emptyPhaseTemplateDraft());
-  const [selectedInspectionModuleId, setSelectedInspectionModuleId] = useState('');
-  const [moduleEditorMode, setModuleEditorMode] = useState<'edit' | 'create'>('edit');
-  const [moduleDrafts, setModuleDrafts] = useState<Record<string, InspectionModuleDraft>>({});
-  const [newModuleDraft, setNewModuleDraft] = useState<InspectionModuleDraft>(() => emptyInspectionModuleDraft());
-  const [selectedChecklistTemplateId, setSelectedChecklistTemplateId] = useState('');
-  const [checklistDrafts, setChecklistDrafts] = useState<Record<string, ChecklistTemplateDraft>>({});
-  const [creatingCell, setCreatingCell] = useState<TemplateCellTarget | null>(null);
-  const [newChecklistDraft, setNewChecklistDraft] = useState<ChecklistTemplateDraft | null>(null);
-  const [savingKey, setSavingKey] = useState('');
-  const [message, setMessage] = useState('');
-  const [moduleMessage, setModuleMessage] = useState('');
+  const [cellTarget, setCellTarget] = useState<TemplateCellTarget | null>(null);
   const sortedPhaseTemplates = bySequence(data.phaseTemplates);
   const sortedInspectionModules = bySequence(data.inspectionModules);
   const phaseTemplateKey = sortedPhaseTemplates.map(template => idOf(template.id)).join('|');
-  const checklistTemplateKey = data.checklistTemplates.map(template => `${idOf(template.id)}:${template.code}:${template.version ?? ''}`).join('|');
-  const inspectionModuleKey = sortedInspectionModules.map(module => `${idOf(module.id)}:${module.code}:${module.sequence}:${module.isActive}`).join('|');
   const selectedPhaseTemplate = sortedPhaseTemplates.find(template => idOf(template.id) === selectedPhaseTemplateId) ?? sortedPhaseTemplates[0];
   const selectedPhaseTemplateIdValue = idOf(selectedPhaseTemplate?.id);
-  const selectedInspectionModule =
-    sortedInspectionModules.find(module => idOf(module.id) === selectedInspectionModuleId) ??
-    sortedInspectionModules[0];
-  const selectedInspectionModuleIdValue = idOf(selectedInspectionModule?.id);
   const existingPhaseTemplateCodes = data.phaseTemplates.map(template => template.code);
   const existingChecklistTemplateCodes = data.checklistTemplates.map(template => template.code);
   const existingInspectionModuleCodes = data.inspectionModules.map(module => module.code);
@@ -7835,46 +8703,31 @@ function ProjectTemplateView({
   const selectedTemplateChecklists = data.checklistTemplates.filter(template =>
     selectedPhaseTemplateIdValue && idOf(template.phaseTemplateId) === selectedPhaseTemplateIdValue
   );
-  const selectedChecklistTemplate =
-    selectedTemplateChecklists.find(template => idOf(template.id) === selectedChecklistTemplateId) ??
-    selectedTemplateChecklists[0];
-  const selectedChecklistTemplateIdValue = idOf(selectedChecklistTemplate?.id);
-  const selectedChecklistDraft = selectedChecklistTemplate
-    ? checklistDrafts[selectedChecklistTemplateIdValue] ?? checklistTemplateDraftFrom(selectedChecklistTemplate)
-    : undefined;
-  const activeChecklistDraft = creatingCell ? newChecklistDraft : selectedChecklistDraft;
-  const selectedDraftItems = activeChecklistDraft?.itemTemplates ?? [];
   const selectedTemplateDefinitions = selectedPhaseTemplate ? phaseDefinitionsOf(selectedPhaseTemplate) : [];
-  const selectedPhaseDraft = selectedPhaseTemplate
-    ? phaseDrafts[selectedPhaseTemplateIdValue] ?? phaseTemplateDraftFrom(selectedPhaseTemplate)
-    : undefined;
-  const selectedModuleDraft = selectedInspectionModule
-    ? moduleDrafts[selectedInspectionModuleIdValue] ?? inspectionModuleDraftFrom(selectedInspectionModule)
-    : undefined;
-  const activeModuleDraft = moduleEditorMode === 'create' ? newModuleDraft : selectedModuleDraft;
-  const activePhaseDraft = phaseEditorMode === 'create' ? newPhaseDraft : selectedPhaseDraft;
-  const selectedChecklistPhase = activeChecklistDraft?.phaseKey
-    ? selectedTemplateDefinitions.find(phase => phase.key === activeChecklistDraft.phaseKey)
-    : undefined;
-  const invalidPhaseDraft =
-    !activePhaseDraft?.code.trim() ||
-    !activePhaseDraft.name.trim() ||
-    !Number.isFinite(toPositiveInteger(activePhaseDraft.version)) ||
-    !activePhaseDraft.phaseDefinitions.length ||
-    activePhaseDraft.phaseDefinitions.some(phase => !phase.key.trim() || !phase.name.trim());
-  const moduleSequenceValue = Number(activeModuleDraft?.sequence ?? 0);
-  const invalidModuleDraft =
-    !activeModuleDraft?.code.trim() ||
-    !activeModuleDraft.name.trim() ||
-    !Number.isFinite(moduleSequenceValue) ||
-    moduleSequenceValue < 0;
-  const invalidChecklistDraft =
-    !activeChecklistDraft?.code.trim() ||
-    !activeChecklistDraft.name.trim() ||
-    !activeChecklistDraft.moduleId ||
-    !activeChecklistDraft.phaseTemplateId ||
-    !activeChecklistDraft.phaseKey ||
-    selectedDraftItems.some(item => !item.title.trim());
+  const phaseLabels = phaseLabelMapOf(data.phaseTemplates);
+  const checklistCreateTargetRef = useRef<{ phaseTemplate: PhaseTemplate; module: InspectionModule; phase: PhaseDefinition } | null>(null);
+
+  const phaseEditor = useRecordEditor<PhaseTemplate, PhaseTemplateDraft>(
+    record => (record ? phaseTemplateDraftFrom(record) : emptyPhaseTemplateDraft(existingPhaseTemplateCodes)),
+    fetchPhaseTemplate,
+    false
+  );
+  const moduleEditor = useRecordEditor<InspectionModule, InspectionModuleDraft>(
+    record => (record ? inspectionModuleDraftFrom(record) : emptyInspectionModuleDraft(existingInspectionModuleCodes, nextInspectionModuleSequence)),
+    fetchInspectionModule,
+    false
+  );
+  const checklistEditor = useRecordEditor<ChecklistTemplate, ChecklistTemplateDraft>(
+    record => {
+      if (record) return checklistTemplateDraftFrom(record);
+      const target = checklistCreateTargetRef.current;
+      return target
+        ? makeChecklistTemplateDraft(target.phaseTemplate, target.module, target.phase, existingChecklistTemplateCodes)
+        : emptyChecklistTemplateDraft();
+    },
+    fetchChecklistTemplate,
+    false
+  );
 
   useEffect(() => {
     setSelectedPhaseTemplateId(current =>
@@ -7884,103 +8737,9 @@ function ProjectTemplateView({
     );
   }, [phaseTemplateKey]);
 
-  useEffect(() => {
-    if (moduleEditorMode === 'create') return;
-    setSelectedInspectionModuleId(current =>
-      sortedInspectionModules.some(module => idOf(module.id) === current)
-        ? current
-        : idOf(sortedInspectionModules[0]?.id)
-    );
-  }, [inspectionModuleKey, moduleEditorMode]);
-
-  useEffect(() => {
-    if (creatingCell) return;
-    setSelectedChecklistTemplateId(current =>
-      selectedTemplateChecklists.some(template => idOf(template.id) === current)
-        ? current
-        : idOf(selectedTemplateChecklists[0]?.id)
-    );
-  }, [selectedPhaseTemplateIdValue, checklistTemplateKey, creatingCell]);
-
-  useEffect(() => {
-    setPhaseDrafts(
-      Object.fromEntries(
-        data.phaseTemplates.map(template => [idOf(template.id), phaseTemplateDraftFrom(template)])
-      )
-    );
-  }, [data.phaseTemplates]);
-
-  useEffect(() => {
-    setModuleDrafts(
-      Object.fromEntries(
-        data.inspectionModules.map(module => [idOf(module.id), inspectionModuleDraftFrom(module)])
-      )
-    );
-  }, [data.inspectionModules]);
-
-  useEffect(() => {
-    setChecklistDrafts(
-      Object.fromEntries(
-        data.checklistTemplates.map(template => [idOf(template.id), checklistTemplateDraftFrom(template)])
-      )
-    );
-  }, [data.checklistTemplates]);
-
-  const updateActivePhaseDraft = (patch: Partial<PhaseTemplateDraft>) => {
-    if (phaseEditorMode === 'create') {
-      setNewPhaseDraft(current => ({ ...current, ...patch }));
-      return;
-    }
-    if (!selectedPhaseTemplateIdValue || !selectedPhaseTemplate) return;
-    setPhaseDrafts(current => ({
-      ...current,
-      [selectedPhaseTemplateIdValue]: {
-        ...(current[selectedPhaseTemplateIdValue] ?? phaseTemplateDraftFrom(selectedPhaseTemplate)),
-        ...patch
-      }
-    }));
-  };
-
-  const updatePhaseDefinition = (index: number, patch: Partial<PhaseDefinition>) => {
-    if (!activePhaseDraft) return;
-    const nextDefinitions = [...activePhaseDraft.phaseDefinitions];
-    nextDefinitions[index] = { ...nextDefinitions[index], ...patch };
-    updateActivePhaseDraft({ phaseDefinitions: nextDefinitions });
-  };
-
-  const addPhaseDefinition = () => {
-    const nextSortOrder = activePhaseDraft?.phaseDefinitions.length
-      ? Math.max(...activePhaseDraft.phaseDefinitions.map(phase => phase.sortOrder ?? 0)) + 10
-      : 10;
-    updateActivePhaseDraft({
-      phaseDefinitions: [
-        ...(activePhaseDraft?.phaseDefinitions ?? []),
-        emptyPhaseDefinition(nextSortOrder)
-      ]
-    });
-  };
-
-  const removePhaseDefinition = (index: number) => {
-    if (!activePhaseDraft) return;
-    updateActivePhaseDraft({
-      phaseDefinitions: activePhaseDraft.phaseDefinitions.filter((_, phaseIndex) => phaseIndex !== index)
-    });
-  };
-
-  const openCreatePhaseTemplate = () => {
-    setPhaseEditorMode('create');
-    setNewPhaseDraft(emptyPhaseTemplateDraft(existingPhaseTemplateCodes));
-    setCreatingCell(null);
-    setNewChecklistDraft(null);
-    setMessage('');
-  };
-
   const selectPhaseTemplate = (template: PhaseTemplate) => {
-    setPhaseEditorMode('edit');
     setSelectedPhaseTemplateId(idOf(template.id));
-    setCreatingCell(null);
-    setNewChecklistDraft(null);
-    setMessage('');
+    setCellTarget(null);
   };
 
   const phaseDraftInput = (draft: PhaseTemplateDraft): CreatePhaseTemplateInput => ({
@@ -7993,92 +8752,8 @@ function ProjectTemplateView({
     metadata: draft.metadata
   });
 
-  const savePhaseTemplate = async () => {
-    if (!canWrite || !activePhaseDraft || invalidPhaseDraft) return;
-    const key = phaseEditorMode === 'create' ? 'phase-template-new' : `phase-template-${selectedPhaseTemplate?.id}`;
-    setSavingKey(key);
-    setMessage('');
-    try {
-      if (phaseEditorMode === 'create') {
-        const created = await onCreatePhaseTemplate(phaseDraftInput(activePhaseDraft));
-        setSelectedPhaseTemplateId(idOf(created.id));
-        setPhaseEditorMode('edit');
-        setMessage('项目模板源数据已新增。');
-      } else if (selectedPhaseTemplate) {
-        const updated = await onUpdatePhaseTemplate(selectedPhaseTemplate, phaseDraftInput(activePhaseDraft));
-        setSelectedPhaseTemplateId(idOf(updated.id));
-        setMessage('项目模板源数据已保存。');
-      }
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '项目模板源数据保存失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
-
-  const deleteSelectedPhaseTemplate = async () => {
-    if (!canWrite || !selectedPhaseTemplate) return;
-    const confirmed = window.confirm(`确认删除项目模板源数据「${selectedPhaseTemplate.name}」？将同步删除该模板下的关联清单模板。`);
-    if (!confirmed) return;
-    setSavingKey(`phase-template-delete-${selectedPhaseTemplate.id}`);
-    setMessage('');
-    try {
-      await onDeletePhaseTemplate(selectedPhaseTemplate);
-      setSelectedPhaseTemplateId('');
-      setSelectedChecklistTemplateId('');
-      setMessage('项目模板源数据已删除。');
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '项目模板源数据删除失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
-
-  const copySelectedPhaseTemplate = async () => {
-    if (!canWrite || !selectedPhaseTemplate) return;
-    setSavingKey(`phase-template-copy-${selectedPhaseTemplate.id}`);
-    setMessage('');
-    try {
-      const copied = await onCopyPhaseTemplate(selectedPhaseTemplate);
-      setSelectedPhaseTemplateId(idOf(copied.id));
-      setSelectedChecklistTemplateId('');
-      setPhaseEditorMode('edit');
-      setCreatingCell(null);
-      setNewChecklistDraft(null);
-      setMessage('已复制为草稿模板，并复制关联清单模板与模板检查项。');
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '项目模板源数据复制失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
-
-  const updateActiveModuleDraft = (patch: Partial<InspectionModuleDraft>) => {
-    if (moduleEditorMode === 'create') {
-      setNewModuleDraft(current => ({ ...current, ...patch }));
-      return;
-    }
-    if (!selectedInspectionModuleIdValue || !selectedInspectionModule) return;
-    setModuleDrafts(current => ({
-      ...current,
-      [selectedInspectionModuleIdValue]: {
-        ...(current[selectedInspectionModuleIdValue] ?? inspectionModuleDraftFrom(selectedInspectionModule)),
-        ...patch
-      }
-    }));
-  };
-
-  const openCreateInspectionModule = () => {
-    setModuleEditorMode('create');
-    setNewModuleDraft(emptyInspectionModuleDraft(existingInspectionModuleCodes, nextInspectionModuleSequence));
-    setModuleMessage('');
-  };
-
-  const selectInspectionModule = (module: InspectionModule) => {
-    setModuleEditorMode('edit');
-    setSelectedInspectionModuleId(idOf(module.id));
-    setModuleMessage('');
-  };
+  const savePhaseTemplate = (record: PhaseTemplate | null, draft: PhaseTemplateDraft) =>
+    record ? onUpdatePhaseTemplate(record, phaseDraftInput(draft)) : onCreatePhaseTemplate(phaseDraftInput(draft));
 
   const inspectionModuleDraftInput = (draft: InspectionModuleDraft): InspectionModuleInput => ({
     code: draft.code.trim(),
@@ -8090,106 +8765,8 @@ function ProjectTemplateView({
     metadata: draft.metadata
   });
 
-  const saveInspectionModule = async () => {
-    if (!canWrite || !activeModuleDraft || invalidModuleDraft) return;
-    const key = moduleEditorMode === 'create' ? 'inspection-module-new' : `inspection-module-${selectedInspectionModule?.id}`;
-    setSavingKey(key);
-    setModuleMessage('');
-    try {
-      if (moduleEditorMode === 'create') {
-        const created = await onCreateInspectionModule(inspectionModuleDraftInput(activeModuleDraft));
-        setSelectedInspectionModuleId(idOf(created.id));
-        setModuleEditorMode('edit');
-        setModuleMessage('检查模块已新增，矩阵和清单模板模块下拉已使用最新列表。');
-      } else if (selectedInspectionModule) {
-        const updated = await onUpdateInspectionModule(
-          selectedInspectionModule,
-          inspectionModuleDraftInput(activeModuleDraft)
-        );
-        setSelectedInspectionModuleId(idOf(updated.id));
-        setModuleMessage('检查模块已保存，矩阵行已刷新。');
-      }
-    } catch (err) {
-      setModuleMessage(mutationErrorMessage(err, '检查模块保存失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
-
-  const deleteSelectedInspectionModule = async () => {
-    if (!canWrite || !selectedInspectionModule) return;
-    const confirmed = window.confirm(`确认删除检查模块「${selectedInspectionModule.name}」？若已有清单模板或检查项引用，后端会拒绝删除。`);
-    if (!confirmed) return;
-    setSavingKey(`inspection-module-delete-${selectedInspectionModule.id}`);
-    setModuleMessage('');
-    try {
-      await onDeleteInspectionModule(selectedInspectionModule);
-      setSelectedInspectionModuleId('');
-      setModuleEditorMode('edit');
-      setModuleMessage('检查模块已删除。');
-    } catch (err) {
-      setModuleMessage(mutationErrorMessage(err, '检查模块删除失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
-
-  const updateActiveChecklistDraft = (patch: Partial<ChecklistTemplateDraft>) => {
-    if (creatingCell) {
-      setNewChecklistDraft(current => current ? { ...current, ...patch } : current);
-      return;
-    }
-    if (!selectedChecklistTemplateIdValue || !selectedChecklistTemplate) return;
-    setChecklistDrafts(current => ({
-      ...current,
-      [selectedChecklistTemplateIdValue]: {
-        ...(current[selectedChecklistTemplateIdValue] ?? checklistTemplateDraftFrom(selectedChecklistTemplate)),
-        ...patch
-      }
-    }));
-  };
-
-  const updateDraftItem = (index: number, patch: Partial<ChecklistTemplateItem>) => {
-    if (!activeChecklistDraft) return;
-    const nextItems = [...selectedDraftItems];
-    nextItems[index] = { ...nextItems[index], ...patch };
-    updateActiveChecklistDraft({ itemTemplates: nextItems });
-  };
-
-  const addDraftItem = () => {
-    const nextSortOrder = selectedDraftItems.length
-      ? Math.max(...selectedDraftItems.map(item => item.sortOrder ?? 0)) + 10
-      : 10;
-    updateActiveChecklistDraft({
-      itemTemplates: [...selectedDraftItems, emptyChecklistTemplateItem(nextSortOrder)]
-    });
-  };
-
-  const removeDraftItem = (index: number) => {
-    updateActiveChecklistDraft({
-      itemTemplates: selectedDraftItems.filter((_, itemIndex) => itemIndex !== index)
-    });
-  };
-
-  const startCreateChecklistTemplate = (target: TemplateCellTarget) => {
-    if (!selectedPhaseTemplate) return;
-    setCreatingCell(target);
-    setSelectedChecklistTemplateId('');
-    setNewChecklistDraft(makeChecklistTemplateDraft(
-      selectedPhaseTemplate,
-      target.module,
-      target.phase,
-      existingChecklistTemplateCodes
-    ));
-    setMessage('');
-  };
-
-  const selectChecklistTemplate = (template: ChecklistTemplate) => {
-    setCreatingCell(null);
-    setNewChecklistDraft(null);
-    setSelectedChecklistTemplateId(idOf(template.id));
-    setMessage('');
-  };
+  const saveInspectionModule = (record: InspectionModule | null, draft: InspectionModuleDraft) =>
+    record ? onUpdateInspectionModule(record, inspectionModuleDraftInput(draft)) : onCreateInspectionModule(inspectionModuleDraftInput(draft));
 
   const checklistDraftInput = (draft: ChecklistTemplateDraft): CreateChecklistTemplateInput => ({
     code: draft.code.trim(),
@@ -8199,53 +8776,31 @@ function ProjectTemplateView({
     phaseKey: draft.phaseKey,
     version: toPositiveInteger(draft.version),
     isActive: draft.isActive,
-    itemTemplates: normalizeTemplateItemsForDraft(draft.itemTemplates),
-    metadata: {
-      ...draft.metadata,
-      item_count: draft.itemTemplates.filter(item => item.title.trim()).length
-    }
+    metadata: draft.metadata
   });
 
-  const saveChecklistTemplate = async () => {
-    if (!canWrite || !activeChecklistDraft || invalidChecklistDraft) return;
-    const key = creatingCell ? 'checklist-template-new' : `checklist-template-${selectedChecklistTemplate?.id}`;
-    setSavingKey(key);
-    setMessage('');
-    try {
-      if (creatingCell) {
-        const created = await onCreateChecklistTemplate(checklistDraftInput(activeChecklistDraft));
-        setCreatingCell(null);
-        setNewChecklistDraft(null);
-        setSelectedChecklistTemplateId(idOf(created.id));
-        setMessage('清单模板已新增。');
-      } else if (selectedChecklistTemplate) {
-        const updated = await onUpdateChecklistTemplate(selectedChecklistTemplate, checklistDraftInput(activeChecklistDraft));
-        setSelectedChecklistTemplateId(idOf(updated.id));
-        setMessage('清单模板已保存。新创建或补齐模板的项目会使用最新模板，已有项目实例不自动覆盖。');
-      }
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '清单模板保存失败。'));
-    } finally {
-      setSavingKey('');
-    }
+  const saveChecklistTemplate = (record: ChecklistTemplate | null, draft: ChecklistTemplateDraft) =>
+    record ? onUpdateChecklistTemplate(record, checklistDraftInput(draft)) : onCreateChecklistTemplate(checklistDraftInput(draft));
+
+  const startCreateChecklistTemplate = (target: TemplateCellTarget) => {
+    if (!selectedPhaseTemplate) return;
+    checklistCreateTargetRef.current = { phaseTemplate: selectedPhaseTemplate, module: target.module, phase: target.phase };
+    void checklistEditor.openRecord();
   };
 
-  const deleteSelectedChecklistTemplate = async () => {
-    if (!canWrite || !selectedChecklistTemplate) return;
-    const confirmed = window.confirm(`确认删除清单模板「${selectedChecklistTemplate.title}」？`);
-    if (!confirmed) return;
-    setSavingKey(`checklist-template-delete-${selectedChecklistTemplate.id}`);
-    setMessage('');
-    try {
-      await onDeleteChecklistTemplate(selectedChecklistTemplate);
-      setSelectedChecklistTemplateId('');
-      setMessage('清单模板已删除。');
-    } catch (err) {
-      setMessage(mutationErrorMessage(err, '清单模板删除失败。'));
-    } finally {
-      setSavingKey('');
-    }
-  };
+  const checklistDraftPhaseTemplate =
+    data.phaseTemplates.find(template => idOf(template.id) === checklistEditor.draft.phaseTemplateId) ?? selectedPhaseTemplate;
+  const checklistDraftPhaseDefinitions = checklistDraftPhaseTemplate ? phaseDefinitionsOf(checklistDraftPhaseTemplate) : [];
+  const moduleDrawerRecord = moduleEditor.record;
+  const moduleDrawerChecklistCount = moduleDrawerRecord
+    ? data.checklistTemplates.filter(template => idOf(template.moduleId) === idOf(moduleDrawerRecord.id)).length
+    : 0;
+  const moduleDrawerCheckItemCount = moduleDrawerRecord
+    ? data.checkItems.filter(item => idOf(item.moduleId) === idOf(moduleDrawerRecord.id)).length
+    : 0;
+  const cellTemplates = cellTarget && selectedPhaseTemplateIdValue
+    ? checklistTemplatesForCell(data.checklistTemplates, selectedPhaseTemplateIdValue, cellTarget.module, cellTarget.phase)
+    : [];
 
   return (
     <div className="grid gap-5">
@@ -8254,11 +8809,11 @@ function ProjectTemplateView({
           <div>
             <p className="kicker">Project Templates</p>
             <h2 className="text-xl font-semibold">项目模板源数据</h2>
-            <p className="text-sm text-ink-muted">项目模板源数据只用于新项目初始化和默认补齐，不和项目实例维护混在一起。</p>
+            <p className="text-sm text-ink-muted">项目模板源数据只用于新项目初始化和默认补齐；点击行选择模板，点击“配置”在抽屉中维护属性与阶段定义。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <ReadOnlyNotice canWrite={canWrite} />
-            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={openCreatePhaseTemplate}>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={() => void phaseEditor.openRecord()}>
               <Plus className="h-4 w-4" />
               新建模板
             </button>
@@ -8275,6 +8830,7 @@ function ProjectTemplateView({
                 <th>模板检查项</th>
                 <th>状态</th>
                 <th>说明</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -8286,9 +8842,9 @@ function ProjectTemplateView({
                 return (
                   <tr
                     key={template.id}
-                    className={`cursor-pointer transition ${active && phaseEditorMode === 'edit' ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
                     tabIndex={0}
-                    aria-selected={active && phaseEditorMode === 'edit'}
+                    aria-selected={active}
                     onClick={() => selectPhaseTemplate(template)}
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') {
@@ -8307,145 +8863,32 @@ function ProjectTemplateView({
                     <td>{checklistTemplateItemCount(templateChecklists)} 项</td>
                     <td><StatusPill status={template.isActive ? 'active' : 'disabled'} /></td>
                     <td className="max-w-[280px]">{template.description || template.defaultGoal || '-'}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        aria-label={`配置项目模板 ${template.name}`}
+                        onClick={event => {
+                          event.stopPropagation();
+                          selectPhaseTemplate(template);
+                          void phaseEditor.openRecord(template.id);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                        配置
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
               {!sortedPhaseTemplates.length ? (
                 <tr>
-                  <td colSpan={7} className="text-center text-ink-muted">暂无项目模板源数据。</td>
+                  <td colSpan={8} className="text-center text-ink-muted">暂无项目模板源数据。</td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
-        {activePhaseDraft ? (
-          <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-ink">
-                  {phaseEditorMode === 'create' ? '新建项目模板源数据' : '模板属性'}
-                </h3>
-                <p className="text-xs text-ink-muted">
-                  {phaseEditorMode === 'create' ? '保存后可在矩阵中维护模块阶段清单模板。' : `${selectedPhaseTemplate?.code ?? ''} · ${selectedTemplateDefinitions.length} 阶段`}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {phaseEditorMode === 'edit' && selectedPhaseTemplate ? (
-                  <>
-                    <button
-                      className="btn btn-ghost btn--sm"
-                      type="button"
-                      disabled={!canWrite || savingKey === `phase-template-copy-${selectedPhaseTemplate.id}`}
-                      onClick={() => void copySelectedPhaseTemplate()}
-                    >
-                      <Copy className="h-4 w-4" />
-                      {savingKey === `phase-template-copy-${selectedPhaseTemplate.id}` ? '复制中' : '复制草稿'}
-                    </button>
-                    <button
-                      className="btn btn-ghost btn--sm"
-                      type="button"
-                      disabled={!canWrite || savingKey === `phase-template-delete-${selectedPhaseTemplate.id}`}
-                      onClick={() => void deleteSelectedPhaseTemplate()}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      删除模板
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  className="btn btn-primary btn--sm"
-                  type="button"
-                  disabled={!canWrite || invalidPhaseDraft || savingKey.startsWith('phase-template')}
-                  onClick={() => void savePhaseTemplate()}
-                >
-                  <Save className="h-4 w-4" />
-                  {savingKey === 'phase-template-new' || savingKey === `phase-template-${selectedPhaseTemplate?.id}` ? '保存中' : '保存模板'}
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-5">
-              <label>
-                <span className="field-label">模板编码</span>
-                <input className="input" value={activePhaseDraft.code} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ code: event.target.value })} />
-              </label>
-              <label className="lg:col-span-2">
-                <span className="field-label">模板名称</span>
-                <input className="input" value={activePhaseDraft.name} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ name: event.target.value })} />
-              </label>
-              <label>
-                <span className="field-label">版本</span>
-                <input className="input" type="number" min={1} value={activePhaseDraft.version} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ version: event.target.value })} />
-              </label>
-              <label className="flex items-end gap-2 text-sm text-ink-muted">
-                <input type="checkbox" checked={activePhaseDraft.isActive} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ isActive: event.target.checked })} />
-                启用
-              </label>
-              <label className="lg:col-span-5">
-                <span className="field-label">说明</span>
-                <textarea className="input min-h-20" value={activePhaseDraft.description} disabled={!canWrite} onChange={event => updateActivePhaseDraft({ description: event.target.value })} />
-              </label>
-            </div>
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h4 className="text-sm font-semibold text-ink">阶段定义</h4>
-                <p className="text-xs text-ink-muted">阶段 key 会用于矩阵列和清单模板 phase_key。</p>
-              </div>
-              <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={addPhaseDefinition}>
-                <Plus className="h-4 w-4" />
-                新增阶段
-              </button>
-            </div>
-            <div className="table-shell mt-3">
-              <table className="data-table min-w-[1180px]">
-                <thead>
-                  <tr>
-                    <th>排序</th>
-                    <th>阶段 Key</th>
-                    <th>阶段名称</th>
-                    <th>说明</th>
-                    <th>计划开始</th>
-                    <th>计划结束</th>
-                    <th>持续天数</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activePhaseDraft.phaseDefinitions.map((phase, index) => (
-                    <tr key={`${phase.key || 'phase'}-${index}`}>
-                      <td className="min-w-[100px]">
-                        <input className="input" type="number" value={phase.sortOrder ?? (index + 1) * 10} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { sortOrder: Number(event.target.value) })} />
-                      </td>
-                      <td className="min-w-[150px]">
-                        <input className="input" value={phase.key} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { key: event.target.value })} />
-                      </td>
-                      <td className="min-w-[180px]">
-                        <input className="input" value={phase.name} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { name: event.target.value })} />
-                      </td>
-                      <td className="min-w-[260px]">
-                        <input className="input" value={phase.description ?? ''} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { description: event.target.value })} />
-                      </td>
-                      <td className="min-w-[150px]">
-                        <input className="input" type="date" value={dateInputValue(phase.plannedStart)} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { plannedStart: event.target.value || null })} />
-                      </td>
-                      <td className="min-w-[150px]">
-                        <input className="input" type="date" value={dateInputValue(phase.plannedEnd)} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { plannedEnd: event.target.value || null })} />
-                      </td>
-                      <td className="min-w-[120px]">
-                        <input className="input" type="number" value={phase.durationDays ?? ''} disabled={!canWrite} onChange={event => updatePhaseDefinition(index, { durationDays: event.target.value ? Number(event.target.value) : null })} />
-                      </td>
-                      <td>
-                        <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || activePhaseDraft.phaseDefinitions.length <= 1} onClick={() => removePhaseDefinition(index)}>
-                          <Trash2 className="h-4 w-4" />
-                          删除
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
       </section>
 
       <section className="panel">
@@ -8453,11 +8896,11 @@ function ProjectTemplateView({
           <div>
             <p className="kicker">Inspection Modules</p>
             <h2 className="text-xl font-semibold">检查模块维护</h2>
-            <p className="text-sm text-ink-muted">维护模块编码、名称、排序、启用状态和 IDaaS 负责人；保存后立即影响下方矩阵行与新建清单模板模块选项。</p>
+            <p className="text-sm text-ink-muted">点击模块行在抽屉中维护编码、名称、排序、启用状态与 IDaaS 负责人；保存后立即影响下方矩阵行与清单模板模块选项。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <ReadOnlyNotice canWrite={canWrite} />
-            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={openCreateInspectionModule}>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={() => void moduleEditor.openRecord()}>
               <Plus className="h-4 w-4" />
               新增模块
             </button>
@@ -8478,21 +8921,20 @@ function ProjectTemplateView({
             </thead>
             <tbody>
               {sortedInspectionModules.map(module => {
-                const active = moduleEditorMode === 'edit' && idOf(module.id) === selectedInspectionModuleIdValue;
                 const moduleOwners = ownersOfModule(module);
                 const moduleChecklistCount = data.checklistTemplates.filter(template => idOf(template.moduleId) === idOf(module.id)).length;
                 const moduleCheckItemCount = data.checkItems.filter(item => idOf(item.moduleId) === idOf(module.id)).length;
                 return (
                   <tr
                     key={module.id}
-                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    className="cursor-pointer transition hover:bg-surface-soft"
                     tabIndex={0}
-                    aria-selected={active}
-                    onClick={() => selectInspectionModule(module)}
+                    aria-label={`维护检查模块 ${module.name}`}
+                    onClick={() => void moduleEditor.openRecord(module.id)}
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
-                        selectInspectionModule(module);
+                        void moduleEditor.openRecord(module.id);
                       }
                     }}
                   >
@@ -8524,87 +8966,12 @@ function ProjectTemplateView({
               })}
               {!sortedInspectionModules.length ? (
                 <tr>
-                  <td colSpan={7} className="text-center text-ink-muted">暂无检查模块，可新增后保存。</td>
+                  <td colSpan={7} className="text-center text-ink-muted">暂无检查模块，可点击“新增模块”开始维护。</td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
-        {activeModuleDraft ? (
-          <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-ink">
-                  {moduleEditorMode === 'create' ? '新增检查模块' : '模块属性'}
-                </h3>
-                <p className="text-xs text-ink-muted">
-                  {moduleEditorMode === 'create'
-                    ? '保存后可在矩阵中维护该模块的阶段清单模板。'
-                    : `${selectedInspectionModule?.code ?? ''} · 排序 ${selectedInspectionModule?.sequence ?? 0}`}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {moduleEditorMode === 'edit' && selectedInspectionModule ? (
-                  <button
-                    className="btn btn-ghost btn--sm"
-                    type="button"
-                    disabled={!canWrite || savingKey === `inspection-module-delete-${selectedInspectionModule.id}`}
-                    onClick={() => void deleteSelectedInspectionModule()}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    删除模块
-                  </button>
-                ) : null}
-                <button
-                  className="btn btn-primary btn--sm"
-                  type="button"
-                  disabled={!canWrite || invalidModuleDraft || savingKey.startsWith('inspection-module')}
-                  onClick={() => void saveInspectionModule()}
-                >
-                  <Save className="h-4 w-4" />
-                  {savingKey === 'inspection-module-new' || savingKey === `inspection-module-${selectedInspectionModule?.id}` ? '保存中' : '保存模块'}
-                </button>
-              </div>
-            </div>
-            {moduleMessage ? <div className="mt-3 text-sm text-ink-muted">{moduleMessage}</div> : null}
-            <div className="mt-4 grid gap-3 lg:grid-cols-6">
-              <label>
-                <span className="field-label">模块编码</span>
-                <input className="input" value={activeModuleDraft.code} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ code: event.target.value })} />
-              </label>
-              <label className="lg:col-span-2">
-                <span className="field-label">模块名称</span>
-                <input className="input" value={activeModuleDraft.name} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ name: event.target.value })} />
-              </label>
-              <label>
-                <span className="field-label">排序</span>
-                <input className="input" type="number" min={0} value={activeModuleDraft.sequence} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ sequence: event.target.value })} />
-              </label>
-              <label className="flex items-end gap-2 text-sm text-ink-muted">
-                <input type="checkbox" checked={activeModuleDraft.isActive} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ isActive: event.target.checked })} />
-                启用
-              </label>
-              <label className="lg:col-span-6">
-                <span className="field-label">说明</span>
-                <textarea className="input min-h-20" value={activeModuleDraft.description} disabled={!canWrite} onChange={event => updateActiveModuleDraft({ description: event.target.value })} />
-              </label>
-              <div className="lg:col-span-6">
-                <span className="field-label">负责人</span>
-                <OwnerListEditor
-                  owners={activeModuleDraft.owners}
-                  ownerCandidates={data.ownerCandidates}
-                  canWrite={canWrite}
-                  candidateLabel={`检查模块 ${activeModuleDraft.name || activeModuleDraft.code || '新增模块'} IDaaS 负责人`}
-                  onChange={next => updateActiveModuleDraft({ owners: next.owners })}
-                />
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-5">
-            <EmptyState message="请选择检查模块，或点击新增模块开始维护。" />
-          </div>
-        )}
       </section>
 
       <section className="panel">
@@ -8612,11 +8979,11 @@ function ProjectTemplateView({
           <div>
             <p className="kicker">Module Phase Matrix</p>
             <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
-            <p className="text-sm text-ink-muted">{selectedPhaseTemplate && phaseEditorMode === 'edit' ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段` : '先选择已保存的项目模板源数据'}</p>
+            <p className="text-sm text-ink-muted">{selectedPhaseTemplate ? `${selectedPhaseTemplate.name} · ${selectedTemplateDefinitions.length} 阶段，点击单元格维护清单模板` : '先选择已保存的项目模板源数据'}</p>
           </div>
           <span className="chip">{selectedTemplateChecklists.length} 组清单模板</span>
         </div>
-        {selectedPhaseTemplate && phaseEditorMode === 'edit' && selectedTemplateDefinitions.length ? (
+        {selectedPhaseTemplate && selectedTemplateDefinitions.length ? (
           <div className="table-shell mt-4">
             <table className="data-table" style={{ minWidth: `${Math.max(960, 220 + selectedTemplateDefinitions.length * 220)}px` }}>
               <thead>
@@ -8639,47 +9006,35 @@ function ProjectTemplateView({
                       <div className="mt-2"><StatusPill status={module.isActive ? 'active' : 'disabled'} /></div>
                     </td>
                     {selectedTemplateDefinitions.map(phase => {
-                      const cellTemplates = checklistTemplatesForCell(
+                      const templatesInCell = checklistTemplatesForCell(
                         data.checklistTemplates,
                         selectedPhaseTemplateIdValue,
                         module,
                         phase
                       );
+                      const cellItemCount = checklistTemplateItemCount(templatesInCell);
                       return (
                         <td key={`${module.id}-${phase.key}`} className="min-w-[220px] align-top">
-                          <div className="space-y-2">
-                            {cellTemplates.map(template => (
-                              <button
-                                key={template.id}
-                                className={`w-full rounded-lg border p-3 text-left transition ${
-                                  idOf(template.id) === selectedChecklistTemplateIdValue && !creatingCell
-                                    ? 'border-primary bg-primary/10'
-                                    : 'border-outline bg-surface-soft hover:border-primary/50'
-                                }`}
-                                type="button"
-                                aria-pressed={idOf(template.id) === selectedChecklistTemplateIdValue && !creatingCell}
-                                onClick={() => selectChecklistTemplate(template)}
-                              >
-                                <div className="font-semibold text-ink">{template.title}</div>
-                                <div className="mt-1 text-xs text-ink-muted">{template.code}</div>
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <StatusPill status={template.isActive !== false ? 'active' : 'disabled'} />
-                                  <span className="chip">{checklistItemsOf(template).length} 项</span>
+                          <button
+                            className="w-full rounded-lg border border-outline bg-surface-soft p-3 text-left transition hover:border-primary/50"
+                            type="button"
+                            aria-label={`${module.name} × ${phase.name} 清单配置`}
+                            onClick={() => setCellTarget({ module, phase })}
+                          >
+                            {templatesInCell.length ? (
+                              <div className="space-y-1.5">
+                                {templatesInCell.slice(0, 3).map(template => (
+                                  <div key={template.id} className="truncate text-sm font-semibold text-ink">{template.title}</div>
+                                ))}
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  <span className="chip">{templatesInCell.length} 组清单</span>
+                                  <span className="text-xs text-ink-muted">{cellItemCount} 项</span>
                                 </div>
-                              </button>
-                            ))}
-                            {!cellTemplates.length && <div className="p-3 text-sm text-ink-muted">未配置</div>}
-                          </div>
-                          {canWrite ? (
-                            <button
-                              className="btn btn-ghost btn--sm mt-2 w-full"
-                              type="button"
-                              onClick={() => startCreateChecklistTemplate({ module, phase })}
-                            >
-                              <Plus className="h-4 w-4" />
-                              新增单元格清单
-                            </button>
-                          ) : null}
+                              </div>
+                            ) : (
+                              <div className="text-sm text-ink-muted">未配置</div>
+                            )}
+                          </button>
                         </td>
                       );
                     })}
@@ -8695,205 +9050,446 @@ function ProjectTemplateView({
           </div>
         ) : (
           <div className="mt-4">
-            <EmptyState message={phaseEditorMode === 'create' ? '新模板保存后可维护模块阶段矩阵。' : '当前模板暂无阶段定义。'} />
+            <EmptyState message={selectedPhaseTemplate ? '当前模板暂无阶段定义，可在“配置”抽屉中维护阶段。' : '暂无项目模板源数据，请先新建模板。'} />
           </div>
         )}
+      </section>
 
-        {activeChecklistDraft ? (
-          <div className="mt-5 rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-                  {creatingCell ? <Plus className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-                  {creatingCell ? '新增清单模板' : activeChecklistDraft.name}
-                </div>
-                <div className="text-xs text-ink-muted">
-                  {selectedChecklistPhase?.name || activeChecklistDraft.phaseKey || '未设置阶段'} · {sortedInspectionModules.find(module => idOf(module.id) === activeChecklistDraft.moduleId)?.name || '未设置模块'}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {!creatingCell && selectedChecklistTemplate ? (
+      <SideDrawer
+        open={Boolean(cellTarget)}
+        title={cellTarget ? `${cellTarget.module.name} × ${cellTarget.phase.name}` : '单元格清单'}
+        subtitle={selectedPhaseTemplate ? `${selectedPhaseTemplate.name} · ${cellTarget?.phase.key ?? ''}` : undefined}
+        size="lg"
+        onClose={() => setCellTarget(null)}
+        footer={
+          <>
+            <span className="mr-auto text-xs text-ink-muted">{cellTemplates.length} 组清单模板</span>
+            <button className="btn btn-ghost btn--sm" type="button" onClick={() => setCellTarget(null)}>
+              关闭
+            </button>
+            {canWrite && cellTarget ? (
+              <button className="btn btn-primary btn--sm" type="button" onClick={() => startCreateChecklistTemplate(cellTarget)}>
+                <Plus className="h-4 w-4" />
+                新增单元格清单
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        {cellTarget ? (
+          cellTemplates.length ? (
+            <div className="space-y-3">
+              {cellTemplates.map(template => (
+                <div key={template.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline bg-surface-soft p-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-ink">{template.title}</div>
+                    <div className="mt-1 text-xs text-ink-muted">{template.code}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <StatusPill status={template.isActive !== false ? 'active' : 'disabled'} />
+                      <span className="chip">{checklistItemsOf(template).length} 项</span>
+                    </div>
+                  </div>
                   <button
                     className="btn btn-ghost btn--sm"
                     type="button"
-                    disabled={!canWrite || savingKey === `checklist-template-delete-${selectedChecklistTemplate.id}`}
-                    onClick={() => void deleteSelectedChecklistTemplate()}
+                    aria-label={`编辑清单模板 ${template.title}`}
+                    onClick={() => void checklistEditor.openRecord(template.id)}
                   >
-                    <Trash2 className="h-4 w-4" />
-                    删除清单
+                    <Pencil className="h-4 w-4" />
+                    编辑
                   </button>
-                ) : null}
-                <button
-                  className="btn btn-ghost btn--sm"
-                  type="button"
-                  disabled={!canWrite || !activeChecklistDraft}
-                  onClick={addDraftItem}
-                >
-                  <Plus className="h-4 w-4" />
-                  新增模板检查项
-                </button>
-                <button
-                  className="btn btn-primary btn--sm"
-                  type="button"
-                  disabled={!canWrite || invalidChecklistDraft || savingKey.startsWith('checklist-template')}
-                  onClick={() => void saveChecklistTemplate()}
-                >
-                  <Save className="h-4 w-4" />
-                  {savingKey === 'checklist-template-new' || savingKey === `checklist-template-${selectedChecklistTemplate?.id}` ? '保存中' : '保存清单'}
-                </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState message="该单元格暂未配置清单模板，可点击“新增单元格清单”。" />
+          )
+        ) : null}
+      </SideDrawer>
+
+      <PhaseTemplateDrawer
+        editor={phaseEditor}
+        canWrite={canWrite}
+        onSave={savePhaseTemplate}
+        onCopy={onCopyPhaseTemplate}
+        onDelete={onDeletePhaseTemplate}
+      />
+      <InspectionModuleDrawer
+        editor={moduleEditor}
+        canWrite={canWrite}
+        ownerCandidates={data.ownerCandidates}
+        checklistCount={moduleDrawerChecklistCount}
+        checkItemCount={moduleDrawerCheckItemCount}
+        onSave={saveInspectionModule}
+        onDelete={onDeleteInspectionModule}
+      />
+      <ChecklistTemplateDrawer
+        editor={checklistEditor}
+        modules={sortedInspectionModules}
+        phaseDefinitions={checklistDraftPhaseDefinitions}
+        phaseLabels={phaseLabels}
+        canWrite={canWrite}
+        onSave={saveChecklistTemplate}
+        onDelete={onDeleteChecklistTemplate}
+        onSetItems={onSetChecklistTemplateItems}
+      />
+    </div>
+  );
+}
+
+function CheckItemLibraryEntryDrawer({ editor, canWrite, phaseLabels, onSave, onDelete }: {
+  editor: CheckItemLibraryEntryEditor;
+  canWrite: boolean;
+  phaseLabels: Map<string, string>;
+  onSave: (record: CheckItemLibraryEntry | null, draft: CheckItemLibraryEntryDraft) => Promise<CheckItemLibraryEntry>;
+  onDelete: (entry: CheckItemLibraryEntry) => Promise<void>;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setActionError('');
+  }, [sessionKey]);
+
+  const invalid = !draft.phaseKey.trim() || !draft.title.trim();
+  const linkedTemplateCount = record?.linkedTemplateCount ?? 0;
+  const knownPhaseKeys = Array.from(phaseLabels.keys());
+
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => run(async () => {
+    const saved = await onSave(record, draft);
+    editor.accept(saved, libraryEntryDraftFrom(saved));
+  });
+  const remove = () => {
+    if (!record || linkedTemplateCount > 0) return;
+    if (!window.confirm(`确认删除检查项库条目「${record.title}」？删除后不可恢复。`)) return;
+    void run(async () => {
+      await onDelete(record);
+      editor.removed();
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    editor.close();
+  };
+
+  return (
+    <SideDrawer
+      open={editor.open}
+      title={record ? `库检查项 · ${record.title}` : '新增库检查项'}
+      subtitle={record ? `${phaseLabels.get(record.phaseKey) ?? record.phaseKey} · 被 ${linkedTemplateCount} 组清单模板引用` : '保存后可在清单模板抽屉中通过“从检查项库选择”引用'}
+      size="lg"
+      saving={busy}
+      onClose={requestClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-muted">
+            {dirty ? '有未保存修改' : record ? '已保存' : '保存后进入检查项库'}
+          </span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite ? (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={busy || loading || Boolean(error) || invalid || !dirty}
+              onClick={() => void save()}
+            >
+              <Save className="h-4 w-4" />
+              {busy ? '保存中…' : '保存检查项'}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      {loading ? <p className="text-sm text-ink-muted">正在加载库检查项…</p> : null}
+      {error ? (
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span className="field-label">项目阶段 Key</span>
+              <input
+                className="input"
+                list="check-item-library-phase-keys"
+                value={draft.phaseKey}
+                disabled={!canWrite || busy}
+                onChange={event => setDraft({ ...draft, phaseKey: event.target.value })}
+                placeholder="如 design / entry / preppv"
+              />
+              <datalist id="check-item-library-phase-keys">
+                {knownPhaseKeys.map(key => (
+                  <option key={key} value={key}>{phaseLabels.get(key)}</option>
+                ))}
+              </datalist>
+            </label>
+            <label>
+              <span className="field-label">检查项标题</span>
+              <input className="input" value={draft.title} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, title: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">优先级</span>
+              <input className="input" value={draft.priority} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, priority: event.target.value })} placeholder="如 P0 / P1 / P2" />
+            </label>
+            <label>
+              <span className="field-label">排序</span>
+              <input className="input" type="number" value={draft.sortOrder} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, sortOrder: event.target.value })} />
+            </label>
+            <label className="flex items-end gap-2 text-sm text-ink-muted">
+              <input type="checkbox" checked={draft.isActive} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, isActive: event.target.checked })} />
+              启用
+            </label>
+            <label className="sm:col-span-2">
+              <span className="field-label">检查内容 / 验收口径</span>
+              <textarea className="input min-h-20" value={draft.description} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, description: event.target.value })} />
+            </label>
+          </div>
+          {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+          {canWrite && record ? (
+            <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
+              <div className="flex flex-wrap items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-danger" />
+                <h3 className="text-sm font-semibold text-danger">删除库检查项</h3>
               </div>
-            </div>
-            {message ? <div className="mt-3 text-sm text-ink-muted">{message}</div> : null}
-            <div className="mt-4 grid gap-3 lg:grid-cols-6">
-              <label>
-                <span className="field-label">清单编码</span>
-                <input className="input" value={activeChecklistDraft.code} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ code: event.target.value })} />
-              </label>
-              <label className="lg:col-span-2">
-                <span className="field-label">清单名称</span>
-                <input className="input" value={activeChecklistDraft.name} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ name: event.target.value })} />
-              </label>
-              <label>
-                <span className="field-label">模块</span>
-                <select className="select" value={activeChecklistDraft.moduleId} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ moduleId: event.target.value })}>
-                  <option value="">选择模块</option>
-                  {sortedInspectionModules.map(module => (
-                    <option key={module.id} value={idOf(module.id)}>{module.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="field-label">阶段</span>
-                <select className="select" value={activeChecklistDraft.phaseKey} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ phaseKey: event.target.value })}>
-                  <option value="">选择阶段</option>
-                  {selectedTemplateDefinitions.map(phase => (
-                    <option key={phase.key} value={phase.key}>{phase.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="field-label">版本</span>
-                <input className="input" type="number" min={1} value={activeChecklistDraft.version} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ version: event.target.value })} />
-              </label>
-              <label className="flex items-end gap-2 text-sm text-ink-muted">
-                <input type="checkbox" checked={activeChecklistDraft.isActive} disabled={!canWrite} onChange={event => updateActiveChecklistDraft({ isActive: event.target.checked })} />
-                启用
-              </label>
-            </div>
-            <div className="table-shell mt-4">
-              <table className="data-table min-w-[1280px]">
-                <thead>
-                  <tr>
-                    <th>排序</th>
-                    <th>模板检查项</th>
-                    <th>描述/验收口径</th>
-                    <th>优先级</th>
-                    <th>计划开始</th>
-                    <th>计划结束</th>
-                    <th>启用</th>
-                    <th>操作</th>
+              <p className="mt-1 text-xs text-ink-muted">被清单模板引用的条目不可删除；可改为停用，存量清单保留引用但种子生成时会跳过。</p>
+              {linkedTemplateCount > 0 ? (
+                <p className="mt-2 text-xs text-danger" role="note">
+                  当前条目被 {linkedTemplateCount} 组清单模板引用，无法删除。请先移除引用或停用该条目。
+                </p>
+              ) : null}
+              <button
+                className="btn btn-ghost btn--sm mt-3 text-danger"
+                type="button"
+                disabled={busy || linkedTemplateCount > 0}
+                onClick={remove}
+                title={linkedTemplateCount > 0 ? `被 ${linkedTemplateCount} 组清单模板引用` : undefined}
+              >
+                <Trash2 className="h-4 w-4" />
+                删除条目
+              </button>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+function CheckItemLibraryView({ phaseTemplates, canWrite }: { phaseTemplates: PhaseTemplate[]; canWrite: boolean }) {
+  const [entries, setEntries] = useState<CheckItemLibraryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [phaseFilter, setPhaseFilter] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'' | 'active' | 'disabled'>('');
+  const phaseLabels = phaseLabelMapOf(phaseTemplates);
+
+  const editor = useRecordEditor<CheckItemLibraryEntry, CheckItemLibraryEntryDraft>(
+    record => (record ? libraryEntryDraftFrom(record) : emptyLibraryEntryDraft()),
+    fetchCheckItemLibraryEntry,
+    false
+  );
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setEntries(await fetchCheckItemLibraryEntries());
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项库加载失败。'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveEntry = async (record: CheckItemLibraryEntry | null, draft: CheckItemLibraryEntryDraft) => {
+    const input = libraryEntryInputFrom(draft);
+    const saved = record
+      ? await updateCheckItemLibraryEntry(record.id, input)
+      : await createCheckItemLibraryEntry(input);
+    await load();
+    return saved;
+  };
+  const deleteEntry = async (entry: CheckItemLibraryEntry) => {
+    await deleteCheckItemLibraryEntry(entry.id);
+    await load();
+  };
+
+  const phaseOrder = new Map(Array.from(phaseLabels.keys()).map((key, index) => [key, index]));
+  const phaseFilterOptions = [...new Set([...phaseLabels.keys(), ...entries.map(entry => entry.phaseKey)])];
+  const visibleEntries = entries.filter(entry => {
+    if (phaseFilter && entry.phaseKey !== phaseFilter) return false;
+    if (activeFilter === 'active' && entry.isActive === false) return false;
+    if (activeFilter === 'disabled' && entry.isActive !== false) return false;
+    return textMatches(keyword, [entry.title, entry.description, entry.priority]);
+  });
+  const sortedEntries = [...visibleEntries].sort((left, right) =>
+    (phaseOrder.get(left.phaseKey) ?? Number.MAX_SAFE_INTEGER) - (phaseOrder.get(right.phaseKey) ?? Number.MAX_SAFE_INTEGER) ||
+    left.phaseKey.localeCompare(right.phaseKey) ||
+    (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+    left.title.localeCompare(right.title)
+  );
+  const groups: { phaseKey: string; items: CheckItemLibraryEntry[] }[] = [];
+  for (const entry of sortedEntries) {
+    const last = groups[groups.length - 1];
+    if (last && last.phaseKey === entry.phaseKey) last.items.push(entry);
+    else groups.push({ phaseKey: entry.phaseKey, items: [entry] });
+  }
+
+  return (
+    <div className="grid gap-5">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="kicker">Check Item Library</p>
+            <h2 className="text-xl font-semibold">检查项库</h2>
+            <p className="text-sm text-ink-muted">按项目阶段维护可复用的检查项；清单模板在抽屉中通过“从检查项库选择”引用，种子生成时实例化为项目检查项。</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="chip">{entries.length} 条库检查项</span>
+            <ReadOnlyNotice canWrite={canWrite} />
+            <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite} onClick={() => void editor.openRecord()}>
+              <Plus className="h-4 w-4" />
+              新增检查项
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <label>
+            <span className="field-label">搜索</span>
+            <input className="input" value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="标题、说明、优先级" aria-label="检查项库搜索" />
+          </label>
+          <label>
+            <span className="field-label">项目阶段</span>
+            <select className="select" value={phaseFilter} onChange={event => setPhaseFilter(event.target.value)} aria-label="检查项库阶段筛选">
+              <option value="">全部阶段</option>
+              {phaseFilterOptions.map(key => (
+                <option key={key} value={key}>{phaseLabels.get(key) ? `${phaseLabels.get(key)}（${key}）` : key}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">状态</span>
+            <select className="select" value={activeFilter} onChange={event => setActiveFilter(event.target.value as '' | 'active' | 'disabled')} aria-label="检查项库状态筛选">
+              <option value="">全部状态</option>
+              <option value="active">启用</option>
+              <option value="disabled">停用</option>
+            </select>
+          </label>
+        </div>
+        {error ? (
+          <div role="alert" className="mt-4 rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+            <p>{error}</p>
+            <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void load()}>
+              重试加载
+            </button>
+          </div>
+        ) : null}
+        <div className="table-shell mt-4">
+          <table className="data-table min-w-[960px]">
+            <thead>
+              <tr>
+                <th>排序</th>
+                <th>检查项</th>
+                <th>优先级</th>
+                <th>引用模板</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map(group => (
+                <Fragment key={group.phaseKey}>
+                  <tr className="bg-surface-soft">
+                    <td colSpan={6}>
+                      <span className="font-semibold text-ink">{phaseLabels.get(group.phaseKey) || group.phaseKey}</span>
+                      <span className="ml-2 text-xs text-ink-muted">{group.phaseKey} · {group.items.length} 项</span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {selectedDraftItems.map((item, index) => (
-                    <tr key={`${creatingCell ? 'new' : selectedChecklistTemplate?.id}-${index}`}>
-                      <td className="min-w-[110px]">
-                        <input
-                          className="input"
-                          type="number"
-                          value={item.sortOrder ?? index * 10}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { sortOrder: Number(event.target.value) })}
-                          aria-label={`模板检查项 ${index + 1} 排序`}
-                        />
-                      </td>
-                      <td className="min-w-[260px]">
-                        <input
-                          className="input"
-                          value={item.title}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { title: event.target.value })}
-                          aria-label={`模板检查项 ${index + 1} 标题`}
-                        />
-                      </td>
+                  {group.items.map(entry => (
+                    <tr
+                      key={entry.id}
+                      className="cursor-pointer transition hover:bg-surface-soft"
+                      tabIndex={0}
+                      aria-label={`维护检查项库条目 ${entry.title}`}
+                      onClick={() => void editor.openRecord(entry.id)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          void editor.openRecord(entry.id);
+                        }
+                      }}
+                    >
+                      <td>{entry.sortOrder ?? 0}</td>
                       <td className="min-w-[320px]">
-                        <input
-                          className="input"
-                          value={item.description ?? ''}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { description: event.target.value })}
-                          aria-label={`模板检查项 ${index + 1} 描述`}
-                        />
+                        <div className="font-semibold text-ink">{entry.title}</div>
+                        {entry.description ? <div className="mt-1 text-xs text-ink-muted">{entry.description}</div> : null}
                       </td>
-                      <td className="min-w-[130px]">
-                        <input
-                          className="input"
-                          value={item.priority ?? ''}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { priority: event.target.value })}
-                          aria-label={`模板检查项 ${index + 1} 优先级`}
-                        />
-                      </td>
-                      <td className="min-w-[150px]">
-                        <input
-                          className="input"
-                          type="date"
-                          value={dateInputValue(item.plannedStart)}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { plannedStart: event.target.value || null })}
-                          aria-label={`模板检查项 ${index + 1} 计划开始`}
-                        />
-                      </td>
-                      <td className="min-w-[150px]">
-                        <input
-                          className="input"
-                          type="date"
-                          value={dateInputValue(item.plannedEnd)}
-                          disabled={!canWrite}
-                          onChange={event => updateDraftItem(index, { plannedEnd: event.target.value || null })}
-                          aria-label={`模板检查项 ${index + 1} 计划结束`}
-                        />
-                      </td>
-                      <td>
-                        <label className="flex items-center gap-2 text-sm text-ink-muted">
-                          <input
-                            type="checkbox"
-                            checked={item.isActive !== false}
-                            disabled={!canWrite}
-                            onChange={event => updateDraftItem(index, { isActive: event.target.checked })}
-                          />
-                          启用
-                        </label>
-                      </td>
+                      <td>{entry.priority || '-'}</td>
+                      <td>{entry.linkedTemplateCount ?? 0} 组</td>
+                      <td><StatusPill status={entry.isActive !== false ? 'active' : 'disabled'} /></td>
                       <td>
                         <button
                           className="btn btn-ghost btn--sm"
                           type="button"
-                          disabled={!canWrite}
-                          onClick={() => removeDraftItem(index)}
+                          aria-label={`编辑检查项库条目 ${entry.title}`}
+                          onClick={event => {
+                            event.stopPropagation();
+                            void editor.openRecord(entry.id);
+                          }}
                         >
-                          <Trash2 className="h-4 w-4" />
-                          删除
+                          <Pencil className="h-4 w-4" />
+                          编辑
                         </button>
                       </td>
                     </tr>
                   ))}
-                  {!selectedDraftItems.length ? (
-                    <tr>
-                      <td colSpan={8} className="text-center text-ink-muted">该清单模板暂无检查项，可新增后保存。</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-5">
-            <EmptyState message="请选择矩阵中的清单模板，或点击空单元格新增清单模板。" />
-          </div>
-        )}
-        {message && !activeChecklistDraft ? <div className="mt-3 text-sm text-ink-muted">{message}</div> : null}
+                </Fragment>
+              ))}
+              {!sortedEntries.length ? (
+                <tr>
+                  <td colSpan={6} className="text-center text-ink-muted">
+                    {loading ? '正在加载检查项库…' : '当前筛选下暂无库检查项。'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
+      <CheckItemLibraryEntryDrawer
+        editor={editor}
+        canWrite={canWrite}
+        phaseLabels={phaseLabels}
+        onSave={saveEntry}
+        onDelete={deleteEntry}
+      />
     </div>
   );
 }
@@ -9778,7 +10374,7 @@ export default function App() {
           checklistCodes
         );
         checklistCodes.push(copiedChecklistCode);
-        await createChecklistTemplate({
+        const copiedChecklist = await createChecklistTemplate({
           code: copiedChecklistCode,
           name: checklist.name || checklist.title,
           moduleId: checklist.moduleId,
@@ -9786,7 +10382,6 @@ export default function App() {
           phaseKey: checklist.phaseKey ?? '',
           version: checklist.version ?? 1,
           isActive: checklist.isActive !== false,
-          itemTemplates: normalizeTemplateItemsForDraft(checklistItemsOf(checklist)),
           metadata: {
             ...(checklist.metadata ?? {}),
             copied_from: {
@@ -9797,6 +10392,14 @@ export default function App() {
             }
           }
         });
+        const sourceItems = checklistItemsOf(checklist);
+        if (sourceItems.length) {
+          await setChecklistTemplateItems(copiedChecklist.id, sourceItems.map((item, index) => ({
+            entryId: item.entryId,
+            sortOrder: item.sortOrder ?? (index + 1) * 10,
+            isEnabled: item.isEnabled !== false
+          })));
+        }
       }
       await loadData();
       return copiedPhaseTemplate;
@@ -9840,6 +10443,21 @@ export default function App() {
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '清单模板删除失败'));
+      throw err;
+    }
+  };
+
+  const handleSetChecklistTemplateItemsConfig = async (
+    template: ChecklistTemplate,
+    items: ChecklistTemplateSetItemInput[]
+  ) => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    try {
+      const result = await setChecklistTemplateItems(template.id, items);
+      await loadData();
+      return result.template;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '清单模板检查项保存失败'));
       throw err;
     }
   };
@@ -10400,9 +11018,18 @@ export default function App() {
           onCreateChecklistTemplate={handleCreateChecklistTemplateConfig}
           onDeleteChecklistTemplate={handleDeleteChecklistTemplateConfig}
           onUpdateChecklistTemplate={handleUpdateChecklistTemplateConfig}
+          onSetChecklistTemplateItems={handleSetChecklistTemplateItemsConfig}
           onCreateInspectionModule={handleCreateInspectionModuleConfig}
           onUpdateInspectionModule={handleUpdateInspectionModuleConfig}
           onDeleteInspectionModule={handleDeleteInspectionModuleConfig}
+        />
+      );
+    }
+    if (currentView === 'checkItemLibrary') {
+      return (
+        <CheckItemLibraryView
+          phaseTemplates={workspace.phaseTemplates}
+          canWrite={canWrite}
         />
       );
     }

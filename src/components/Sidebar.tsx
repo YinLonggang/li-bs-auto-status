@@ -5,6 +5,7 @@ import {
   Download,
   FileWarning,
   LayoutDashboard,
+  ListChecks,
   Menu,
   Moon,
   PanelLeftClose,
@@ -28,6 +29,7 @@ export type AppTab =
   | 'collision'
   | 'reports'
   | 'templates'
+  | 'checkItemLibrary'
   | 'settings';
 
 export type SidebarMenuItem<TView extends string = AppTab> = {
@@ -45,6 +47,7 @@ export const MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'collision', label: '碰撞一页纸', description: '制造评审材料', icon: BarChart3 },
   { id: 'reports', label: '报告导出', description: '报表与任务', icon: Download },
   { id: 'templates', label: '项目模板', description: '项目模板源数据', icon: SlidersHorizontal },
+  { id: 'checkItemLibrary', label: '检查项库', description: '按阶段维护检查项', icon: ListChecks },
   { id: 'baseConfig', label: '配置中心', description: '项目实例与基础数据', icon: SlidersHorizontal }
 ];
 

@@ -1,6 +1,6 @@
 import { BASE_CONFIG_PREFIX } from '../config';
 import { ApiError, apiBlobRequest, apiRequest, requestWithPrefix } from './http';
-import { requestDirectory, requestPage } from './pagination';
+import { listUrl, requestDirectory, requestPage } from './pagination';
 import { attachmentPreviewKind, validateBinaryContent } from './attachmentContent';
 import type {
   ApiEnvelope,
@@ -8,11 +8,14 @@ import type {
   AttachmentPreview,
   AuditLog,
   CheckItem,
+  CheckItemLibraryEntry,
+  CheckItemLibraryEntryInput,
   CheckItemOwner,
   CheckItemStatus,
   ChecklistTemplate,
   ChecklistTemplateInput,
-  ChecklistTemplateItem,
+  ChecklistTemplateItemLink,
+  ChecklistTemplateSetItemInput,
   CollisionReportBlock,
   CollisionReport,
   DashboardProgressRow,
@@ -41,10 +44,15 @@ import type {
 
 const unwrap = <T>(payload: ApiEnvelope<T> | T): T => {
   if (payload && typeof payload === 'object') {
-    const envelope = payload as ApiEnvelope<T>;
+    const envelope = payload as ApiEnvelope<T> & { id?: unknown; code?: unknown };
     if (envelope.data !== undefined) return envelope.data;
     if (envelope.results !== undefined) return envelope.results;
-    if (envelope.items !== undefined) return envelope.items;
+    // `items` is a legitimate list-wrapper key, but detail records may carry their
+    // own `items` array (e.g. checklist template detail embeds linked entries).
+    // Never collapse a record that has an identity field into its items array.
+    if (envelope.items !== undefined && envelope.id === undefined && envelope.code === undefined) {
+      return envelope.items;
+    }
   }
   return payload as T;
 };
@@ -188,20 +196,12 @@ const serializePhaseDefinitions = (definitions?: PhaseDefinition[]) =>
     }))
     .filter(definition => definition.key && definition.name);
 
-const serializeChecklistTemplateItems = (items?: ChecklistTemplateItem[]) =>
-  (items ?? [])
-    .map((item, index) => ({
-      title: item.title.trim(),
-      description: item.description?.trim() || '',
-      sort_order: item.sortOrder ?? index * 10,
-      planned_start: optionalDate(item.plannedStart),
-      planned_end: optionalDate(item.plannedEnd),
-      due_date: optionalDate(item.dueDate),
-      priority: item.priority?.trim() || '',
-      is_enabled: item.isActive ?? true,
-      metadata: item.metadata ?? {}
-    }))
-    .filter(item => item.title);
+const serializeChecklistTemplateSetItems = (items: ChecklistTemplateSetItemInput[]) =>
+  items.map((item, index) => ({
+    entry_id: Number(item.entryId),
+    sort_order: item.sortOrder ?? index * 10,
+    is_enabled: item.isEnabled ?? true
+  }));
 
 const firstString = (record: RawRecord, keys: string[], fallback = '') => {
   for (const key of keys) {
@@ -620,7 +620,7 @@ const normalizeInspectionModule = (input: unknown): InspectionModule => {
 const normalizeChecklistTemplate = (input: unknown): ChecklistTemplate => {
   const raw = asRecord(input);
   const metadata = metadataOf(raw);
-  const itemTemplates = asArray(raw.item_templates).map(normalizeChecklistTemplateItem);
+  const items = asArray(raw.items).map(normalizeChecklistTemplateItemLink);
   return {
     id: firstId(raw, ['id']),
     moduleId: firstId(raw, ['moduleId', 'module']),
@@ -634,26 +634,42 @@ const normalizeChecklistTemplate = (input: unknown): ChecklistTemplate => {
     title: firstString(raw, ['title', 'name']),
     version: firstNumber(raw, ['version'], 1),
     isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
-    defaultOwnerRole: firstString(metadata, ['defaultOwnerRole', 'default_owner_role']) || `${itemTemplates.length || 0} 个模板项`,
+    defaultOwnerRole: firstString(metadata, ['defaultOwnerRole', 'default_owner_role']) || `${items.length || 0} 个模板项`,
     defaultDurationDays: firstNumber(metadata, ['defaultDurationDays', 'default_duration_days']),
     requiredAttachment: asBoolean(metadata.requiredAttachment, asBoolean(metadata.required_attachment)),
     severity: firstString(metadata, ['severity'], 'medium'),
-    itemTemplates,
+    items,
     metadata
   };
 };
 
-const normalizeChecklistTemplateItem = (input: unknown): ChecklistTemplateItem => {
+const normalizeChecklistTemplateItemLink = (input: unknown): ChecklistTemplateItemLink => {
   const raw = asRecord(input);
   return {
+    linkId: firstId(raw, ['linkId', 'link_id']),
+    entryId: firstId(raw, ['entryId', 'entry_id']),
+    phaseKey: firstString(raw, ['phaseKey', 'phase_key']),
     title: firstString(raw, ['title']),
     description: firstString(raw, ['description']),
-    sortOrder: firstNumber(raw, ['sortOrder', 'sort_order'], 0),
-    plannedStart: firstString(raw, ['plannedStart', 'planned_start']) || null,
-    plannedEnd: firstString(raw, ['plannedEnd', 'planned_end']) || null,
-    dueDate: firstString(raw, ['dueDate', 'due_date']) || null,
     priority: firstString(raw, ['priority']),
-    isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
+    sortOrder: firstNumber(raw, ['sortOrder', 'sort_order'], 0),
+    isEnabled: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, true)),
+    entryIsActive: asBoolean(raw.entryIsActive, asBoolean(raw.entry_is_active, true)),
+    metadata: asRecord(raw.metadata)
+  };
+};
+
+const normalizeCheckItemLibraryEntry = (input: unknown): CheckItemLibraryEntry => {
+  const raw = asRecord(input);
+  return {
+    id: firstId(raw, ['id']),
+    phaseKey: firstString(raw, ['phaseKey', 'phase_key']),
+    title: firstString(raw, ['title']),
+    description: firstString(raw, ['description']),
+    priority: firstString(raw, ['priority']),
+    sortOrder: firstNumber(raw, ['sortOrder', 'sort_order'], 0),
+    isActive: asBoolean(raw.isActive, asBoolean(raw.is_active, true)),
+    linkedTemplateCount: firstNumber(raw, ['linkedTemplateCount', 'linked_template_count'], 0),
     metadata: asRecord(raw.metadata)
   };
 };
@@ -1939,9 +1955,16 @@ const serializeChecklistTemplateInput = (input: ChecklistTemplateInput) => ({
   phase_key: input.phaseKey,
   version: input.version,
   is_active: input.isActive,
-  item_templates: input.itemTemplates === undefined
-    ? undefined
-    : serializeChecklistTemplateItems(input.itemTemplates),
+  metadata: input.metadata
+});
+
+const serializeCheckItemLibraryEntryInput = (input: CheckItemLibraryEntryInput) => ({
+  phase_key: input.phaseKey?.trim(),
+  title: input.title?.trim(),
+  description: input.description?.trim() ?? undefined,
+  priority: input.priority?.trim() ?? undefined,
+  sort_order: input.sortOrder,
+  is_active: input.isActive,
   metadata: input.metadata
 });
 
@@ -2022,6 +2045,98 @@ export async function updateChecklistTemplate(
 
 export async function deleteChecklistTemplate(templateId: string | number) {
   await apiRequest(`/checklist-templates/${templateId}/`, {
+    method: 'DELETE'
+  });
+}
+
+export interface SetChecklistTemplateItemsResult {
+  template: ChecklistTemplate;
+  summary: { added: number; removed: number; kept: number; total: number };
+}
+
+/**
+ * 单事务整体替换清单模板关联的检查项库条目；响应携带刷新后的模板（含最新 items）。
+ */
+export async function setChecklistTemplateItems(
+  templateId: string | number,
+  items: ChecklistTemplateSetItemInput[]
+): Promise<SetChecklistTemplateItemsResult> {
+  const raw = asRecord(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/checklist-templates/${templateId}/set-items/`, {
+      method: 'POST',
+      body: JSON.stringify({ items: serializeChecklistTemplateSetItems(items) })
+    })
+  ));
+  const summaryRaw = asRecord(raw.summary);
+  return {
+    template: normalizeChecklistTemplate(raw.template),
+    summary: {
+      added: asNumber(summaryRaw.added),
+      removed: asNumber(summaryRaw.removed),
+      kept: asNumber(summaryRaw.kept),
+      total: asNumber(summaryRaw.total)
+    }
+  };
+}
+
+export async function fetchChecklistTemplate(templateId: string | number, signal?: AbortSignal) {
+  return normalizeChecklistTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/checklist-templates/${templateId}/`, { signal })
+  ));
+}
+
+export async function fetchPhaseTemplate(templateId: string | number, signal?: AbortSignal) {
+  return normalizePhaseTemplate(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/phase-templates/${templateId}/`, { signal })
+  ));
+}
+
+export async function fetchInspectionModule(moduleId: string | number, signal?: AbortSignal) {
+  return normalizeInspectionModule(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/inspection-modules/${moduleId}/`, { signal })
+  ));
+}
+
+export type CheckItemLibraryFilters = {
+  phaseKey?: string;
+  isActive?: boolean;
+  q?: string;
+};
+
+export async function fetchCheckItemLibraryEntries(filters: CheckItemLibraryFilters = {}): Promise<CheckItemLibraryEntry[]> {
+  const query: ListQuery = {};
+  if (filters.phaseKey) query.phase_key = filters.phaseKey;
+  if (filters.isActive !== undefined) query.is_active = filters.isActive ? 'true' : 'false';
+  if (filters.q?.trim()) query.q = filters.q.trim();
+  return requestDirectory(listUrl('/check-item-library/', query), normalizeCheckItemLibraryEntry);
+}
+
+export async function fetchCheckItemLibraryEntry(entryId: string | number, signal?: AbortSignal) {
+  return normalizeCheckItemLibraryEntry(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-item-library/${entryId}/`, { signal })
+  ));
+}
+
+export async function createCheckItemLibraryEntry(input: CheckItemLibraryEntryInput) {
+  return normalizeCheckItemLibraryEntry(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>('/check-item-library/', {
+      method: 'POST',
+      body: JSON.stringify(serializeCheckItemLibraryEntryInput(input))
+    })
+  ));
+}
+
+export async function updateCheckItemLibraryEntry(entryId: string | number, input: CheckItemLibraryEntryInput) {
+  return normalizeCheckItemLibraryEntry(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/check-item-library/${entryId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(serializeCheckItemLibraryEntryInput(input))
+    })
+  ));
+}
+
+export async function deleteCheckItemLibraryEntry(entryId: string | number) {
+  await apiRequest(`/check-item-library/${entryId}/`, {
     method: 'DELETE'
   });
 }

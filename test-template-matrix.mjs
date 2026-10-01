@@ -12,7 +12,7 @@ import { JSDOM } from 'jsdom';
 const root = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const outputDir = await mkdtemp(resolve(tmpdir(), 'auto-status-matrix-'));
-const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'https://spa.example.test' });
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'https://spa.example.test', pretendToBeVisual: true });
 const originals = new Map(['window', 'document', 'Event', 'IS_REACT_ACT_ENVIRONMENT', 'fetch'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, Event: dom.window.Event, IS_REACT_ACT_ENVIRONMENT: true, fetch: () => { throw new Error('Matrix selection must not request the network'); } })) {
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -43,44 +43,75 @@ async function compile(path) {
   await writeFile(outputPath, output);
   return outputPath;
 }
+const container = () => document.getElementById('root');
+const dialogs = () => [...container().querySelectorAll('[role="dialog"]')];
+const dialogByTitle = title => dialogs().find(item => item.querySelector('header h2')?.textContent.includes(title));
+const buttonByText = (text, scope = container()) => [...scope.querySelectorAll('button')].find(item => item.textContent.trim() === text);
+const fieldByLabel = (scope, label) => {
+  const found = [...scope.querySelectorAll('label')].find(item => item.querySelector('.field-label')?.textContent.trim() === label);
+  return found?.querySelector('input, select, textarea') ?? null;
+};
 try {
   const { ProjectTemplateView } = await import(pathToFileURL(await compile(resolve(root, 'src/App.tsx'))).href);
-  const templates = [1, 2, 3].map(id => ({ id, code: `checklist-${id}`, title: `Checklist ${id}`, name: `Checklist ${id}`, phaseTemplateId: 10, moduleId: 20, phaseKey: 'design', version: 1, isActive: id !== 3, itemTemplates: [{ title: `Item ${id}`, sortOrder: 10 }] }));
+  const link = (id, entryId, title) => ({ linkId: id, entryId, phaseKey: 'design', title, description: `${title}说明`, priority: 'P1', sortOrder: id * 10, isEnabled: true, entryIsActive: true });
+  const templates = [1, 2, 3].map(id => ({ id, code: `checklist-${id}`, title: `Checklist ${id}`, name: `Checklist ${id}`, phaseTemplateId: 10, moduleId: 20, phaseKey: 'design', version: 1, isActive: id !== 3, items: [link(id, id, `Item ${id}`)] }));
   const data = {
-    phaseTemplates: [{ id: 10, code: 'phase-template', name: 'Phase template', version: 1, phaseDefinitions: [{ key: 'design', name: 'Design', sortOrder: 10 }] }],
-    inspectionModules: [{ id: 20, code: 'module', name: 'Module', sequence: 10, isActive: true }],
+    phaseTemplates: [{ id: 10, code: 'phase-template', name: 'Phase template', version: 1, sequence: 1, isActive: true, phaseDefinitions: [{ key: 'design', name: 'Design', sortOrder: 10 }] }],
+    inspectionModules: [{ id: 20, code: 'module', name: 'Module', sequence: 10, isActive: true, owners: [] }],
     checklistTemplates: templates, ownerCandidates: [], checkItems: []
   };
   const noMutation = async () => { throw new Error('Selection must not mutate templates'); };
-  const props = { data, canWrite: true, ...Object.fromEntries(['onCreatePhaseTemplate', 'onUpdatePhaseTemplate', 'onDeletePhaseTemplate', 'onCopyPhaseTemplate', 'onCreateChecklistTemplate', 'onDeleteChecklistTemplate', 'onUpdateChecklistTemplate', 'onCreateInspectionModule', 'onUpdateInspectionModule', 'onDeleteInspectionModule'].map(key => [key, noMutation])) };
-  renderer = createRoot(document.getElementById('root'));
+  const props = { data, canWrite: true, ...Object.fromEntries(['onCreatePhaseTemplate', 'onUpdatePhaseTemplate', 'onDeletePhaseTemplate', 'onCopyPhaseTemplate', 'onCreateChecklistTemplate', 'onDeleteChecklistTemplate', 'onUpdateChecklistTemplate', 'onSetChecklistTemplateItems', 'onCreateInspectionModule', 'onUpdateInspectionModule', 'onDeleteInspectionModule'].map(key => [key, noMutation])) };
+  renderer = createRoot(container());
   await act(async () => renderer.render(React.createElement(ProjectTemplateView, props)));
   const matrix = () => Array.from(document.querySelectorAll('section')).find(section => section.textContent.includes('Module Phase Matrix'));
-  const cards = () => Array.from(matrix().querySelectorAll('button[aria-pressed]'));
-  assert.equal(cards().length, 3);
-  assert.equal(cards()[0].closest('td'), cards()[2].closest('td'));
-  for (const id of [2, 3, 1]) {
-    await act(async () => cards()[id - 1].click());
-    assert.equal(cards().filter(button => button.getAttribute('aria-pressed') === 'true').length, 1);
-    assert.equal(cards()[id - 1].getAttribute('aria-pressed'), 'true');
-    assert.ok(Array.from(document.querySelectorAll('input')).some(input => input.value === `checklist-${id}`));
-    assert.ok(Array.from(document.querySelectorAll('input')).some(input => input.value === `Item ${id}`));
-  }
-  process.stdout.write('PASS all same-cell templates, including inactive templates, can be selected and reselected\n');
-  const createButton = Array.from(matrix().querySelectorAll('button')).find(button => button.textContent.includes('新增单元格清单'));
-  assert.ok(createButton);
-  await act(async () => createButton.click());
-  assert.equal(cards().filter(button => button.getAttribute('aria-pressed') === 'true').length, 0);
-  await act(async () => cards()[1].click());
-  assert.equal(cards()[1].getAttribute('aria-pressed'), 'true');
-  assert.ok(Array.from(document.querySelectorAll('input')).some(input => input.value === 'checklist-2'));
-  process.stdout.write('PASS adding a same-cell draft does not remove existing template selection\n');
+  const cellButton = () => {
+    const found = matrix().querySelector('button[aria-label="Module × Design 清单配置"]');
+    assert.ok(found, 'Matrix cell must be a single compact button');
+    return found;
+  };
+  assert.ok(cellButton().textContent.includes('Checklist 1'));
+  assert.ok(cellButton().textContent.includes('Checklist 3'));
+  assert.ok(cellButton().textContent.includes('3 组清单'));
+  assert.ok(cellButton().textContent.includes('3 项'));
+  assert.equal(matrix().querySelectorAll('button[aria-pressed]').length, 0, 'Matrix cells no longer carry per-template selection cards');
+  assert.equal(matrix().querySelectorAll('input').length, 0, 'Matrix cells must not render inline editor inputs');
+  process.stdout.write('PASS matrix cell shows grouped template summary without inline inputs\n');
+
+  await act(async () => cellButton().click());
+  const cellDrawer = dialogByTitle('Module × Design');
+  assert.ok(cellDrawer, 'Cell drawer must open');
+  assert.ok(cellDrawer.textContent.includes('checklist-2'));
+  const editButtons = [...cellDrawer.querySelectorAll('button')].filter(item => item.textContent.trim() === '编辑');
+  assert.equal(editButtons.length, 3, 'Cell drawer lists one edit action per template, including inactive ones');
+  process.stdout.write('PASS cell drawer lists all same-cell templates, including inactive ones\n');
+
+  await act(async () => buttonByText('新增单元格清单', cellDrawer).click());
+  const createDrawer = dialogByTitle('新增清单模板');
+  assert.ok(createDrawer, 'Checklist create drawer must open above the cell drawer');
+  assert.ok(dialogByTitle('Module × Design'), 'Cell drawer stays open beneath the checklist drawer');
+  assert.equal(fieldByLabel(createDrawer, '清单编码').value, 'phase-template-module-design');
+  assert.equal(fieldByLabel(createDrawer, '清单名称').value, 'Module · Design');
+  assert.equal(fieldByLabel(createDrawer, '模块').value, '20');
+  assert.equal(fieldByLabel(createDrawer, '阶段').value, 'design');
+  assert.ok(buttonByText('从检查项库选择', createDrawer), 'Checklist drawer must offer the library picker entry');
+  assert.ok(!createDrawer.textContent.includes('新增模板检查项'), 'Free-form template items are replaced by library picks');
+  process.stdout.write('PASS create drawer prefills the clicked cell target without any network request\n');
+
+  await act(async () => buttonByText('取消', createDrawer).click());
+  await act(async () => buttonByText('关闭', dialogByTitle('Module × Design')).click());
+  assert.equal(dialogs().length, 0, 'Closing both drawers returns to the bare matrix');
+  await act(async () => cellButton().click());
+  assert.ok(dialogByTitle('Module × Design'), 'Cell drawer can be reopened after closing');
+  await act(async () => buttonByText('关闭', dialogByTitle('Module × Design')).click());
+  process.stdout.write('PASS drawers close cleanly and the cell flow can restart\n');
+
   await act(async () => renderer.render(React.createElement(ProjectTemplateView, { ...props, canWrite: false })));
-  assert.equal(Array.from(matrix().querySelectorAll('button')).some(button => button.textContent.includes('新增单元格清单')), false);
-  await act(async () => cards()[2].click());
-  const codeInput = Array.from(document.querySelectorAll('input')).find(input => input.value === 'checklist-3');
-  assert.ok(codeInput?.disabled);
-  process.stdout.write('PASS readonly users can inspect every template without creation or mutation\n3 matrix interaction checks passed\n');
+  await act(async () => cellButton().click());
+  const readonlyCellDrawer = dialogByTitle('Module × Design');
+  assert.ok(readonlyCellDrawer, 'Readonly users can still inspect the cell');
+  assert.ok(!buttonByText('新增单元格清单', readonlyCellDrawer), 'Readonly users get no creation entry');
+  process.stdout.write('PASS readonly users can inspect the cell without creation entries\n3 matrix interaction checks passed\n');
 } finally {
   if (renderer) await act(async () => renderer.unmount());
   dom.window.close();

@@ -256,7 +256,7 @@ export type ChecklistTemplate = {
   defaultDurationDays?: number;
   requiredAttachment?: boolean;
   severity: Severity;
-  itemTemplates?: ChecklistTemplateItem[];
+  items?: ChecklistTemplateItemLink[];
   metadata?: Record<string, unknown>;
 };
 
@@ -268,18 +268,48 @@ export type ChecklistTemplateInput = {
   phaseKey?: string;
   version?: number;
   isActive?: boolean;
-  itemTemplates?: ChecklistTemplateItem[];
   metadata?: Record<string, unknown>;
 };
 
-export type ChecklistTemplateItem = {
+// 清单模板关联的检查项库条目（link 携带模板级排序/启停覆盖）。
+export type ChecklistTemplateItemLink = {
+  linkId: string | number;
+  entryId: string | number;
+  phaseKey?: string;
   title: string;
   description?: string;
-  sortOrder?: number;
-  plannedStart?: string | null;
-  plannedEnd?: string | null;
-  dueDate?: string | null;
   priority?: string;
+  sortOrder?: number;
+  isEnabled?: boolean;
+  entryIsActive?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type ChecklistTemplateSetItemInput = {
+  entryId: string | number;
+  sortOrder?: number | null;
+  isEnabled?: boolean;
+};
+
+// 检查项库条目：只与项目阶段（phase_key）关联，模块关联在配置清单模板时建立。
+export type CheckItemLibraryEntry = {
+  id: string | number;
+  phaseKey: string;
+  title: string;
+  description?: string;
+  priority?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+  linkedTemplateCount?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type CheckItemLibraryEntryInput = {
+  phaseKey?: string;
+  title?: string;
+  description?: string;
+  priority?: string;
+  sortOrder?: number;
   isActive?: boolean;
   metadata?: Record<string, unknown>;
 };
