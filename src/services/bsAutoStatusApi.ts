@@ -1680,6 +1680,124 @@ export async function updateProject(projectId: string | number, input: UpdatePro
   return normalizeProject(project);
 }
 
+export interface ProjectDeletionJobFileSummary {
+  attachmentsTotal: number;
+  attachmentsToDelete: number;
+  attachmentsKeptShared: number;
+  attachmentFilesDeleted: number;
+  exportFilesTotal: number;
+  exportFilesToDelete: number;
+  exportFilesDeleted: number;
+}
+
+export interface ProjectDeletionJob {
+  id: number;
+  projectId: number | null;
+  projectCode: string;
+  projectName: string;
+  status: string;
+  lastError: string;
+  requestedBy: { idaasId: string; name: string };
+  counts: Record<string, number>;
+  fileSummary: ProjectDeletionJobFileSummary;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectDeletionState {
+  active: boolean;
+  job: ProjectDeletionJob | null;
+}
+
+function normalizeProjectDeletionJob(raw: unknown): ProjectDeletionJob {
+  const record = asRecord(raw);
+  const requestedBy = asRecord(record.requested_by);
+  const fileSummary = asRecord(record.file_summary);
+  const counts = asRecord(record.counts);
+  return {
+    id: Number(record.id ?? 0),
+    projectId: record.project_id == null ? null : Number(record.project_id),
+    projectCode: String(record.project_code ?? ''),
+    projectName: String(record.project_name ?? ''),
+    status: String(record.status ?? ''),
+    lastError: String(record.last_error ?? ''),
+    requestedBy: {
+      idaasId: String(requestedBy.idaas_id ?? ''),
+      name: String(requestedBy.name ?? '')
+    },
+    counts: Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, Number(value ?? 0)])),
+    fileSummary: {
+      attachmentsTotal: Number(fileSummary.attachments_total ?? 0),
+      attachmentsToDelete: Number(fileSummary.attachments_to_delete ?? 0),
+      attachmentsKeptShared: Number(fileSummary.attachments_kept_shared ?? 0),
+      attachmentFilesDeleted: Number(fileSummary.attachment_files_deleted ?? 0),
+      exportFilesTotal: Number(fileSummary.export_files_total ?? 0),
+      exportFilesToDelete: Number(fileSummary.export_files_to_delete ?? 0),
+      exportFilesDeleted: Number(fileSummary.export_files_deleted ?? 0)
+    },
+    createdAt: String(record.created_at ?? ''),
+    updatedAt: String(record.updated_at ?? '')
+  };
+}
+
+function normalizeProjectDeletionState(raw: unknown): ProjectDeletionState {
+  const record = asRecord(raw);
+  const job = record.job;
+  return {
+    active: Boolean(record.active),
+    job: job ? normalizeProjectDeletionJob(job) : null
+  };
+}
+
+/** 查询项目物理删除任务状态；无任务时返回 active:false。 */
+export async function fetchProjectDeletionState(projectId: string | number): Promise<ProjectDeletionState> {
+  return normalizeProjectDeletionState(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${encodeURIComponent(projectId)}/delete-physical/`)
+  ));
+}
+
+/** 创建/刷新物理删除预检任务（不执行删除）；confirmCode 必须与项目编号完全一致。 */
+export async function preflightProjectPhysicalDeletion(
+  projectId: string | number,
+  confirmCode: string
+): Promise<ProjectDeletionState> {
+  return normalizeProjectDeletionState(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${encodeURIComponent(projectId)}/delete-physical/`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm_code: confirmCode })
+    })
+  ));
+}
+
+/** 执行物理删除；存储失败返回 502 且任务可重试，调用方需保留任务证据。 */
+export async function executeProjectPhysicalDeletion(
+  projectId: string | number,
+  confirmCode: string
+): Promise<ProjectDeletionState> {
+  return normalizeProjectDeletionState(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${encodeURIComponent(projectId)}/delete-physical/execute/`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm_code: confirmCode })
+    })
+  ));
+}
+
+/** 取消仍处于预检状态的物理删除任务。 */
+export async function cancelProjectPhysicalDeletion(projectId: string | number): Promise<ProjectDeletionState> {
+  return normalizeProjectDeletionState(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${encodeURIComponent(projectId)}/delete-physical/cancel/`, {
+      method: 'POST'
+    })
+  ));
+}
+
+/** 从失败响应（如 502 存储失败）中提取删除任务证据，便于保留进度并重试。 */
+export function projectDeletionJobFromError(error: unknown): ProjectDeletionJob | null {
+  if (!(error instanceof ApiError)) return null;
+  const details = asRecord(error.details);
+  return details.job ? normalizeProjectDeletionJob(details.job) : null;
+}
+
 export async function fetchOwnerCandidates(query = '', limit = 50) {
   const params = new URLSearchParams();
   if (query.trim()) params.set('q', query.trim());
@@ -1935,14 +2053,40 @@ export async function deleteInspectionModule(moduleId: string | number) {
   });
 }
 
-export async function updateInspectionModuleOwner(
+export interface ApplyModuleOwnerResult {
+  module: ReturnType<typeof normalizeInspectionModule>;
+  owners: CheckItemOwner[];
+  affectedCount: number;
+  cleared: boolean;
+}
+
+/**
+ * 单事务保存模块默认负责人并同步当前项目该模块的全部检查项。
+ * 显式空数组表示清空；后端对整项目作用域生效（非当前分页）。
+ */
+export async function applyInspectionModuleOwner(
   moduleId: string | number,
-  payload: { owners: CheckItemOwner[]; metadata?: Record<string, unknown> }
-) {
-  return updateInspectionModule(moduleId, {
-    owners: payload.owners,
-    metadata: payload.metadata
-  });
+  payload: { projectId: string | number; owners: CheckItemOwner[] }
+): Promise<ApplyModuleOwnerResult> {
+  const raw = unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(
+      `/inspection-modules/${moduleId}/apply-owner/`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          project_id: payload.projectId,
+          owners: serializeCheckItemOwners(payload.owners)
+        })
+      }
+    )
+  ) as Record<string, unknown>;
+  const ownersRaw = Array.isArray(raw.owners) ? raw.owners : [];
+  return {
+    module: normalizeInspectionModule(raw.module),
+    owners: ownersRaw.map(normalizeCheckItemOwner),
+    affectedCount: Number(raw.affected_count ?? 0),
+    cleared: Boolean(raw.cleared)
+  };
 }
 
 export async function updateCheckItemOwner(
@@ -2184,6 +2328,12 @@ export async function deleteProjectPhase(phaseId: string | number) {
   await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {
     method: 'DELETE'
   });
+}
+
+export async function fetchProjectPhase(phaseId: string | number, signal?: AbortSignal) {
+  return normalizeProjectPhase(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${encodeURIComponent(phaseId)}/`, { signal })
+  ));
 }
 
 export async function deleteCheckItem(checkItemId: string | number) {

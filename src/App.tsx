@@ -22,6 +22,7 @@ import {
   RefreshCcw,
   Save,
   Search,
+  Settings2,
   ShieldCheck,
   Sun,
   Target,
@@ -48,6 +49,8 @@ import { useTheme } from './hooks/useTheme';
 import { AuthError, fetchUserProfile } from './services/auth';
 import { initZeus } from './zeus';
 import {
+  applyInspectionModuleOwner,
+  cancelProjectPhysicalDeletion,
   createChecklistTemplate,
   createInspectionModule,
   createPhaseTemplate,
@@ -68,6 +71,7 @@ import {
   exportCollisionReportExcel,
   exportCollisionReportsCsv,
   exportKeyIssuesCsv,
+  executeProjectPhysicalDeletion,
   fetchAttachmentDownload,
   fetchAttachmentPreview,
   fetchCheckItem,
@@ -76,6 +80,9 @@ import {
   fetchExportDownloadLink,
   fetchProjectAuditLogs,
   fetchOwnerCandidates,
+  fetchProject,
+  fetchProjectDeletionState,
+  fetchProjectPhase,
   fetchWorkspaceData,
   fetchKeyIssue,
   fetchCollisionReport,
@@ -84,6 +91,8 @@ import {
   listAuditLogs,
   importCollisionReportsCsv,
   importKeyIssuesCsv,
+  preflightProjectPhysicalDeletion,
+  projectDeletionJobFromError,
   seedProjectTemplate,
   updateCollisionReport,
   updateAttachmentMetadata,
@@ -92,7 +101,6 @@ import {
   updateCheckItemStatus,
   updateChecklistTemplate,
   updateInspectionModule,
-  updateInspectionModuleOwner,
   updateKeyIssue,
   updatePhaseTemplate,
   updateProject,
@@ -102,6 +110,8 @@ import {
 import type {
   CreateChecklistTemplateInput,
   CreatePhaseTemplateInput,
+  ProjectDeletionJob,
+  ProjectDeletionState,
   UpdateChecklistTemplateInput,
   UpdatePhaseTemplateInput
 } from './services/bsAutoStatusApi';
@@ -883,10 +893,6 @@ type OwnerEditorChange = {
   ownerName: string;
   ownerIdaasId?: string;
 };
-
-type BaseOwnerDrawerTarget =
-  | { kind: 'check'; id: string }
-  | { kind: 'module'; id: string };
 
 const EMPTY_FILTERS: SearchFilterState = {
   keyword: '',
@@ -4752,119 +4758,1030 @@ function OwnerAvatarStack({ owners, maxVisible = 4 }: { owners: CheckItemOwner[]
   );
 }
 
-function CompactOwnerListEditor({
-  owners,
-  candidateLabel,
-  isActive = false,
-  onOpen
-}: {
-  owners: CheckItemOwner[];
-  candidateLabel: string;
-  isActive?: boolean;
-  onOpen: () => void;
-}) {
-  const normalizedOwners = normalizeOwners(owners);
-  const ownerSummary = normalizedOwners.length
-    ? `${normalizedOwners.length} 人`
-    : '未设置';
-
-  return (
-    <div className="min-w-[150px]">
-      <button
-        className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${isActive ? 'border-primary/50 bg-primary/10' : 'border-outline bg-surface-strong'}`}
-        type="button"
-        onClick={onOpen}
-        aria-expanded={isActive}
-        aria-label={`${candidateLabel}，打开负责人编辑`}
-      >
-        <OwnerAvatarStack owners={normalizedOwners} />
-        <span className="shrink-0 text-[11px] font-medium text-ink-muted">{ownerSummary}</span>
-      </button>
-    </div>
+function ownersSignature(owners: CheckItemOwner[]): string {
+  return JSON.stringify(
+    owners.map(owner => ({
+      id: owner.idaasId ?? '',
+      name: owner.displayName ?? '',
+      email: owner.email ?? '',
+      primary: owner.isPrimary ?? owner.is_primary ?? false
+    }))
   );
 }
 
-function OwnerEditorDrawer({
-  open,
-  title,
-  subtitle,
-  owners,
+function ModuleOwnerDrawer({
+  module,
+  projectName,
+  affectedCount,
   ownerCandidates,
   canWrite,
-  candidateLabel,
-  onChange,
+  onApply,
   onClose
 }: {
-  open: boolean;
-  title: string;
-  subtitle?: string;
-  owners: CheckItemOwner[];
+  module: InspectionModule | null;
+  projectName: string;
+  affectedCount: number;
   ownerCandidates: OwnerCandidate[];
   canWrite: boolean;
-  candidateLabel: string;
-  onChange: (next: OwnerEditorChange) => void;
+  onApply: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<{ affectedCount: number; cleared: boolean }>;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose]);
+  const [owners, setOwners] = useState<CheckItemOwner[]>([]);
+  const [baselineSignature, setBaselineSignature] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const moduleKey = module ? idOf(module.id) : '';
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!module) return;
+    const initial = ownersOfModule(module);
+    setOwners(initial);
+    setBaselineSignature(ownersSignature(initial));
+    setError('');
+    // 仅在切换目标模块时重置草稿；保存后抽屉即关闭。
+  }, [moduleKey]);
+
+  if (!module) return null;
+
+  const dirty = ownersSignature(owners) !== baselineSignature;
+  const clearing = !owners.length && Boolean(baselineSignature && baselineSignature !== '[]');
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty && !window.confirm('有未保存的修改，确认放弃并离开？')) return;
+    onClose();
+  };
+  const handleSave = async () => {
+    if (!canWrite || busy) return;
+    if (clearing && !window.confirm(`将清空模块默认负责人，并同步清空当前项目该模块 ${affectedCount} 个检查项的负责人。确认继续？`)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onApply(module, owners);
+      onClose();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '模块负责人保存失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        className="absolute inset-0 cursor-default bg-black/30"
-        type="button"
-        onClick={onClose}
-        aria-label="关闭负责人编辑"
+    <SideDrawer
+      open
+      title={`模块负责人 · ${module.name}`}
+      subtitle={`${module.code} · 当前项目 ${projectName || '未选择'}`}
+      size="md"
+      saving={busy}
+      onClose={requestClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-muted">
+            {clearing
+              ? `保存将清空并同步 ${affectedCount} 个检查项`
+              : `保存将同步当前项目该模块 ${affectedCount} 个检查项`}
+          </span>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite && (
+            <button className="btn btn-primary btn--sm" type="button" disabled={busy || !dirty} onClick={() => void handleSave()}>
+              {busy ? '处理中…' : '保存并同步检查项'}
+            </button>
+          )}
+        </>
+      }
+    >
+      <div className="mb-3 rounded-lg border border-outline bg-surface-soft p-3">
+        <div className="text-xs font-semibold text-ink-muted">应用范围</div>
+        <p className="mt-1 text-xs text-ink-muted">
+          当前项目「{projectName || '未选择'}」下模块「{module.name}」的全部 {affectedCount} 个检查项（跨阶段、跨分页）将随本次保存单事务同步；其他项目不受影响。清空负责人需二次确认。
+        </p>
+      </div>
+      {error ? <div role="alert" className="mb-3 text-sm text-danger">{error}</div> : null}
+      <OwnerListEditor
+        owners={owners}
+        ownerCandidates={ownerCandidates}
+        canWrite={canWrite && !busy}
+        candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
+        onChange={next => setOwners(next.owners)}
       />
-      <aside
-        className="relative flex h-full w-full max-w-[440px] flex-col border-l border-outline bg-surface shadow-2xl"
-        aria-label={candidateLabel}
+    </SideDrawer>
+  );
+}
+
+function projectDraftFromProject(project: Project | null): ProjectConfigDraft {
+  return {
+    name: project?.name ?? '',
+    code: project?.code ?? '',
+    status: project?.status ?? 'planning',
+    ownerName: project?.ownerName ?? '',
+    plannedStartDate: dateInputValue(project?.plannedStartDate),
+    plannedEndDate: dateInputValue(project?.plannedEndDate),
+    description: project?.description ?? '',
+    factoryId: idOf(project?.factoryId),
+    workshopId: idOf(project?.workshopId),
+    productionLineId: idOf(project?.productionLineId)
+  };
+}
+
+type ProjectConfigEditor = ReturnType<typeof useRecordEditor<Project, ProjectConfigDraft>>;
+
+const DELETION_JOB_STATUS_LABEL: Record<string, string> = {
+  preflighted: '已预检',
+  cleaning_files: '清理文件中',
+  files_cleaned: '文件已清理',
+  finalizing: '写入终态中',
+  failed: '失败，可重试',
+  completed: '已完成',
+  cancelled: '已取消'
+};
+
+const DELETION_COUNT_LABELS: Record<string, string> = {
+  phases: '阶段',
+  check_items: '检查项',
+  check_item_owners: '检查项负责人',
+  key_issues: '重点问题',
+  collision_reports: '碰撞报告',
+  collision_blocks: '碰撞卡控',
+  collision_approvals: '碰撞审批',
+  attachments: '附件记录',
+  export_jobs: '导出任务',
+  audit_logs: '审计记录（保留）'
+};
+
+function ProjectConfigDrawer({ editor, hierarchy, ownerCandidates, canWrite, onSave, onDeleted }: {
+  editor: ProjectConfigEditor;
+  hierarchy: WorkspaceData['hierarchy'];
+  ownerCandidates: OwnerCandidate[];
+  canWrite: boolean;
+  onSave: (project: Project, draft: ProjectConfigDraft) => Promise<Project>;
+  onDeleted: (project: Project) => void;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [deletion, setDeletion] = useState<ProjectDeletionState | null>(null);
+  const [deleteCode, setDeleteCode] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const recordKey = record ? idOf(record.id) : '';
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setDeletion(null);
+    setDeleteCode('');
+    setDeleteError('');
+    setSaveError('');
+    if (!recordKey) return;
+    let cancelled = false;
+    fetchProjectDeletionState(recordKey)
+      .then(state => { if (!cancelled) setDeletion(state); })
+      .catch(() => { if (!cancelled) setDeletion(null); });
+    return () => { cancelled = true; };
+  }, [recordKey, sessionKey]);
+
+  const job = deletion?.job ?? null;
+  const jobActive = Boolean(deletion?.active && job);
+  const codeMatches = Boolean(record) && deleteCode.trim() === record?.code;
+  const workshops = hierarchy.workshops.filter(workshop => !draft.factoryId || idOf(workshop.factoryId) === draft.factoryId);
+  const productionLines = hierarchy.productionLines.filter(line => !draft.workshopId || idOf(line.workshopId) === draft.workshopId);
+
+  const save = async () => {
+    if (!record || !canWrite || saving || deleteBusy) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      const updated = await onSave(record, draft);
+      editor.accept(updated, projectDraftFromProject(updated));
+    } catch (err) {
+      setSaveError(mutationErrorMessage(err, '项目基础信息保存失败'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runDeletionAction = async (action: () => Promise<ProjectDeletionState>) => {
+    if (!record || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      const state = await action();
+      setDeletion(state);
+      if (state.job?.status === 'completed') {
+        editor.removed();
+        onDeleted(record);
+      }
+    } catch (err) {
+      const failedJob = projectDeletionJobFromError(err);
+      if (failedJob) setDeletion({ active: !['completed', 'cancelled'].includes(failedJob.status), job: failedJob });
+      setDeleteError(mutationErrorMessage(err, '物理删除操作失败'));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+  const preflight = () => runDeletionAction(() => preflightProjectPhysicalDeletion(record!.id, deleteCode.trim()));
+  const execute = () => runDeletionAction(() => executeProjectPhysicalDeletion(record!.id, deleteCode.trim()));
+  const cancelDeletion = () => runDeletionAction(() => cancelProjectPhysicalDeletion(record!.id));
+  const refreshDeletion = () => runDeletionAction(() => fetchProjectDeletionState(record!.id));
+
+  const requestClose = () => {
+    if (saving || deleteBusy) return;
+    editor.close();
+  };
+
+  return (
+    <SideDrawer
+      open={editor.open}
+      title={`项目实例 · ${record?.name ?? '加载中'}`}
+      subtitle={record ? `${record.code} · 基础信息与危险操作` : undefined}
+      size="lg"
+      saving={saving || deleteBusy}
+      onClose={requestClose}
+      footer={
+        <>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={saving || deleteBusy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite && (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={saving || deleteBusy || loading || Boolean(error) || !record || !dirty}
+              onClick={() => void save()}
+            >
+              <Save className="h-4 w-4" />
+              {saving ? '保存中…' : '保存项目'}
+            </button>
+          )}
+        </>
+      }
+    >
+      {loading ? <p className="text-sm text-ink-muted">正在加载项目实例…</p> : null}
+      {error ? (
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {record && !loading && !error ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span className="field-label">工厂</span>
+              <select
+                className="select"
+                value={draft.factoryId}
+                disabled={!canWrite || saving}
+                onChange={event => setDraft({ ...draft, factoryId: event.target.value, workshopId: '', productionLineId: '' })}
+              >
+                <option value="">请选择工厂</option>
+                {hierarchy.factories.map(factory => (
+                  <option key={factory.id} value={idOf(factory.id)}>{hierarchyLabel(factory)}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">车间</span>
+              <select
+                className="select"
+                value={draft.workshopId}
+                disabled={!canWrite || saving || !draft.factoryId}
+                onChange={event => setDraft({ ...draft, workshopId: event.target.value, productionLineId: '' })}
+              >
+                <option value="">请选择车间</option>
+                {workshops.map(workshop => (
+                  <option key={workshop.id} value={idOf(workshop.id)}>{hierarchyLabel(workshop)}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">产线（可选）</span>
+              <select
+                className="select"
+                value={draft.productionLineId}
+                disabled={!canWrite || saving || !draft.workshopId}
+                onChange={event => setDraft({ ...draft, productionLineId: event.target.value })}
+              >
+                <option value="">车间级项目</option>
+                {productionLines.map(line => (
+                  <option key={line.id} value={idOf(line.id)}>{hierarchyLabel(line)}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">项目名称</span>
+              <input className="input" value={draft.name} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, name: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">项目编号</span>
+              <input className="input" value={draft.code} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, code: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={draft.status} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, status: event.target.value })}>
+                {['planning', 'active', 'paused', 'completed', 'archived'].map(status => (
+                  <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input
+                className="input"
+                list="project-drawer-owner-candidates"
+                value={draft.ownerName}
+                disabled={!canWrite || saving}
+                onChange={event => setDraft({ ...draft, ownerName: event.target.value })}
+              />
+              <datalist id="project-drawer-owner-candidates">
+                {ownerCandidates.map(owner => <option key={owner.idaasId} value={owner.displayName} />)}
+              </datalist>
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, plannedStartDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, plannedEndDate: event.target.value })} />
+            </label>
+            <label className="sm:col-span-2">
+              <span className="field-label">项目说明</span>
+              <textarea className="input min-h-24" value={draft.description} disabled={!canWrite || saving} onChange={event => setDraft({ ...draft, description: event.target.value })} />
+            </label>
+          </div>
+          {saveError ? <div role="alert" className="text-sm text-danger">{saveError}</div> : null}
+
+          {canWrite ? (
+            <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
+              <div className="flex flex-wrap items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-danger" />
+                <h3 className="text-sm font-semibold text-danger">物理删除项目实例</h3>
+              </div>
+              <p className="mt-2 text-xs text-ink-muted">
+                将物理删除「{record.name}」（{record.code}）及其阶段、检查项、问题、报告与专属存储文件；审计记录保留项目标识快照。项目模板、全局模块、主数据与其他项目不受影响。删除期间项目的创建、上传与导出入口将被锁定。
+              </p>
+              <label className="mt-3 block">
+                <span className="field-label">输入项目编号「{record.code}」确认</span>
+                <input
+                  className="input"
+                  value={deleteCode}
+                  disabled={deleteBusy || (jobActive && job?.status !== 'preflighted' && job?.status !== 'failed')}
+                  onChange={event => setDeleteCode(event.target.value)}
+                  placeholder={record.code}
+                  aria-label="物理删除确认编号"
+                />
+              </label>
+              {job ? (
+                <div className="mt-3 rounded-lg border border-outline bg-surface-soft p-3 text-xs text-ink-muted">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="chip">任务 #{job.id}</span>
+                    <StatusPill status={job.status} />
+                    <span>{DELETION_JOB_STATUS_LABEL[job.status] ?? job.status}</span>
+                    <span>发起人 {job.requestedBy.name || job.requestedBy.idaasId || '未知'}</span>
+                  </div>
+                  {Object.keys(job.counts).length ? (
+                    <dl className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                      {Object.entries(job.counts).map(([key, value]) => (
+                        <div key={key} className="flex items-center justify-between gap-2">
+                          <dt>{DELETION_COUNT_LABELS[key] ?? key}</dt>
+                          <dd className="font-semibold text-ink">{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : null}
+                  <p className="mt-2">
+                    附件文件 {job.fileSummary.attachmentFilesDeleted}/{job.fileSummary.attachmentsToDelete} 已删除
+                    {job.fileSummary.attachmentsKeptShared ? `，${job.fileSummary.attachmentsKeptShared} 个共享文件保留` : ''}
+                    ；导出文件 {job.fileSummary.exportFilesDeleted}/{job.fileSummary.exportFilesToDelete} 已删除。
+                  </p>
+                  {job.lastError ? <p className="mt-1 text-danger">最近错误：{job.lastError}</p> : null}
+                </div>
+              ) : null}
+              {deleteError ? <div role="alert" className="mt-2 text-sm text-danger">{deleteError}</div> : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {!jobActive ? (
+                  <button
+                    className="btn btn-ghost btn--sm text-danger"
+                    type="button"
+                    disabled={deleteBusy || !codeMatches}
+                    onClick={() => void preflight()}
+                  >
+                    {deleteBusy ? '处理中…' : '预检（不执行删除）'}
+                  </button>
+                ) : null}
+                {jobActive && (job?.status === 'preflighted' || job?.status === 'failed') ? (
+                  <button
+                    className="btn btn-primary btn--sm bg-danger border-danger"
+                    type="button"
+                    disabled={deleteBusy || !codeMatches}
+                    onClick={() => void execute()}
+                  >
+                    {deleteBusy ? '处理中…' : job?.status === 'failed' ? '重试执行物理删除' : '执行物理删除'}
+                  </button>
+                ) : null}
+                {jobActive && job?.status === 'preflighted' ? (
+                  <button className="btn btn-ghost btn--sm" type="button" disabled={deleteBusy} onClick={() => void cancelDeletion()}>
+                    取消删除任务
+                  </button>
+                ) : null}
+                {jobActive ? (
+                  <button className="btn btn-ghost btn--sm" type="button" disabled={deleteBusy} onClick={() => void refreshDeletion()}>
+                    <RefreshCcw className="h-4 w-4" />
+                    刷新状态
+                  </button>
+                ) : null}
+              </div>
+              {!codeMatches && !jobActive ? (
+                <p className="mt-2 text-xs text-ink-muted">编号完全一致后才能预检。</p>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+function phaseConfigDraftFrom(phase: ProjectPhase | null): PhaseConfigDraft {
+  return {
+    name: phase?.name ?? '',
+    sequence: String(phase?.sequence ?? ''),
+    goal: phase?.goal ?? '',
+    plannedStartDate: dateInputValue(phase?.plannedStartDate),
+    plannedEndDate: dateInputValue(phase?.plannedEndDate),
+    status: phase?.status ?? 'not_started',
+    isActive: phase?.isActive !== false
+  };
+}
+
+function checkItemConfigDraftFrom(
+  item: CheckItem | null,
+  phase?: ProjectPhase | null,
+  module?: InspectionModule | null
+): CheckItemConfigDraft {
+  return {
+    title: item?.title ?? '',
+    moduleId: idOf(item?.moduleId ?? module?.id),
+    projectPhaseId: idOf(item?.projectPhaseId ?? phase?.id),
+    tags: item ? (item.tags?.length ? item.tags : item.acceptanceCriteria ? [item.acceptanceCriteria] : []).join('，') : '',
+    plannedStartDate: dateInputValue(item?.plannedStartDate ?? phase?.plannedStartDate),
+    plannedEndDate: dateInputValue(item?.plannedEndDate ?? phase?.plannedEndDate),
+    ownerName: '',
+    ownerIdaasId: undefined,
+    owners: item ? ownersOfItem(item) : module ? ownersOfModule(module) : [],
+    status: item?.status ?? 'pending',
+    isActive: item?.isActive !== false
+  };
+}
+
+type PhaseConfigEditor = ReturnType<typeof useRecordEditor<ProjectPhase, PhaseConfigDraft>>;
+
+function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDelete, onMigrateItems }: {
+  editor: PhaseConfigEditor;
+  phases: ProjectPhase[];
+  checkItems: CheckItem[];
+  canWrite: boolean;
+  onSave: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<ProjectPhase>;
+  onDelete: (phase: ProjectPhase) => Promise<void>;
+  onMigrateItems: (phase: ProjectPhase, targetPhaseId: string) => Promise<number>;
+}) {
+  const { draft, setDraft, record, loading, error, dirty } = editor;
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [transferTargetId, setTransferTargetId] = useState('');
+  const sessionKey = editor.sessionKey;
+
+  useEffect(() => {
+    setActionError('');
+    setTransferTargetId('');
+  }, [sessionKey]);
+
+  const phaseItems = record ? checkItems.filter(item => idOf(item.projectPhaseId) === idOf(record.id)) : [];
+  const transferTarget = phases.find(phase => idOf(phase.id) === transferTargetId);
+
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => run(async () => {
+    if (!record) return;
+    const updated = await onSave(record, draft);
+    editor.accept(updated, phaseConfigDraftFrom(updated));
+  });
+  const remove = () => {
+    if (!record || !window.confirm(`确认删除阶段「${record.name}」？`)) return;
+    void run(async () => {
+      await onDelete(record);
+      editor.removed();
+    });
+  };
+  const migrate = () => {
+    if (!record || !transferTargetId || !transferTarget) return;
+    if (!window.confirm(`确认将本阶段 ${phaseItems.length} 个检查项迁移到「${transferTarget.name}」？`)) return;
+    void run(async () => {
+      await onMigrateItems(record, transferTargetId);
+      setTransferTargetId('');
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    editor.close();
+  };
+
+  return (
+    <SideDrawer
+      open={editor.open}
+      title={`项目阶段 · ${record?.name ?? '加载中'}`}
+      subtitle={record ? `Key ${record.code} · ${phaseItems.length} 项检查配置` : undefined}
+      size="lg"
+      saving={busy}
+      onClose={requestClose}
+      footer={
+        <>
+          <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+            取消
+          </button>
+          {canWrite && (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={busy || loading || Boolean(error) || !record || !dirty}
+              onClick={() => void save()}
+            >
+              <Save className="h-4 w-4" />
+              {busy ? '处理中…' : '保存阶段'}
+            </button>
+          )}
+        </>
+      }
+    >
+      {loading ? <p className="text-sm text-ink-muted">正在加载阶段…</p> : null}
+      {error ? (
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger">
+          <p>{error}</p>
+          <button className="btn btn-ghost btn--sm mt-2" type="button" onClick={() => void editor.retry()}>
+            重试加载
+          </button>
+        </div>
+      ) : null}
+      {record && !loading && !error ? (
+        <div className="space-y-4">
+          <label className="flex items-center gap-2 text-sm text-ink-muted">
+            <input
+              type="checkbox"
+              checked={draft.isActive}
+              disabled={!canWrite || busy}
+              onChange={event => setDraft({ ...draft, isActive: event.target.checked })}
+            />
+            启用该阶段
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span className="field-label">阶段名称</span>
+              <input className="input" value={draft.name} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, name: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">排序</span>
+              <input className="input" type="number" value={draft.sequence} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, sequence: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, plannedStartDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, plannedEndDate: event.target.value })} />
+            </label>
+            <label className="sm:col-span-2">
+              <span className="field-label">状态</span>
+              <select className="select" value={draft.status} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, status: event.target.value })}>
+                {['not_started', 'in_progress', 'blocked', 'completed'].map(status => (
+                  <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                ))}
+              </select>
+            </label>
+            <label className="sm:col-span-2">
+              <span className="field-label">阶段目标</span>
+              <textarea className="input min-h-20" value={draft.goal} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, goal: event.target.value })} />
+            </label>
+          </div>
+          {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+          {canWrite ? (
+            <section className="rounded-lg border border-outline bg-surface-soft p-4" aria-label="阶段工具">
+              <h3 className="text-sm font-semibold text-ink">检查项迁移</h3>
+              <p className="mt-1 text-xs text-ink-muted">将本阶段全部 {phaseItems.length} 个检查项迁移到目标阶段，计划日期缺省时沿用目标阶段窗口。</p>
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <label className="min-w-[220px]">
+                  <span className="field-label">迁移到阶段</span>
+                  <select
+                    className="select"
+                    value={transferTargetId}
+                    disabled={busy || !phaseItems.length}
+                    onChange={event => setTransferTargetId(event.target.value)}
+                  >
+                    <option value="">选择目标阶段</option>
+                    {phases
+                      .filter(phase => !record || idOf(phase.id) !== idOf(record.id))
+                      .map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
+                  </select>
+                </label>
+                <button
+                  className="btn btn-ghost btn--sm"
+                  type="button"
+                  disabled={busy || !transferTargetId || !phaseItems.length}
+                  onClick={migrate}
+                  title={transferTarget ? `迁移到 ${transferTarget.name}` : undefined}
+                >
+                  <Workflow className="h-4 w-4" />
+                  迁移本阶段检查项
+                </button>
+              </div>
+            </section>
+          ) : null}
+          {canWrite && record.canDelete === true ? (
+            <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
+              <div className="flex flex-wrap items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-danger" />
+                <h3 className="text-sm font-semibold text-danger">删除阶段</h3>
+              </div>
+              <p className="mt-1 text-xs text-ink-muted">受保护的阶段不可删除；删除操作不可撤销。</p>
+              <button className="btn btn-ghost btn--sm mt-3 text-danger" type="button" disabled={busy} onClick={remove}>
+                <Trash2 className="h-4 w-4" />
+                删除阶段
+              </button>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </SideDrawer>
+  );
+}
+
+const MATRIX_CELL_FILTER_DEFAULT: SearchFilterState = EMPTY_FILTERS;
+
+function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCandidates, canWrite, onCreate, onUpdate, onDelete, onClose }: {
+  project: Project | null;
+  cell: { moduleId: string; phaseId: string } | null;
+  phases: ProjectPhase[];
+  modules: InspectionModule[];
+  checkItems: CheckItem[];
+  ownerCandidates: OwnerCandidate[];
+  canWrite: boolean;
+  onCreate: (draft: CheckItemConfigDraft) => Promise<void>;
+  onUpdate: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
+  onDelete: (item: CheckItem) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [filters, setFilters] = useState<SearchFilterState>(MATRIX_CELL_FILTER_DEFAULT);
+  const [editing, setEditing] = useState<{ item: CheckItem | null; draft: CheckItemConfigDraft; baseline: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const cellKey = cell ? `${cell.moduleId}:${cell.phaseId}` : '';
+
+  useEffect(() => {
+    setFilters(MATRIX_CELL_FILTER_DEFAULT);
+    setEditing(null);
+    setActionError('');
+  }, [cellKey]);
+
+  const phase = cell ? phases.find(item => idOf(item.id) === cell.phaseId) ?? null : null;
+  const module = cell ? modules.find(item => idOf(item.id) === cell.moduleId) ?? null : null;
+  const cellItems = cell
+    ? checkItems.filter(item => idOf(item.moduleId) === cell.moduleId && idOf(item.projectPhaseId) === cell.phaseId)
+    : [];
+  const visibleItems = cellItems.filter(item => {
+    const itemOwners = ownersOfItem(item);
+    if (filters.status && item.status !== filters.status) return false;
+    if (filters.owner && !textMatches(filters.owner, ownersForSearch(itemOwners))) return false;
+    if (filters.activeState === 'enabled' && item.isActive === false) return false;
+    if (filters.activeState === 'disabled' && item.isActive !== false) return false;
+    if (!textMatches(filters.keyword, [item.title, item.description, item.acceptanceCriteria, item.tags?.join(' '), ...ownersForSearch(itemOwners)])) return false;
+    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, filters.startDate, filters.endDate);
+  });
+
+  const editingDirty = editing ? JSON.stringify(editing.draft) !== editing.baseline : false;
+  const openItem = (item: CheckItem | null) => {
+    const draft = checkItemConfigDraftFrom(item, phase, module);
+    setActionError('');
+    setEditing({ item, draft, baseline: JSON.stringify(draft) });
+  };
+  const closeItem = () => {
+    if (busy) return;
+    if (editingDirty && !window.confirm('有未保存的修改，确认放弃并离开？')) return;
+    setEditing(null);
+    setActionError('');
+  };
+  const requestClose = () => {
+    if (busy) return;
+    if (editing) {
+      closeItem();
+      return;
+    }
+    onClose();
+  };
+
+  const runItem = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError('');
+    try {
+      await action();
+      setEditing(null);
+    } catch (err) {
+      setActionError(mutationErrorMessage(err, '检查项操作失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const itemValidation = !editing
+    ? ''
+    : !editing.draft.title.trim()
+      ? '请填写检查项标题。'
+      : !editing.draft.plannedStartDate || !editing.draft.plannedEndDate
+        ? '请填写计划开始和结束日期。'
+        : editing.draft.plannedStartDate > editing.draft.plannedEndDate
+          ? '计划结束不得早于开始。'
+          : '';
+  const saveItem = () => {
+    if (!editing || itemValidation) {
+      if (itemValidation) setActionError(itemValidation);
+      return;
+    }
+    void runItem(async () => {
+      if (editing.item) await onUpdate(editing.item, editing.draft);
+      else await onCreate(editing.draft);
+    });
+  };
+  const deleteItem = () => {
+    if (!editing?.item || editing.item.canDelete !== true) return;
+    if (!window.confirm(`确认删除检查项「${editing.item.title}」？`)) return;
+    void runItem(() => onDelete(editing.item!));
+  };
+
+  const disabledContext = (module && module.isActive === false) || (phase && phase.isActive === false);
+
+  return (
+    <>
+      <SideDrawer
+        open={Boolean(cell)}
+        title={module && phase ? `${module.name} × ${phase.name}` : '检查项配置'}
+        subtitle={project ? `项目 ${project.name} · ${phase?.code ?? ''}` : undefined}
+        size="lg"
+        saving={busy}
+        onClose={requestClose}
+        footer={
+          <>
+            <span className="mr-auto text-xs text-ink-muted">{visibleItems.length}/{cellItems.length} 项</span>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
+              关闭
+            </button>
+            {canWrite && phase && module ? (
+              <button className="btn btn-primary btn--sm" type="button" disabled={busy} onClick={() => openItem(null)}>
+                <Plus className="h-4 w-4" />
+                新增检查项
+              </button>
+            ) : null}
+          </>
+        }
       >
-        <div className="flex items-start justify-between gap-3 border-b border-outline px-4 py-4">
-          <div className="min-w-0">
-            <p className="kicker">Owner</p>
-            <h3 className="truncate text-lg font-semibold text-ink">{title}</h3>
-            {subtitle ? <p className="mt-1 text-xs text-ink-muted">{subtitle}</p> : null}
+        {disabledContext ? (
+          <div className="mb-3 rounded-lg border border-outline bg-surface-soft p-3 text-xs text-ink-muted">
+            {module?.isActive === false ? '模块已停用；' : ''}{phase?.isActive === false ? '阶段已停用；' : ''}仍可维护检查项，启用后参与项目展示。
           </div>
-          <button
-            className="btn btn-ghost btn--sm shrink-0"
-            type="button"
-            onClick={onClose}
-            aria-label="关闭负责人编辑"
-          >
-            <X className="h-4 w-4" />
-          </button>
+        ) : null}
+        <div className="rounded-lg border border-outline bg-surface-soft p-3" aria-label="单元检查项筛选">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <label>
+              <span className="field-label">检查项搜索</span>
+              <input className="input" value={filters.keyword} onChange={event => setFilters({ ...filters, keyword: event.target.value })} placeholder="标题、标签、负责人" aria-label="单元检查项搜索" />
+            </label>
+            <label>
+              <span className="field-label">状态</span>
+              <select className="select" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}>
+                <option value="">全部状态</option>
+                {CHECK_ITEM_STATUS_OPTIONS.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="field-label">负责人</span>
+              <input className="input" value={filters.owner} onChange={event => setFilters({ ...filters, owner: event.target.value })} placeholder="负责人" aria-label="单元检查项负责人筛选" />
+            </label>
+            <label>
+              <span className="field-label">启用状态</span>
+              <select className="select" value={filters.activeState} onChange={event => setFilters({ ...filters, activeState: event.target.value })}>
+                <option value="">全部</option>
+                <option value="enabled">启用</option>
+                <option value="disabled">停用</option>
+              </select>
+            </label>
+            <label>
+              <span className="field-label">计划开始</span>
+              <input className="input" type="date" value={filters.startDate} onChange={event => setFilters({ ...filters, startDate: event.target.value })} />
+            </label>
+            <label>
+              <span className="field-label">计划结束</span>
+              <input className="input" type="date" value={filters.endDate} onChange={event => setFilters({ ...filters, endDate: event.target.value })} />
+            </label>
+          </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mb-3 rounded-lg border border-outline bg-surface-soft p-3">
-            <div className="text-xs font-semibold text-ink-muted">当前负责人</div>
-            <div className="mt-2">
-              <OwnerAvatarStack owners={owners} maxVisible={6} />
+        <div className="table-shell mt-3">
+          <table className="data-table min-w-[900px]">
+            <thead>
+              <tr>
+                <th>检查项</th>
+                <th>标签</th>
+                <th>计划窗口</th>
+                <th>负责人</th>
+                <th>状态</th>
+                <th>启用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleItems.map(item => {
+                const itemOwners = ownersOfItem(item);
+                return (
+                  <tr key={item.id}>
+                    <td className="min-w-[220px]">
+                      <div className="font-semibold text-ink">{item.title}</div>
+                      {item.description ? <div className="mt-1 text-xs text-ink-muted">{item.description}</div> : null}
+                    </td>
+                    <td className="min-w-[140px] text-xs text-ink-muted">{(item.tags ?? []).join('、') || '—'}</td>
+                    <td className="min-w-[170px]">{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
+                    <td className="min-w-[150px]">
+                      {itemOwners.length ? (
+                        <div className="flex items-center gap-2">
+                          <OwnerAvatarStack owners={itemOwners} maxVisible={3} />
+                          <span className="text-xs text-ink-muted">{itemOwners.map(owner => owner.displayName || owner.idaasId).join('、')}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-ink-muted">未设置</span>
+                      )}
+                    </td>
+                    <td><StatusPill status={item.status} /></td>
+                    <td>{item.isActive === false ? '停用' : '启用'}</td>
+                    <td>
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => openItem(item)}
+                        aria-label={`编辑检查项 ${item.title}`}
+                        aria-haspopup="dialog"
+                      >
+                        编辑
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!visibleItems.length ? (
+                <tr>
+                  <td colSpan={7} className="text-center text-ink-muted">
+                    {cellItems.length ? '当前筛选下暂无检查项。' : canWrite ? '该单元暂无检查项，可在下方新增。' : '该单元暂无检查项。'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </SideDrawer>
+      <SideDrawer
+        open={Boolean(editing)}
+        title={editing?.item ? `编辑检查项 · ${editing.item.title}` : '新增检查项'}
+        subtitle={module && phase ? `${module.name} / ${phase.name}（${phase.code}）` : undefined}
+        size="md"
+        saving={busy}
+        onClose={closeItem}
+        footer={
+          <>
+            <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={closeItem}>
+              取消
+            </button>
+            {canWrite ? (
+              <button
+                className="btn btn-primary btn--sm"
+                type="button"
+                disabled={busy || !editing || Boolean(itemValidation) || (editing.item != null && !editingDirty)}
+                onClick={saveItem}
+              >
+                <Save className="h-4 w-4" />
+                {busy ? '处理中…' : editing?.item ? '保存检查项' : '新增检查项'}
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        {editing ? (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-outline bg-surface-soft p-3 text-xs text-ink-muted">
+              阶段与模块由当前矩阵单元固定：{phase?.name ?? '未知阶段'} / {module?.name ?? '未知模块'}；跨阶段迁移请在阶段抽屉中操作。
             </div>
+            <label className="block">
+              <span className="field-label">检查项标题</span>
+              <input
+                className="input"
+                value={editing.draft.title}
+                disabled={!canWrite || busy}
+                onChange={event => setEditing({ ...editing, draft: { ...editing.draft, title: event.target.value } })}
+                placeholder="输入检查项标题"
+                aria-label="检查项标题"
+              />
+            </label>
+            <label className="block">
+              <span className="field-label">标签</span>
+              <input
+                className="input"
+                value={editing.draft.tags}
+                disabled={!canWrite || busy}
+                onChange={event => setEditing({ ...editing, draft: { ...editing.draft, tags: event.target.value } })}
+                placeholder="逗号分隔"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span className="field-label">计划开始</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={editing.draft.plannedStartDate}
+                  disabled={!canWrite || busy}
+                  onChange={event => setEditing({ ...editing, draft: { ...editing.draft, plannedStartDate: event.target.value } })}
+                />
+              </label>
+              <label>
+                <span className="field-label">计划结束</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={editing.draft.plannedEndDate}
+                  disabled={!canWrite || busy}
+                  onChange={event => setEditing({ ...editing, draft: { ...editing.draft, plannedEndDate: event.target.value } })}
+                />
+              </label>
+            </div>
+            <div>
+              <span className="field-label">责任人</span>
+              <OwnerListEditor
+                owners={editing.draft.owners}
+                ownerCandidates={ownerCandidates}
+                canWrite={canWrite && !busy}
+                candidateLabel={`配置中心 ${editing.draft.title || '检查项'} IDaaS 责任人`}
+                onChange={next => setEditing({ ...editing, draft: { ...editing.draft, ...next } })}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span className="field-label">状态</span>
+                <select
+                  className="select"
+                  value={editing.draft.status}
+                  disabled={!canWrite || busy}
+                  onChange={event => setEditing({ ...editing, draft: { ...editing.draft, status: event.target.value } })}
+                >
+                  {CHECK_ITEM_STATUS_OPTIONS.map(status => (
+                    <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-end gap-2 pb-2 text-sm text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={editing.draft.isActive}
+                  disabled={!canWrite || busy}
+                  onChange={event => setEditing({ ...editing, draft: { ...editing.draft, isActive: event.target.checked } })}
+                />
+                启用该检查项
+              </label>
+            </div>
+            {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+            {editing.item ? (
+              <div className="border-t border-outline pt-3">
+                {editing.item.canDelete === true ? (
+                  <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={!canWrite || busy} onClick={deleteItem}>
+                    <Trash2 className="h-4 w-4" />
+                    删除检查项
+                  </button>
+                ) : (
+                  <p className="text-xs text-ink-muted">该检查项受删除保护，如不再使用请设置为停用。</p>
+                )}
+              </div>
+            ) : null}
           </div>
-          <OwnerListEditor
-            owners={owners}
-            ownerCandidates={ownerCandidates}
-            canWrite={canWrite}
-            candidateLabel={candidateLabel}
-            onChange={onChange}
-          />
-        </div>
-        <div className="flex justify-end border-t border-outline px-4 py-3">
-          <button className="btn btn-primary btn--sm" type="button" onClick={onClose}>
-            完成
-          </button>
-        </div>
-      </aside>
-    </div>
+        ) : null}
+      </SideDrawer>
+    </>
   );
 }
 
@@ -7989,14 +8906,15 @@ function BaseConfigView({
   onSelectProject,
   onCreateProject,
   onUpdateProject,
+  onProjectDeleted,
   onSeedTemplate,
   onUpdatePhase,
   onDeletePhase,
+  onMigratePhaseCheckItems,
   onCreateCheckItem,
   onUpdateCheckItem,
   onDeleteCheckItem,
-  onUpdateModuleOwner,
-  onApplyModuleOwnerToCheckItems
+  onApplyModuleOwner
 }: {
   data: WorkspaceData;
   scope: ScopeState;
@@ -8004,33 +8922,28 @@ function BaseConfigView({
   onScopeChange: (scope: ScopeState) => void;
   onSelectProject: (projectId: string | number) => void;
   onCreateProject: (phaseTemplateId: string) => void;
-  onUpdateProject: (draft: ProjectConfigDraft) => Promise<void>;
+  onUpdateProject: (project: Project, draft: ProjectConfigDraft) => Promise<Project>;
+  onProjectDeleted: (project: Project) => void;
   onSeedTemplate: () => Promise<void>;
-  onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<void>;
+  onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<ProjectPhase>;
   onDeletePhase: (phase: ProjectPhase) => Promise<void>;
+  onMigratePhaseCheckItems: (phase: ProjectPhase, targetPhaseId: string) => Promise<number>;
   onCreateCheckItem: (draft: CheckItemConfigDraft) => Promise<void>;
   onUpdateCheckItem: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
   onDeleteCheckItem: (item: CheckItem) => Promise<void>;
-  onUpdateModuleOwner: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<void>;
-  onApplyModuleOwnerToCheckItems: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<void>;
+  onApplyModuleOwner: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<{ affectedCount: number; cleared: boolean }>;
 }) {
-  const [projectDraft, setProjectDraft] = useState<ProjectConfigDraft | null>(null);
-  const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseConfigDraft>>({});
-  const [checkItemDrafts, setCheckItemDrafts] = useState<Record<string, CheckItemConfigDraft>>({});
-  const [moduleOwnerDrafts, setModuleOwnerDrafts] = useState<Record<string, CheckItemOwner[]>>({});
   const [projectFilters, setProjectFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [checkFilters, setCheckFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
-  const [newCheckDraft, setNewCheckDraft] = useState<CheckItemConfigDraft | null>(null);
-  const [ownerDrawerTarget, setOwnerDrawerTarget] = useState<BaseOwnerDrawerTarget | null>(null);
-  const [selectedPhaseConfigId, setSelectedPhaseConfigId] = useState('');
-  const [selectedModuleConfigId, setSelectedModuleConfigId] = useState('');
+  const [moduleOwnerTargetId, setModuleOwnerTargetId] = useState('');
+  const [matrixCell, setMatrixCell] = useState<{ moduleId: string; phaseId: string } | null>(null);
   const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
   const [createProjectPanelOpen, setCreateProjectPanelOpen] = useState(false);
-  const [transferTargetPhaseId, setTransferTargetPhaseId] = useState('');
   const [savingKey, setSavingKey] = useState('');
   const [message, setMessage] = useState('');
   const project = data.selectedProject;
+  const projectEditor = useRecordEditor<Project, ProjectConfigDraft>(projectDraftFromProject, fetchProject, false);
+  const phaseEditor = useRecordEditor<ProjectPhase, PhaseConfigDraft>(phaseConfigDraftFrom, fetchProjectPhase, false);
   const sortedPhases = bySequence(data.phases);
   const visibleProjects = data.projects.filter(item => {
     if (scope.factoryId && idOf(item.factoryId) !== scope.factoryId) return false;
@@ -8048,92 +8961,15 @@ function BaseConfigView({
     if (!textMatches(phaseFilters.keyword, [phase.name, phase.code, phase.goal])) return false;
     return dateRangeMatches(phase.plannedStartDate, phase.plannedEndDate, phaseFilters.startDate, phaseFilters.endDate);
   });
-  const selectedPhaseId = visiblePhases.length
-    ? visiblePhases.some(phase => idOf(phase.id) === selectedPhaseConfigId)
-      ? selectedPhaseConfigId
-      : idOf(visiblePhases[0]?.id)
-    : '';
-  const selectedConfigPhase = sortedPhases.find(phase => idOf(phase.id) === selectedPhaseId);
-  const selectedPhaseDraft = selectedConfigPhase ? phaseDrafts[idOf(selectedConfigPhase.id)] : undefined;
   const sortedInspectionModules = bySequence(data.inspectionModules);
-  const selectedModuleId = sortedInspectionModules.length
-    ? sortedInspectionModules.some(module => idOf(module.id) === selectedModuleConfigId)
-      ? selectedModuleConfigId
-      : idOf(sortedInspectionModules[0]?.id)
-    : '';
-  const selectedConfigModule = sortedInspectionModules.find(module => idOf(module.id) === selectedModuleId);
-  const selectedPhaseAllCheckItems = selectedPhaseId
-    ? data.checkItems.filter(item => idOf(item.projectPhaseId) === selectedPhaseId)
-    : [];
-  const selectedCellAllCheckItems = selectedPhaseId && selectedModuleId
-    ? selectedPhaseAllCheckItems.filter(item => idOf(item.moduleId) === selectedModuleId)
-    : [];
-  const transferTargetPhase = sortedPhases.find(phase => idOf(phase.id) === transferTargetPhaseId);
-  const visibleCheckItems = data.checkItems.filter(item => {
-    const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
-    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
-    const itemOwners = ownersOfItem(item);
-    if (!selectedPhaseId || idOf(item.projectPhaseId) !== selectedPhaseId) return false;
-    if (!selectedModuleId || idOf(item.moduleId) !== selectedModuleId) return false;
-    if (checkFilters.status && item.status !== checkFilters.status) return false;
-    if (checkFilters.owner && !textMatches(checkFilters.owner, ownersForSearch(itemOwners))) return false;
-    if (checkFilters.activeState === 'enabled' && item.isActive === false) return false;
-    if (checkFilters.activeState === 'disabled' && item.isActive !== false) return false;
-    if (!textMatches(checkFilters.keyword, [item.title, item.description, item.acceptanceCriteria, phase?.name, module?.name, item.tags?.join(' '), ...ownersForSearch(itemOwners)])) return false;
-    return dateRangeMatches(item.plannedStartDate, item.plannedEndDate, checkFilters.startDate, checkFilters.endDate);
-  });
-  const ownerDrawerConfig = (() => {
-    if (!ownerDrawerTarget) return null;
-    if (ownerDrawerTarget.kind === 'check') {
-      const item = data.checkItems.find(checkItem => idOf(checkItem.id) === ownerDrawerTarget.id);
-      const draft = checkItemDrafts[ownerDrawerTarget.id];
-      if (!item || !draft) return null;
-      const phase = data.phases.find(phaseItem => idOf(phaseItem.id) === idOf(item.projectPhaseId));
-      const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === idOf(item.moduleId));
-      return {
-        title: item.title,
-        subtitle: [phase?.name, module?.name].filter(Boolean).join(' / '),
-        owners: draft.owners,
-        candidateLabel: `配置中心 ${item.title} IDaaS 责任人`,
-        onChange: (next: OwnerEditorChange) => {
-          setCheckItemDrafts(current => ({
-            ...current,
-            [ownerDrawerTarget.id]: {
-              ...(current[ownerDrawerTarget.id] ?? draft),
-              ...next
-            }
-          }));
-        }
-      };
-    }
-    const module = data.inspectionModules.find(moduleItem => idOf(moduleItem.id) === ownerDrawerTarget.id);
-    if (!module) return null;
-    return {
-      title: module.name,
-      subtitle: `${module.code} · 检查模块`,
-      owners: moduleOwnerDrafts[ownerDrawerTarget.id] ?? ownersOfModule(module),
-      candidateLabel: `检查模块 ${module.name} IDaaS 负责人`,
-      onChange: (next: OwnerEditorChange) => {
-        setModuleOwnerDrafts(current => ({
-          ...current,
-          [ownerDrawerTarget.id]: next.owners
-        }));
-      }
-    };
-  })();
-  const workshops = data.hierarchy.workshops.filter(
-    workshop => !projectDraft?.factoryId || idOf(workshop.factoryId) === projectDraft.factoryId
-  );
-  const productionLines = data.hierarchy.productionLines.filter(
-    line => !projectDraft?.workshopId || idOf(line.workshopId) === projectDraft.workshopId
-  );
+  const moduleOwnerTarget = data.inspectionModules.find(module => idOf(module.id) === moduleOwnerTargetId) ?? null;
+  const moduleOwnerAffectedCount = moduleOwnerTarget
+    ? data.checkItems.filter(item => idOf(item.moduleId) === idOf(moduleOwnerTarget.id)).length
+    : 0;
   const projectStatusOptions = statusOptionValues(data.projects.map(item => item.status));
   const phaseStatusOptions = statusOptionValues(data.phases.map(item => item.status));
-  const checkStatusOptions = statusOptionValues(data.checkItems.map(item => item.status));
   const sortedCreatePhaseTemplates = bySequence(data.phaseTemplates).filter(template => template.isActive !== false);
   const createPhaseTemplateKey = sortedCreatePhaseTemplates.map(template => `${idOf(template.id)}:${template.isActive}`).join('|');
-  const selectedNewCheckPhase = sortedPhases.find(phase => idOf(phase.id) === newCheckDraft?.projectPhaseId);
-  const selectedNewCheckModule = data.inspectionModules.find(module => idOf(module.id) === newCheckDraft?.moduleId);
   const projectWorkbench = (
     <>
       <ScopeToolbar
@@ -8239,9 +9075,10 @@ function BaseConfigView({
                         type="button"
                         onClick={event => {
                           event.stopPropagation();
-                          onSelectProject(item.id);
+                          void projectEditor.openRecord(item.id);
                         }}
                         aria-label={`配置项目实例 ${item.name}`}
+                        aria-haspopup="dialog"
                       >
                         配置
                       </button>
@@ -8258,102 +9095,25 @@ function BaseConfigView({
           </table>
         </div>
       </section>
+      <ProjectConfigDrawer
+        editor={projectEditor}
+        hierarchy={data.hierarchy}
+        ownerCandidates={data.ownerCandidates}
+        canWrite={canWrite}
+        onSave={(record, draft) => onUpdateProject(record, draft)}
+        onDeleted={onProjectDeleted}
+      />
     </>
   );
 
   useEffect(() => {
     setMessage('');
-    if (!project) {
-      setProjectDraft(null);
-      setPhaseDrafts({});
-      setCheckItemDrafts({});
-      setModuleOwnerDrafts({});
-      setCheckFilters(EMPTY_FILTERS);
-      setSelectedPhaseConfigId('');
-      setSelectedModuleConfigId('');
-      setTransferTargetPhaseId('');
-      setNewCheckDraft(null);
-      setOwnerDrawerTarget(null);
-      return;
-    }
-    setProjectDraft({
-      name: project.name,
-      code: project.code,
-      status: project.status,
-      ownerName: project.ownerName,
-      plannedStartDate: dateInputValue(project.plannedStartDate),
-      plannedEndDate: dateInputValue(project.plannedEndDate),
-      description: project.description ?? '',
-      factoryId: idOf(project.factoryId),
-      workshopId: idOf(project.workshopId),
-      productionLineId: idOf(project.productionLineId)
-    });
-    setPhaseDrafts(
-      Object.fromEntries(
-        sortedPhases.map(phase => [
-          idOf(phase.id),
-          {
-            name: phase.name,
-            sequence: String(phase.sequence),
-            goal: phase.goal,
-            plannedStartDate: dateInputValue(phase.plannedStartDate),
-            plannedEndDate: dateInputValue(phase.plannedEndDate),
-            status: phase.status,
-            isActive: phase.isActive !== false
-          }
-        ])
-      )
-    );
-    setModuleOwnerDrafts(
-      Object.fromEntries(
-        data.inspectionModules.map(module => [idOf(module.id), ownersOfModule(module)])
-      )
-    );
-    setCheckItemDrafts(
-      Object.fromEntries(
-        data.checkItems.map(item => [
-          idOf(item.id),
-          {
-            title: item.title,
-            moduleId: idOf(item.moduleId),
-            projectPhaseId: idOf(item.projectPhaseId),
-            tags: (item.tags?.length ? item.tags : item.acceptanceCriteria ? [item.acceptanceCriteria] : []).join('，'),
-            plannedStartDate: dateInputValue(item.plannedStartDate),
-            plannedEndDate: dateInputValue(item.plannedEndDate),
-            ownerName: '',
-            ownerIdaasId: undefined,
-            owners: ownersOfItem(item),
-            status: item.status,
-            isActive: item.isActive !== false
-          }
-        ])
-      )
-    );
-    const firstPhaseId = idOf(sortedPhases[0]?.id);
-    const firstModule = sortedInspectionModules[0];
-    const firstModuleId = idOf(firstModule?.id);
-    setCheckFilters(current => ({ ...current, phaseId: '', moduleId: '' }));
-    setSelectedPhaseConfigId(current =>
-      sortedPhases.some(phase => idOf(phase.id) === current) ? current : firstPhaseId
-    );
-    setSelectedModuleConfigId(current =>
-      sortedInspectionModules.some(module => idOf(module.id) === current) ? current : firstModuleId
-    );
-    setTransferTargetPhaseId('');
-    setNewCheckDraft({
-      title: '',
-      moduleId: firstModuleId,
-      projectPhaseId: firstPhaseId,
-      tags: '',
-      plannedStartDate: dateInputValue(sortedPhases[0]?.plannedStartDate),
-      plannedEndDate: dateInputValue(sortedPhases[0]?.plannedEndDate),
-      ownerName: '',
-      ownerIdaasId: undefined,
-      owners: firstModule ? ownersOfModule(firstModule) : [],
-      status: 'pending',
-      isActive: true
-    });
-  }, [project?.id, data.phases, data.inspectionModules, data.checkItems]);
+    setMatrixCell(null);
+    setModuleOwnerTargetId('');
+    if (phaseEditor.open) phaseEditor.close();
+    // 阶段抽屉有自己的未保存确认；切换项目只负责收起单元格抽屉。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
 
   useEffect(() => {
     setCreatePhaseTemplateId(current =>
@@ -8362,33 +9122,6 @@ function BaseConfigView({
         : idOf(sortedCreatePhaseTemplates.find(template => template.isActive !== false)?.id ?? sortedCreatePhaseTemplates[0]?.id)
     );
   }, [createPhaseTemplateKey]);
-
-  useEffect(() => {
-    if (!selectedPhaseId) return;
-    const phase = sortedPhases.find(item => idOf(item.id) === selectedPhaseId);
-    setNewCheckDraft(current => {
-      if (!current || current.projectPhaseId === selectedPhaseId) return current;
-      return {
-        ...current,
-        projectPhaseId: selectedPhaseId,
-        plannedStartDate: dateInputValue(phase?.plannedStartDate),
-        plannedEndDate: dateInputValue(phase?.plannedEndDate)
-      };
-    });
-  }, [selectedPhaseId]);
-
-  useEffect(() => {
-    if (!selectedModuleId) return;
-    const module = sortedInspectionModules.find(item => idOf(item.id) === selectedModuleId);
-    setNewCheckDraft(current => {
-      if (!current || current.moduleId === selectedModuleId) return current;
-      return {
-        ...current,
-        moduleId: selectedModuleId,
-        owners: module ? ownersOfModule(module) : []
-      };
-    });
-  }, [selectedModuleId]);
 
   const save = async (key: string, action: () => Promise<void>) => {
     if (!canWrite) {
@@ -8407,65 +9140,13 @@ function BaseConfigView({
     }
   };
 
-  const selectPhaseForConfig = (phase: ProjectPhase) => {
-    const phaseId = idOf(phase.id);
-    setSelectedPhaseConfigId(phaseId);
-    setTransferTargetPhaseId('');
-    setNewCheckDraft(current =>
-      current
-        ? {
-            ...current,
-            projectPhaseId: phaseId,
-            plannedStartDate: dateInputValue(phase.plannedStartDate),
-            plannedEndDate: dateInputValue(phase.plannedEndDate)
-          }
-        : current
-    );
-  };
-
-  const selectMatrixCellForConfig = (module: InspectionModule, phase: ProjectPhase) => {
-    const phaseId = idOf(phase.id);
-    const moduleId = idOf(module.id);
-    const moduleOwners = ownersOfModule(module);
-    setSelectedPhaseConfigId(phaseId);
-    setSelectedModuleConfigId(moduleId);
-    setTransferTargetPhaseId('');
-    setNewCheckDraft(current =>
-      current
-        ? {
-            ...current,
-            moduleId,
-            projectPhaseId: phaseId,
-            plannedStartDate: dateInputValue(phase.plannedStartDate),
-            plannedEndDate: dateInputValue(phase.plannedEndDate),
-            owners: current.moduleId === moduleId ? current.owners : moduleOwners
-          }
-        : current
-    );
-  };
-
-  const moveSelectedPhaseCheckItems = async () => {
-    if (!selectedPhaseId || !transferTargetPhaseId || selectedPhaseId === transferTargetPhaseId) return;
-    for (const item of selectedPhaseAllCheckItems) {
-      const draft = checkItemDrafts[idOf(item.id)];
-      if (!draft) continue;
-      await onUpdateCheckItem(item, {
-        ...draft,
-        projectPhaseId: transferTargetPhaseId,
-        plannedStartDate: draft.plannedStartDate || dateInputValue(transferTargetPhase?.plannedStartDate),
-        plannedEndDate: draft.plannedEndDate || dateInputValue(transferTargetPhase?.plannedEndDate)
-      });
-    }
-    setTransferTargetPhaseId('');
-  };
-
-  if (!project || !projectDraft) {
+  if (!project) {
     return (
       <div className="grid gap-5">
         {projectWorkbench}
         <section className="panel">
           <h2 className="text-xl font-semibold">配置中心</h2>
-          <p className="mt-3 text-sm text-ink-muted">请选择项目后维护基础信息、阶段、检查项与模块负责人配置。</p>
+          <p className="mt-3 text-sm text-ink-muted">请选择项目后维护阶段、检查项与模块负责人配置；项目基础信息与物理删除在项目实例列表的“配置”抽屉中处理。</p>
         </section>
       </div>
     );
@@ -8474,120 +9155,6 @@ function BaseConfigView({
   return (
     <div className="grid gap-5">
       {projectWorkbench}
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="kicker">Project Base</p>
-            <h2 className="text-xl font-semibold">项目基础信息</h2>
-          </div>
-          <ReadOnlyNotice canWrite={canWrite} />
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-3">
-          <label>
-            <span className="field-label">工厂</span>
-            <select
-              className="select"
-              value={projectDraft.factoryId}
-              disabled={!canWrite}
-              onChange={event =>
-                setProjectDraft({
-                  ...projectDraft,
-                  factoryId: event.target.value,
-                  workshopId: '',
-                  productionLineId: ''
-                })
-              }
-            >
-              <option value="">请选择工厂</option>
-              {data.hierarchy.factories.map(factory => (
-                <option key={factory.id} value={idOf(factory.id)}>{hierarchyLabel(factory)}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">车间</span>
-            <select
-              className="select"
-              value={projectDraft.workshopId}
-              disabled={!canWrite || !projectDraft.factoryId}
-              onChange={event => setProjectDraft({ ...projectDraft, workshopId: event.target.value, productionLineId: '' })}
-            >
-              <option value="">请选择车间</option>
-              {workshops.map(workshop => (
-                <option key={workshop.id} value={idOf(workshop.id)}>{hierarchyLabel(workshop)}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">产线（可选）</span>
-            <select
-              className="select"
-              value={projectDraft.productionLineId}
-              disabled={!canWrite || !projectDraft.workshopId}
-              onChange={event => setProjectDraft({ ...projectDraft, productionLineId: event.target.value })}
-            >
-              <option value="">车间级项目</option>
-              {productionLines.map(line => (
-                <option key={line.id} value={idOf(line.id)}>{hierarchyLabel(line)}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">项目名称</span>
-            <input className="input" value={projectDraft.name} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, name: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">项目编号</span>
-            <input className="input" value={projectDraft.code} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, code: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">状态</span>
-            <select className="select" value={projectDraft.status} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, status: event.target.value })}>
-              {['planning', 'active', 'paused', 'completed', 'archived'].map(status => (
-                <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="field-label">负责人</span>
-            <input
-              className="input"
-              list="base-config-owner-candidates"
-              value={projectDraft.ownerName}
-              disabled={!canWrite}
-              onChange={event => setProjectDraft({ ...projectDraft, ownerName: event.target.value })}
-            />
-            <datalist id="base-config-owner-candidates">
-              {data.ownerCandidates.map(owner => <option key={owner.idaasId} value={owner.displayName} />)}
-            </datalist>
-          </label>
-          <label>
-            <span className="field-label">计划开始</span>
-            <input className="input" type="date" value={projectDraft.plannedStartDate} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, plannedStartDate: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">计划结束</span>
-            <input className="input" type="date" value={projectDraft.plannedEndDate} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, plannedEndDate: event.target.value })} />
-          </label>
-          <label className="lg:col-span-3">
-            <span className="field-label">项目说明</span>
-            <textarea className="input min-h-24" value={projectDraft.description} disabled={!canWrite} onChange={event => setProjectDraft({ ...projectDraft, description: event.target.value })} />
-          </label>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button
-            className="btn btn-primary"
-            type="button"
-            disabled={!canWrite || savingKey === 'project'}
-            onClick={() => void save('project', () => onUpdateProject(projectDraft))}
-          >
-            <Save className="h-4 w-4" />
-            {savingKey === 'project' ? '保存中' : '保存项目'}
-          </button>
-          {message ? <span className="text-sm text-ink-muted">{message}</span> : null}
-        </div>
-      </section>
-
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -8658,23 +9225,20 @@ function BaseConfigView({
             </thead>
             <tbody>
               {visiblePhases.map((phase, index) => {
-                const draft = phaseDrafts[idOf(phase.id)];
                 const phaseItems = data.checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
                 const completedCount = phaseItems.filter(item => isComplete(item.status)).length;
-                const active = selectedPhaseId === idOf(phase.id);
                 return (
                   <tr
                     key={phase.id}
-                    className={`cursor-pointer transition ${active ? 'bg-primary/10' : 'hover:bg-surface-soft'}`}
+                    className="cursor-pointer transition hover:bg-surface-soft"
                     tabIndex={0}
-                    onClick={() => selectPhaseForConfig(phase)}
+                    onClick={() => void phaseEditor.openRecord(phase.id)}
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
-                        selectPhaseForConfig(phase);
+                        void phaseEditor.openRecord(phase.id);
                       }
                     }}
-                    aria-selected={active}
                   >
                     <td>{index + 1}</td>
                     <td className="min-w-[180px]">
@@ -8683,8 +9247,8 @@ function BaseConfigView({
                     </td>
                     <td>{phase.code}</td>
                     <td className="min-w-[190px]">{formatDate(phase.plannedStartDate)} 至 {formatDate(phase.plannedEndDate)}</td>
-                    <td><StatusPill status={draft?.status ?? phase.status} /></td>
-                    <td>{draft?.isActive ? '启用' : '停用'}</td>
+                    <td><StatusPill status={phase.status} /></td>
+                    <td>{phase.isActive === false ? '停用' : '启用'}</td>
                     <td>{phaseItems.length} 项</td>
                     <td>{completedCount}/{phaseItems.length}</td>
                     <td>
@@ -8693,9 +9257,10 @@ function BaseConfigView({
                         type="button"
                         onClick={event => {
                           event.stopPropagation();
-                          selectPhaseForConfig(phase);
+                          void phaseEditor.openRecord(phase.id);
                         }}
                         aria-label={`配置阶段 ${phase.name}`}
+                        aria-haspopup="dialog"
                       >
                         配置
                       </button>
@@ -8711,173 +9276,7 @@ function BaseConfigView({
             </tbody>
           </table>
         </div>
-        {selectedConfigPhase && selectedPhaseDraft ? (
-          <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-ink">{selectedConfigPhase.name} 阶段维护</div>
-                <div className="text-xs text-ink-muted">Key: {selectedConfigPhase.code} · {selectedPhaseAllCheckItems.length} 项检查配置</div>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-ink-muted">
-                <input
-                  type="checkbox"
-                  checked={selectedPhaseDraft.isActive}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, isActive: event.target.checked }
-                    }))
-                  }
-                />
-                启用
-              </label>
-            </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-5">
-              <label>
-                <span className="field-label">阶段名称</span>
-                <input
-                  className="input"
-                  value={selectedPhaseDraft.name}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, name: event.target.value }
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span className="field-label">排序</span>
-                <input
-                  className="input"
-                  type="number"
-                  value={selectedPhaseDraft.sequence}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, sequence: event.target.value }
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span className="field-label">计划开始</span>
-                <input
-                  className="input"
-                  type="date"
-                  value={selectedPhaseDraft.plannedStartDate}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, plannedStartDate: event.target.value }
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span className="field-label">计划结束</span>
-                <input
-                  className="input"
-                  type="date"
-                  value={selectedPhaseDraft.plannedEndDate}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, plannedEndDate: event.target.value }
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span className="field-label">状态</span>
-                <select
-                  className="select"
-                  value={selectedPhaseDraft.status}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, status: event.target.value }
-                    }))
-                  }
-                >
-                  {['not_started', 'in_progress', 'blocked', 'completed'].map(status => (
-                    <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="lg:col-span-5">
-                <span className="field-label">阶段目标</span>
-                <textarea
-                  className="input min-h-20"
-                  value={selectedPhaseDraft.goal}
-                  disabled={!canWrite}
-                  onChange={event =>
-                    setPhaseDrafts(current => ({
-                      ...current,
-                      [idOf(selectedConfigPhase.id)]: { ...selectedPhaseDraft, goal: event.target.value }
-                    }))
-                  }
-                />
-              </label>
-            </div>
-            <div className="mt-3 flex flex-wrap items-end gap-2">
-              <button
-                className="btn btn-primary btn--sm"
-                type="button"
-                disabled={!canWrite || savingKey === `phase-${selectedConfigPhase.id}`}
-                onClick={() => void save(`phase-${selectedConfigPhase.id}`, () => onUpdatePhase(selectedConfigPhase, selectedPhaseDraft))}
-              >
-                <Save className="h-4 w-4" />
-                保存阶段
-              </button>
-              {selectedConfigPhase.canDelete === true ? (
-                <button
-                  className="btn btn-ghost btn--sm"
-                  type="button"
-                  disabled={!canWrite || savingKey === `phase-delete-${selectedConfigPhase.id}`}
-                  onClick={() => {
-                    if (window.confirm(`确认删除阶段「${selectedConfigPhase.name}」？`)) {
-                      void save(`phase-delete-${selectedConfigPhase.id}`, () => onDeletePhase(selectedConfigPhase));
-                    }
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除阶段
-                </button>
-              ) : null}
-              <label className="min-w-[220px]">
-                <span className="field-label">迁移到阶段</span>
-                <select
-                  className="select"
-                  value={transferTargetPhaseId}
-                  disabled={!canWrite || !selectedPhaseAllCheckItems.length}
-                  onChange={event => setTransferTargetPhaseId(event.target.value)}
-                >
-                  <option value="">选择目标阶段</option>
-                  {sortedPhases
-                    .filter(phase => idOf(phase.id) !== selectedPhaseId)
-                    .map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
-                </select>
-              </label>
-              <button
-                className="btn btn-ghost btn--sm"
-                type="button"
-                disabled={!canWrite || !transferTargetPhaseId || !selectedPhaseAllCheckItems.length || savingKey === 'phase-check-transfer'}
-                onClick={() => void save('phase-check-transfer', moveSelectedPhaseCheckItems)}
-                title={transferTargetPhase ? `迁移到 ${transferTargetPhase.name}` : undefined}
-              >
-                <Workflow className="h-4 w-4" />
-                {savingKey === 'phase-check-transfer' ? '迁移中' : '迁移本阶段检查项'}
-              </button>
-            </div>
-          </div>
-        ) : null}
+        {message ? <p role="status" className="mt-3 text-sm text-ink-muted">{message}</p> : null}
       </section>
 
       <section className="panel">
@@ -8885,7 +9284,7 @@ function BaseConfigView({
           <div>
             <p className="kicker">Checklist</p>
             <h2 className="text-xl font-semibold">模块 × 阶段矩阵</h2>
-            <p className="text-sm text-ink-muted">点击单元格后，下方只维护该模块在该阶段的检查项。</p>
+            <p className="text-sm text-ink-muted">矩阵只展示数量、完成与启用摘要；点击单元格在抽屉中维护该模块在该阶段的检查项。</p>
           </div>
           <span className="chip">{sortedInspectionModules.length} 模块 · {visiblePhases.length} 阶段</span>
         </div>
@@ -8917,7 +9316,7 @@ function BaseConfigView({
                       );
                       const completedCount = cellItems.filter(item => isComplete(item.status)).length;
                       const enabledCount = cellItems.filter(item => item.isActive !== false).length;
-                      const active = selectedPhaseId === idOf(phase.id) && selectedModuleId === idOf(module.id);
+                      const active = matrixCell?.phaseId === idOf(phase.id) && matrixCell?.moduleId === idOf(module.id);
                       return (
                         <td key={`${module.id}-${phase.id}`} className="min-w-[220px] align-top">
                           <button
@@ -8925,8 +9324,9 @@ function BaseConfigView({
                               active ? 'border-primary bg-primary/10' : 'border-outline bg-surface-soft hover:border-primary/50'
                             }`}
                             type="button"
-                            onClick={() => selectMatrixCellForConfig(module, phase)}
+                            onClick={() => setMatrixCell({ moduleId: idOf(module.id), phaseId: idOf(phase.id) })}
                             aria-label={`配置 ${module.name} ${phase.name} 检查项`}
+                            aria-haspopup="dialog"
                           >
                             {cellItems.length ? (
                               <>
@@ -8943,7 +9343,7 @@ function BaseConfigView({
                             ) : (
                               <>
                                 <div className="font-semibold text-ink-muted">未配置</div>
-                                <div className="mt-2 text-xs text-ink-muted">{canWrite ? '点击后在下方新增检查项' : '只读查看'}</div>
+                                <div className="mt-2 text-xs text-ink-muted">{canWrite ? '点击打开抽屉新增检查项' : '只读查看'}</div>
                               </>
                             )}
                           </button>
@@ -8961,305 +9361,12 @@ function BaseConfigView({
           </div>
         )}
       </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="kicker">Checklist</p>
-            <h2 className="text-xl font-semibold">所选单元检查项配置</h2>
-            <p className="text-sm text-ink-muted">
-              {selectedConfigPhase && selectedConfigModule
-                ? `${selectedConfigModule.name} / ${selectedConfigPhase.name} · ${selectedConfigPhase.code}`
-                : '先在上方矩阵选择模块和阶段'}
-            </p>
-          </div>
-          <span className="chip">{visibleCheckItems.length}/{selectedCellAllCheckItems.length} 项</span>
-        </div>
-        <div className="mt-4">
-          <FilterShell>
-            <label className="xl:col-span-2">
-              <span className="field-label">检查项搜索</span>
-              <input className="input" value={checkFilters.keyword} onChange={event => setCheckFilters({ ...checkFilters, keyword: event.target.value })} placeholder="标题、标签、负责人" aria-label="配置中心检查项搜索" />
-            </label>
-            <label>
-              <span className="field-label">矩阵模块</span>
-              <select
-                className="select"
-                value={selectedModuleId}
-                onChange={event => {
-                  const module = sortedInspectionModules.find(item => idOf(item.id) === event.target.value);
-                  if (module && selectedConfigPhase) {
-                    selectMatrixCellForConfig(module, selectedConfigPhase);
-                  } else {
-                    setSelectedModuleConfigId(event.target.value);
-                  }
-                }}
-              >
-                {sortedInspectionModules.map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span className="field-label">状态</span>
-              <select className="select" value={checkFilters.status} onChange={event => setCheckFilters({ ...checkFilters, status: event.target.value })}>
-                <option value="">全部状态</option>
-                {checkStatusOptions.map(status => <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>)}
-              </select>
-            </label>
-            <label>
-              <span className="field-label">负责人</span>
-              <input className="input" value={checkFilters.owner} onChange={event => setCheckFilters({ ...checkFilters, owner: event.target.value })} placeholder="负责人" aria-label="配置中心检查项负责人筛选" />
-            </label>
-            <label>
-              <span className="field-label">启用状态</span>
-              <select className="select" value={checkFilters.activeState} onChange={event => setCheckFilters({ ...checkFilters, activeState: event.target.value })}>
-                <option value="">全部</option>
-                <option value="enabled">启用</option>
-                <option value="disabled">停用</option>
-              </select>
-            </label>
-            <label>
-              <span className="field-label">计划开始</span>
-              <input className="input" type="date" value={checkFilters.startDate} onChange={event => setCheckFilters({ ...checkFilters, startDate: event.target.value })} />
-            </label>
-            <label>
-              <span className="field-label">计划结束</span>
-              <input className="input" type="date" value={checkFilters.endDate} onChange={event => setCheckFilters({ ...checkFilters, endDate: event.target.value })} />
-            </label>
-          </FilterShell>
-        </div>
-        {newCheckDraft ? (
-          <div className="mt-4 rounded-lg border border-outline bg-surface-soft p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-ink">新增检查项</div>
-                <div className="text-xs text-ink-muted">默认归属 {selectedNewCheckPhase?.name ?? '当前阶段'} / {selectedNewCheckModule?.name ?? '当前模块'}。</div>
-              </div>
-              <ReadOnlyNotice canWrite={canWrite} />
-            </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-4">
-              <label className="lg:col-span-2">
-                <span className="field-label">检查项标题</span>
-                <input className="input" value={newCheckDraft.title} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, title: event.target.value })} placeholder="输入检查项标题" aria-label="新增检查项标题" />
-              </label>
-              <label>
-                <span className="field-label">阶段</span>
-                <select
-                  className="select"
-                  value={newCheckDraft.projectPhaseId}
-                  disabled={!canWrite}
-                  onChange={event => {
-                    const phase = sortedPhases.find(item => idOf(item.id) === event.target.value);
-                    setSelectedPhaseConfigId(event.target.value);
-                    setNewCheckDraft({
-                      ...newCheckDraft,
-                      projectPhaseId: event.target.value,
-                      plannedStartDate: dateInputValue(phase?.plannedStartDate),
-                      plannedEndDate: dateInputValue(phase?.plannedEndDate)
-                    });
-                  }}
-                >
-                  {(visiblePhases.length ? visiblePhases : sortedPhases).map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
-                </select>
-              </label>
-              <label>
-                <span className="field-label">模块</span>
-                <select
-                  className="select"
-                  value={newCheckDraft.moduleId}
-                  disabled={!canWrite}
-                  onChange={event => {
-                    const nextModule = data.inspectionModules.find(module => idOf(module.id) === event.target.value);
-                    const nextOwners = nextModule ? ownersOfModule(nextModule) : [];
-                    setSelectedModuleConfigId(event.target.value);
-                    setNewCheckDraft({
-                      ...newCheckDraft,
-                      moduleId: event.target.value,
-                      owners: nextOwners
-                    });
-                  }}
-                >
-                  {bySequence(data.inspectionModules).map(module => <option key={module.id} value={idOf(module.id)}>{module.name}</option>)}
-                </select>
-              </label>
-              <label>
-                <span className="field-label">标签</span>
-                <input className="input" value={newCheckDraft.tags} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, tags: event.target.value })} placeholder="逗号分隔" />
-              </label>
-              <label>
-                <span className="field-label">计划开始</span>
-                <input className="input" type="date" value={newCheckDraft.plannedStartDate} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, plannedStartDate: event.target.value })} />
-              </label>
-              <label>
-                <span className="field-label">计划结束</span>
-                <input className="input" type="date" value={newCheckDraft.plannedEndDate} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, plannedEndDate: event.target.value })} />
-              </label>
-              <div>
-                <span className="field-label">责任人</span>
-                <OwnerListEditor
-                  owners={newCheckDraft.owners}
-                  ownerCandidates={data.ownerCandidates}
-                  canWrite={canWrite}
-                  candidateLabel="配置中心新增 IDaaS 责任人"
-                  onChange={next => setNewCheckDraft({ ...newCheckDraft, ...next })}
-                />
-              </div>
-              <label>
-                <span className="field-label">状态</span>
-                <select className="select" value={newCheckDraft.status} disabled={!canWrite} onChange={event => setNewCheckDraft({ ...newCheckDraft, status: event.target.value })}>
-                  {['pending', 'in_progress', 'blocked', 'done', 'pass', 'fail', 'na', 'waived'].map(status => (
-                    <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="mt-3">
-              <button
-                className="btn btn-primary btn--sm"
-                type="button"
-                disabled={!canWrite || savingKey === 'check-create' || !selectedPhaseId || !newCheckDraft.title.trim() || !newCheckDraft.projectPhaseId || !newCheckDraft.moduleId}
-                onClick={() => void save('check-create', () => onCreateCheckItem(newCheckDraft))}
-                aria-label="新增检查项"
-              >
-                <Plus className="h-4 w-4" />
-                {savingKey === 'check-create' ? '新增中' : '新增检查项'}
-              </button>
-            </div>
-          </div>
-        ) : null}
-        <div className="table-shell mt-4">
-          <table className="data-table min-w-[1380px]">
-            <thead>
-              <tr>
-                <th>检查项</th>
-                <th>阶段</th>
-                <th>模块</th>
-                <th>标签</th>
-                <th>计划开始</th>
-                <th>计划结束</th>
-                <th>负责人</th>
-                <th>状态</th>
-                <th>启用</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleCheckItems.map(item => {
-                const draft = checkItemDrafts[idOf(item.id)];
-                if (!draft) return null;
-                return (
-                  <tr key={item.id}>
-                    <td className="min-w-[240px]">
-                      <input className="input" value={draft.title} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, title: event.target.value } }))} />
-                    </td>
-                    <td className="min-w-[180px]">
-                      <select
-                        className="select"
-                        value={draft.projectPhaseId}
-                        disabled={!canWrite}
-                        onChange={event => {
-                          const phase = sortedPhases.find(item => idOf(item.id) === event.target.value);
-                          setCheckItemDrafts(current => ({
-                            ...current,
-                            [idOf(item.id)]: {
-                              ...draft,
-                              projectPhaseId: event.target.value,
-                              plannedStartDate: draft.plannedStartDate || dateInputValue(phase?.plannedStartDate),
-                              plannedEndDate: draft.plannedEndDate || dateInputValue(phase?.plannedEndDate)
-                            }
-                          }));
-                        }}
-                      >
-                        {sortedPhases.map(phase => <option key={phase.id} value={idOf(phase.id)}>{phase.name}</option>)}
-                      </select>
-                    </td>
-                    <td className="min-w-[180px]">
-                      <select className="select" value={draft.moduleId} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, moduleId: event.target.value } }))}>
-                        {bySequence(data.inspectionModules).map(module => (
-                          <option key={module.id} value={idOf(module.id)}>{module.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="min-w-[180px]">
-                      <input className="input" value={draft.tags} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, tags: event.target.value } }))} />
-                    </td>
-                    <td className="min-w-[150px]">
-                      <input className="input" type="date" value={draft.plannedStartDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedStartDate: event.target.value } }))} />
-                    </td>
-                    <td className="min-w-[150px]">
-                      <input className="input" type="date" value={draft.plannedEndDate} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, plannedEndDate: event.target.value } }))} />
-                    </td>
-                    <td className="min-w-[170px]">
-                      <CompactOwnerListEditor
-                        owners={draft.owners}
-                        candidateLabel={`配置中心 ${item.title} IDaaS 责任人`}
-                        isActive={ownerDrawerTarget?.kind === 'check' && ownerDrawerTarget.id === idOf(item.id)}
-                        onOpen={() => setOwnerDrawerTarget({ kind: 'check', id: idOf(item.id) })}
-                      />
-                    </td>
-                    <td className="min-w-[160px]">
-                      <select className="select" value={draft.status} disabled={!canWrite} onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, status: event.target.value } }))}>
-                        {['pending', 'in_progress', 'blocked', 'done', 'pass', 'fail', 'na', 'waived'].map(status => (
-                          <option key={status} value={status}>{STATUS_LABEL[status] ?? status}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <label className="flex items-center gap-2 text-sm text-ink-muted">
-                        <input
-                          type="checkbox"
-                          checked={draft.isActive}
-                          disabled={!canWrite}
-                          onChange={event => setCheckItemDrafts(current => ({ ...current, [idOf(item.id)]: { ...draft, isActive: event.target.checked } }))}
-                        />
-                        启用
-                      </label>
-                    </td>
-                    <td>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          className="btn btn-primary btn--sm"
-                          type="button"
-                          disabled={!canWrite || savingKey === `check-${item.id}`}
-                          onClick={() => void save(`check-${item.id}`, () => onUpdateCheckItem(item, draft))}
-                        >
-                          <Save className="h-4 w-4" />
-                          保存
-                        </button>
-                        {item.canDelete === true ? (
-                          <button
-                            className="btn btn-ghost btn--sm"
-                            type="button"
-                            disabled={!canWrite || savingKey === `check-delete-${item.id}`}
-                            onClick={() => {
-                              if (window.confirm(`确认删除检查项「${item.title}」？`)) {
-                                void save(`check-delete-${item.id}`, () => onDeleteCheckItem(item));
-                              }
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            删除
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!visibleCheckItems.length ? (
-                <tr>
-                  <td colSpan={10} className="text-center text-ink-muted">该模块阶段单元暂无检查项，可在上方新增。</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
       <section className="panel">
         <div className="panel-header">
           <div>
             <p className="kicker">Base Data</p>
             <h2 className="text-xl font-semibold">模块负责人配置</h2>
-            <p className="text-sm text-ink-muted">为检查模块维护默认负责人；需要换人时直接打开搜索抽屉，项目模板源数据在侧边栏“项目模板”模块维护。</p>
+            <p className="text-sm text-ink-muted">为检查模块维护默认负责人；保存时单事务同步当前项目该模块的全部检查项，项目模板源数据在侧边栏“项目模板”模块维护。</p>
           </div>
           <span className="chip">{data.inspectionModules.length} 模块</span>
         </div>
@@ -9277,7 +9384,7 @@ function BaseConfigView({
             <tbody>
               {bySequence(data.inspectionModules).map(module => {
                 const moduleId = idOf(module.id);
-                const draftOwners = moduleOwnerDrafts[moduleId] ?? ownersOfModule(module);
+                const moduleOwners = ownersOfModule(module);
                 const moduleCheckItems = data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
                 return (
                   <tr key={module.id}>
@@ -9287,38 +9394,29 @@ function BaseConfigView({
                     </td>
                     <td className="whitespace-nowrap text-ink-muted">{moduleCheckItems.length} 项</td>
                     <td className="min-w-[180px]">
-                      <CompactOwnerListEditor
-                        owners={draftOwners}
-                        candidateLabel={`检查模块 ${module.name} IDaaS 负责人`}
-                        isActive={ownerDrawerTarget?.kind === 'module' && ownerDrawerTarget.id === moduleId}
-                        onOpen={() => setOwnerDrawerTarget({ kind: 'module', id: moduleId })}
-                      />
+                      {moduleOwners.length ? (
+                        <div className="flex items-center gap-2">
+                          <OwnerAvatarStack owners={moduleOwners} maxVisible={4} />
+                          <span className="text-xs text-ink-muted">{moduleOwners.map(owner => owner.displayName || owner.idaasId).join('、')}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-ink-muted">未设置</span>
+                      )}
                     </td>
                     <td className="whitespace-nowrap">
                       <StatusPill status={module.isActive ? 'active' : 'disabled'} />
                     </td>
-                    <td className="min-w-[260px]">
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          className="btn btn-primary btn--sm"
-                          type="button"
-                          disabled={!canWrite || savingKey === `module-owner-${module.id}`}
-                          onClick={() => void save(`module-owner-${module.id}`, () => onUpdateModuleOwner(module, draftOwners))}
-                        >
-                          <Save className="h-4 w-4" />
-                          保存负责人
-                        </button>
-                        <button
-                          className="btn btn-ghost btn--sm"
-                          type="button"
-                          disabled={!canWrite || !moduleCheckItems.length || !draftOwners.length || savingKey === `module-owner-apply-${module.id}`}
-                          onClick={() => void save(`module-owner-apply-${module.id}`, () => onApplyModuleOwnerToCheckItems(module, draftOwners))}
-                          title={moduleCheckItems.length ? `应用到 ${moduleCheckItems.length} 个检查项` : '该模块暂无检查项'}
-                        >
-                          <Workflow className="h-4 w-4" />
-                          应用到检查项
-                        </button>
-                      </div>
+                    <td className="min-w-[160px]">
+                      <button
+                        className="btn btn-ghost btn--sm"
+                        type="button"
+                        onClick={() => setModuleOwnerTargetId(moduleId)}
+                        aria-label={`配置模块负责人 ${module.name}`}
+                        aria-haspopup="dialog"
+                      >
+                        <Settings2 className="h-4 w-4" />
+                        配置
+                      </button>
                     </td>
                   </tr>
                 );
@@ -9332,16 +9430,44 @@ function BaseConfigView({
           </table>
         </div>
       </section>
-      <OwnerEditorDrawer
-        open={Boolean(ownerDrawerConfig)}
-        title={ownerDrawerConfig?.title ?? '负责人'}
-        subtitle={ownerDrawerConfig?.subtitle}
-        owners={ownerDrawerConfig?.owners ?? []}
+      <PhaseConfigDrawer
+        editor={phaseEditor}
+        phases={sortedPhases}
+        checkItems={data.checkItems}
+        canWrite={canWrite}
+        onSave={(phase, draft) => onUpdatePhase(phase, draft)}
+        onDelete={onDeletePhase}
+        onMigrateItems={onMigratePhaseCheckItems}
+      />
+      <MatrixCellDrawer
+        project={project}
+        cell={matrixCell}
+        phases={sortedPhases}
+        modules={sortedInspectionModules}
+        checkItems={data.checkItems}
         ownerCandidates={data.ownerCandidates}
         canWrite={canWrite}
-        candidateLabel={ownerDrawerConfig?.candidateLabel ?? '配置中心 IDaaS 负责人'}
-        onChange={next => ownerDrawerConfig?.onChange(next)}
-        onClose={() => setOwnerDrawerTarget(null)}
+        onCreate={onCreateCheckItem}
+        onUpdate={onUpdateCheckItem}
+        onDelete={onDeleteCheckItem}
+        onClose={() => setMatrixCell(null)}
+      />
+      <ModuleOwnerDrawer
+        module={moduleOwnerTarget}
+        projectName={project?.name ?? ''}
+        affectedCount={moduleOwnerAffectedCount}
+        ownerCandidates={data.ownerCandidates}
+        canWrite={canWrite}
+        onApply={async (module, owners) => {
+          const result = await onApplyModuleOwner(module, owners);
+          setMessage(
+            result.cleared
+              ? `已清空模块「${module.name}」默认负责人，并同步清空 ${result.affectedCount} 个检查项。`
+              : `已保存模块「${module.name}」负责人，并同步 ${result.affectedCount} 个检查项。`
+          );
+          return result;
+        }}
+        onClose={() => setModuleOwnerTargetId('')}
       />
     </div>
   );
@@ -9555,44 +9681,21 @@ export default function App() {
     }
   };
 
-  const handleUpdateModuleOwner = async (module: InspectionModule, owners: CheckItemOwner[]) => {
-    if (!canWrite) return;
+  const handleApplyModuleOwner = async (
+    module: InspectionModule,
+    owners: CheckItemOwner[]
+  ): Promise<{ affectedCount: number; cleared: boolean }> => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
+    if (!workspace.selectedProject) throw new Error('请先在配置中心选择项目实例。');
     try {
-      await updateInspectionModuleOwner(module.id, {
-        owners: normalizeOwners(owners),
-        metadata: module.metadata
+      const result = await applyInspectionModuleOwner(module.id, {
+        projectId: workspace.selectedProject.id,
+        owners: normalizeOwners(owners)
       });
       await loadData();
+      return { affectedCount: result.affectedCount, cleared: result.cleared };
     } catch (err) {
-      setError(mutationErrorMessage(err, '模块负责人更新失败'));
-      throw err;
-    }
-  };
-
-  const handleApplyModuleOwnerToCheckItems = async (module: InspectionModule, owners: CheckItemOwner[]) => {
-    if (!canWrite) return;
-    const nextOwners = normalizeOwners(owners);
-    if (!nextOwners.length) return;
-    const moduleCheckItems = workspace.checkItems.filter(item => idOf(item.moduleId) === idOf(module.id));
-    try {
-      await updateInspectionModuleOwner(module.id, {
-        owners: nextOwners,
-        metadata: module.metadata
-      });
-      for (const item of moduleCheckItems) {
-        await updateCheckItemOwner(item.id, {
-          owners: nextOwners,
-          metadata: {
-            ...(item.metadata ?? {}),
-            owner_source: 'module',
-            owner_module_id: module.id,
-            owner_module_code: module.code
-          }
-        });
-      }
-      await loadData();
-    } catch (err) {
-      setError(mutationErrorMessage(err, '模块负责人应用失败'));
+      setError(mutationErrorMessage(err, '模块负责人保存失败'));
       throw err;
     }
   };
@@ -9871,14 +9974,14 @@ export default function App() {
     }
   };
 
-  const handleUpdateProject = async (draft: ProjectConfigDraft) => {
-    if (!canWrite || !workspace.selectedProject) return;
+  const handleUpdateProject = async (project: Project, draft: ProjectConfigDraft): Promise<Project> => {
+    if (!canWrite) throw new Error('当前账号没有写权限，已保留只读访问。');
     const factory = workspace.hierarchy.factories.find(item => idOf(item.id) === draft.factoryId);
     const workshop = workspace.hierarchy.workshops.find(item => idOf(item.id) === draft.workshopId);
     const productionLine = workspace.hierarchy.productionLines.find(item => idOf(item.id) === draft.productionLineId);
 
     try {
-      await updateProject(workspace.selectedProject.id, {
+      const updated = await updateProject(project.id, {
         name: draft.name,
         code: draft.code,
         status: draft.status,
@@ -9886,25 +9989,36 @@ export default function App() {
         factoryId: draft.factoryId || null,
         workshopId: draft.workshopId || null,
         productionLineId: draft.productionLineId || null,
-        plant: factory?.name ?? workspace.selectedProject.plant,
+        plant: factory?.name ?? project.plant,
         workshopName: workshop?.name,
         lineName: productionLine?.name ?? '车间级项目',
         ownerName: draft.ownerName,
         plannedStartDate: draft.plannedStartDate,
         plannedEndDate: draft.plannedEndDate,
-        metadata: workspace.selectedProject.metadata
+        metadata: project.metadata
       });
-      await loadData(workspace.selectedProject.id);
+      await loadData(idOf(workspace.selectedProject?.id) === idOf(project.id) ? project.id : workspace.selectedProject?.id);
+      return updated;
     } catch (err) {
       setError(mutationErrorMessage(err, '项目基础信息保存失败'));
       throw err;
     }
   };
 
-  const handleUpdatePhase = async (phase: ProjectPhase, draft: PhaseConfigDraft) => {
-    if (!canWrite) return;
+  const handleProjectDeleted = (project: Project) => {
+    const wasSelected = idOf(workspace.selectedProject?.id) === idOf(project.id);
+    if (wasSelected) {
+      setSelectedProjectId(undefined);
+      void loadData(undefined);
+    } else {
+      void loadData();
+    }
+  };
+
+  const handleUpdatePhase = async (phase: ProjectPhase, draft: PhaseConfigDraft): Promise<ProjectPhase> => {
+    if (!canWrite) throw new Error('readonly');
     try {
-      await updateProjectPhase(phase.id, {
+      const updated = await updateProjectPhase(phase.id, {
         name: draft.name,
         sequence: Number(draft.sequence),
         goal: draft.goal,
@@ -9915,8 +10029,41 @@ export default function App() {
         metadata: phase.metadata
       });
       await loadData();
+      return updated;
     } catch (err) {
       setError(mutationErrorMessage(err, '阶段配置保存失败'));
+      throw err;
+    }
+  };
+
+  const handleMigratePhaseCheckItems = async (phase: ProjectPhase, targetPhaseId: string): Promise<number> => {
+    if (!canWrite || !workspace.selectedProject) return 0;
+    const target = workspace.phases.find(item => idOf(item.id) === targetPhaseId);
+    if (!target || idOf(target.id) === idOf(phase.id)) return 0;
+    const items = workspace.checkItems.filter(item => idOf(item.projectPhaseId) === idOf(phase.id));
+    try {
+      for (const item of items) {
+        const draft = checkItemConfigDraftFrom(item);
+        await updateCheckItem(item.id, {
+          title: draft.title,
+          moduleId: draft.moduleId,
+          projectPhaseId: targetPhaseId,
+          tags: draft.tags.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean),
+          plannedStartDate: draft.plannedStartDate || dateInputValue(target.plannedStartDate),
+          plannedEndDate: draft.plannedEndDate || dateInputValue(target.plannedEndDate),
+          ownerName: undefined,
+          ownerIdaasId: undefined,
+          owners: ownersFromDraft(draft),
+          status: draft.status,
+          isActive: draft.isActive,
+          progressPercent: item.progressPercent,
+          metadata: item.metadata
+        });
+      }
+      await loadData();
+      return items.length;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项迁移失败'));
       throw err;
     }
   };
@@ -10272,14 +10419,15 @@ export default function App() {
           }}
           onCreateProject={phaseTemplateId => void handleCreateProject('baseConfig', phaseTemplateId)}
           onUpdateProject={handleUpdateProject}
+          onProjectDeleted={handleProjectDeleted}
           onSeedTemplate={handleSeedTemplate}
           onUpdatePhase={handleUpdatePhase}
           onDeletePhase={handleDeletePhase}
+          onMigratePhaseCheckItems={handleMigratePhaseCheckItems}
           onCreateCheckItem={handleCreateCheckItemConfig}
           onUpdateCheckItem={handleUpdateCheckItemConfig}
           onDeleteCheckItem={handleDeleteCheckItem}
-          onUpdateModuleOwner={handleUpdateModuleOwner}
-          onApplyModuleOwnerToCheckItems={handleApplyModuleOwnerToCheckItems}
+          onApplyModuleOwner={handleApplyModuleOwner}
         />
       );
     }
