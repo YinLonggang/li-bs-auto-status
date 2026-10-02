@@ -2225,6 +2225,126 @@ export async function applyInspectionModuleOwner(
   };
 }
 
+export interface ModuleReferenceCheckItem {
+  id: number;
+  project: { id: number; code: string; name: string };
+  phase: { id: number | null; phaseKey: string; name: string };
+  title: string;
+  status: string;
+  isEnabled: boolean;
+  canDelete: boolean;
+  source: string;
+}
+
+export interface ModuleReferenceChecklistTemplate {
+  id: number;
+  code: string;
+  name: string;
+  phaseTemplateId: number | null;
+}
+
+export interface ModuleReferences {
+  counts: {
+    checkItems: number;
+    checkItemsEnabled: number;
+    checkItemsDisabled: number;
+    checklistTemplates: number;
+  };
+  checkItems: ModuleReferenceCheckItem[];
+  checklistTemplates: ModuleReferenceChecklistTemplate[];
+}
+
+const normalizeModuleReferenceCheckItem = (input: unknown): ModuleReferenceCheckItem => {
+  const record = asRecord(input);
+  const project = asRecord(record.project);
+  const phase = asRecord(record.phase);
+  return {
+    id: Number(record.id ?? 0),
+    project: {
+      id: Number(project.id ?? 0),
+      code: String(project.code ?? ''),
+      name: String(project.name ?? '')
+    },
+    phase: {
+      id: phase.id == null ? null : Number(phase.id),
+      phaseKey: String(phase.phase_key ?? ''),
+      name: String(phase.name ?? '')
+    },
+    title: String(record.title ?? ''),
+    status: String(record.status ?? ''),
+    isEnabled: Boolean(record.is_enabled),
+    canDelete: Boolean(record.can_delete),
+    source: String(record.source ?? '')
+  };
+};
+
+/**
+ * 模块引用明细（只读）：跨全部项目的检查项（含停用项、来源与 canDelete 标记）
+ * 与清单模板；计数口径与模块删除门禁一致（全局，停用不解除阻断）。
+ */
+export async function fetchModuleReferences(
+  moduleId: string | number,
+  signal?: AbortSignal
+): Promise<ModuleReferences> {
+  const raw = asRecord(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(
+      `/inspection-modules/${moduleId}/references/`,
+      { signal }
+    )
+  ));
+  const counts = asRecord(raw.counts);
+  return {
+    counts: {
+      checkItems: Number(counts.check_items ?? 0),
+      checkItemsEnabled: Number(counts.check_items_enabled ?? 0),
+      checkItemsDisabled: Number(counts.check_items_disabled ?? 0),
+      checklistTemplates: Number(counts.checklist_templates ?? 0)
+    },
+    checkItems: asArray(raw.check_items).map(normalizeModuleReferenceCheckItem),
+    checklistTemplates: asArray(raw.checklist_templates).map((item) => {
+      const record = asRecord(item);
+      return {
+        id: Number(record.id ?? 0),
+        code: String(record.code ?? ''),
+        name: String(record.name ?? ''),
+        phaseTemplateId:
+          record.phase_template_id == null ? null : Number(record.phase_template_id)
+      };
+    })
+  };
+}
+
+export interface MigrateModuleCheckItemsResult {
+  movedCount: number;
+  remainingCount: number;
+}
+
+/**
+ * 把引用本模块的项目检查项改挂到目标模块（itemIds 省略时迁移全部），
+ * 解除模块删除阻断；模板来源检查项同样可迁移（其解除引用的唯一路径）。
+ */
+export async function migrateModuleCheckItems(
+  moduleId: string | number,
+  payload: { targetModuleId: string | number; itemIds?: number[] }
+): Promise<MigrateModuleCheckItemsResult> {
+  const raw = asRecord(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(
+      `/inspection-modules/${moduleId}/migrate-check-items/`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          target_module: payload.targetModuleId,
+          ...(payload.itemIds ? { item_ids: payload.itemIds } : {})
+        })
+      }
+    )
+  ));
+  return {
+    movedCount: Number(raw.moved_count ?? 0),
+    remainingCount: Number(raw.remaining_count ?? 0)
+  };
+}
+
 export async function updateCheckItemOwner(
   checkItemId: string | number,
   payload: { ownerName?: string; ownerIdaasId?: string; owners?: CheckItemOwner[]; metadata?: Record<string, unknown> }

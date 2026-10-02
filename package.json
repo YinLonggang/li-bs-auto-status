@@ -24,7 +24,8 @@
     "test:config-drawers": "node test-config-drawers.mjs",
     "test:attachment-content": "node test-attachment-content.mjs",
     "test:check-items": "node test-check-items.mjs",
-    "test:project-maintenance": "node test-project-maintenance.mjs"
+    "test:project-maintenance": "node test-project-maintenance.mjs",
+    "test:module-references": "node test-module-references.mjs"
   },
   "dependencies": {
     "@li-sicar/side-drawer": "file:vendor/li-sicar-side-drawer-0.1.0.tgz",
