@@ -1082,6 +1082,27 @@ export type UpdateProjectPhaseInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type CreateProjectPhaseInput = Omit<UpdateProjectPhaseInput, 'name'> & {
+  phaseKey: string;
+  name: string;
+};
+
+export type ImportLibraryItemsSkip = {
+  entry_id: number;
+  title: string;
+  reason: string;
+};
+
+export type ImportLibraryItemsResult = {
+  createdIds: number[];
+  createdCount: number;
+  skipped: ImportLibraryItemsSkip[];
+};
+
+export type DisableProjectModuleResult = {
+  disabledCount: number;
+};
+
 export type UpdateCheckItemInput = {
   title?: string;
   description?: string;
@@ -2443,6 +2464,70 @@ export async function deleteProjectPhase(phaseId: string | number) {
   await apiRequest<ApiEnvelope<unknown> | unknown>(`/project-phases/${phaseId}/`, {
     method: 'DELETE'
   });
+}
+
+export async function createProjectPhase(projectId: string | number, payload: CreateProjectPhaseInput) {
+  return normalizeProjectPhase(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/phases/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        phase_key: payload.phaseKey,
+        name: payload.name,
+        sort_order: payload.sequence,
+        goal: payload.goal,
+        description: payload.goal,
+        planned_start: payload.plannedStartDate,
+        planned_end: payload.plannedEndDate,
+        status: payload.status,
+        is_enabled: payload.isActive,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          notes: payload.goal
+        }
+      })
+    })
+  ));
+}
+
+export async function importLibraryItems(
+  projectId: string | number,
+  moduleId: string | number,
+  entryIds: Array<number | string>
+): Promise<ImportLibraryItemsResult> {
+  const raw = asRecord(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/import-library-items/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        module: Number(moduleId),
+        entry_ids: entryIds.map(id => Number(id)).filter(id => Number.isFinite(id))
+      })
+    })
+  ));
+  return {
+    createdIds: asArray(raw.created_ids).map(id => Number(id)).filter(id => Number.isFinite(id)),
+    createdCount: firstNumber(raw, ['createdCount', 'created_count']),
+    skipped: asArray(raw.skipped).map(item => {
+      const entry = asRecord(item);
+      return {
+        entry_id: firstNumber(entry, ['entry_id', 'entryId']),
+        title: firstString(entry, ['title']),
+        reason: firstString(entry, ['reason'])
+      };
+    })
+  };
+}
+
+export async function disableProjectModule(
+  projectId: string | number,
+  moduleId: string | number
+): Promise<DisableProjectModuleResult> {
+  const raw = asRecord(unwrap(
+    await apiRequest<ApiEnvelope<unknown> | unknown>(`/projects/${projectId}/disable-module/`, {
+      method: 'POST',
+      body: JSON.stringify({ module: Number(moduleId) })
+    })
+  ));
+  return { disabledCount: firstNumber(raw, ['disabledCount', 'disabled_count']) };
 }
 
 export async function fetchProjectPhase(phaseId: string | number, signal?: AbortSignal) {

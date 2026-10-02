@@ -23,7 +23,8 @@
     "test:drawer-interactions": "node test-drawer-interactions.mjs",
     "test:config-drawers": "node test-config-drawers.mjs",
     "test:attachment-content": "node test-attachment-content.mjs",
-    "test:check-items": "node test-check-items.mjs"
+    "test:check-items": "node test-check-items.mjs",
+    "test:project-maintenance": "node test-project-maintenance.mjs"
   },
   "dependencies": {
     "@li-sicar/side-drawer": "file:vendor/li-sicar-side-drawer-0.1.0.tgz",
