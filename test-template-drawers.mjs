@@ -227,6 +227,53 @@ class MemoryApi {
       this.modules.set(row.id, row);
       return json({ data: clone(row) }, 201);
     }
+    match = path.match(/^\/inspection-modules\/(\d+)\/references\/$/);
+    if (match && method === 'GET') {
+      const row = this.modules.get(Number(match[1]));
+      if (!row) return json({ detail: '检查模块不存在。' }, 404);
+      const items = [...this.checkItems.values()].filter(item => Number(item.moduleId) === row.id);
+      const templates = [...this.checklists.values()].filter(item => Number(item.module) === row.id);
+      return json({
+        counts: {
+          check_items: items.length,
+          check_items_enabled: items.filter(item => item.is_enabled !== false).length,
+          check_items_disabled: items.filter(item => item.is_enabled === false).length,
+          checklist_templates: templates.length
+        },
+        check_items: items.map(item => ({
+          id: item.id,
+          project: { id: item.project, code: `P-${item.project}`, name: `项目 P${item.project}` },
+          phase: { id: null, phase_key: item.phase_key ?? '', name: item.phase_name ?? '' },
+          title: item.title,
+          status: item.status ?? 'pending',
+          is_enabled: item.is_enabled !== false,
+          can_delete: item.can_delete !== false,
+          source: item.source ?? ''
+        })),
+        checklist_templates: templates.map(item => ({
+          id: item.id, code: item.code, name: item.name, phase_template_id: item.phase_template
+        }))
+      });
+    }
+    match = path.match(/^\/inspection-modules\/(\d+)\/migrate-check-items\/$/);
+    if (match && method === 'POST') {
+      const row = this.modules.get(Number(match[1]));
+      if (!row) return json({ detail: '检查模块不存在。' }, 404);
+      const payload = JSON.parse(call.body);
+      const targetId = Number(payload.target_module);
+      if (!this.modules.has(targetId)) return json({ target_module: ['目标模块不存在。'] }, 400);
+      if (targetId === row.id) return json({ target_module: ['目标模块不能是当前模块。'] }, 400);
+      let items = [...this.checkItems.values()].filter(item => Number(item.moduleId) === row.id);
+      if (Array.isArray(payload.item_ids)) {
+        const wanted = new Set(payload.item_ids.map(Number));
+        const foreign = payload.item_ids.filter(id => !items.some(item => item.id === Number(id)));
+        if (foreign.length) return json({ item_ids: [`检查项 ${foreign.join('、')} 不属于当前模块。`] }, 400);
+        items = items.filter(item => wanted.has(item.id));
+      }
+      for (const item of items) item.moduleId = targetId;
+      const remaining = [...this.checkItems.values()].filter(item => Number(item.moduleId) === row.id).length;
+      return json({ moved_count: items.length, remaining_count: remaining });
+    }
     match = path.match(/^\/inspection-modules\/(\d+)\/$/);
     if (match) {
       const row = this.modules.get(Number(match[1]));

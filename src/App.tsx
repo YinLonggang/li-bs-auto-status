@@ -83,6 +83,7 @@ import {
   fetchCheckItemLibraryEntry,
   fetchChecklistTemplate,
   fetchInspectionModule,
+  fetchModuleReferences,
   fetchPhaseTemplate,
   listCheckItems,
   fetchCheckItemAuditLogs,
@@ -98,6 +99,7 @@ import {
   listKeyIssues,
   listCollisionReports,
   listAuditLogs,
+  migrateModuleCheckItems,
   importCollisionReportsCsv,
   importKeyIssuesCsv,
   importLibraryItems,
@@ -123,6 +125,9 @@ import type {
   CreateChecklistTemplateInput,
   CreatePhaseTemplateInput,
   ImportLibraryItemsResult,
+  MigrateModuleCheckItemsResult,
+  ModuleReferenceCheckItem,
+  ModuleReferences,
   ProjectDeletionJob,
   ProjectDeletionState,
   UpdateChecklistTemplateInput,
@@ -8147,23 +8152,71 @@ function PhaseTemplateDrawer({ editor, canWrite, onSave, onCopy, onDelete }: {
   );
 }
 
-function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCount, checkItemCount, onSave, onDelete }: {
+const moduleReferenceSourceLabel = (source: string) =>
+  source === 'MODULES.items' ? '模板导入' : source === 'LIBRARY' ? '检查项库' : '手动创建';
+
+// 迁移/删除引用项的 400 是字段级 payload（{item_ids: [...]} / {target_module: [...]}），
+// 透传首条字段消息而不是笼统的「请求失败：400」。
+const moduleReferenceErrorMessage = (err: unknown, fallback: string) => {
+  if (err instanceof ApiError && err.status === 400 && err.details && typeof err.details === 'object') {
+    const fieldMessages = Object.values(err.details as Record<string, unknown>)
+      .flatMap(value => (Array.isArray(value) ? value : [value]))
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    if (fieldMessages.length) return fieldMessages.join('；');
+  }
+  return mutationErrorMessage(err, fallback);
+};
+
+function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, modules, onSave, onDelete, onFetchReferences, onMigrateCheckItems, onDeleteReferenceItem, onJumpToProjectCheckItems }: {
   editor: InspectionModuleEditor;
   canWrite: boolean;
   ownerCandidates: OwnerCandidate[];
-  checklistCount: number;
-  checkItemCount: number;
+  modules: InspectionModule[];
   onSave: (record: InspectionModule | null, draft: InspectionModuleDraft) => Promise<InspectionModule>;
   onDelete: (module: InspectionModule) => Promise<void>;
+  onFetchReferences: (moduleId: string | number) => Promise<ModuleReferences>;
+  onMigrateCheckItems: (moduleId: string | number, payload: { targetModuleId: string | number; itemIds?: number[] }) => Promise<MigrateModuleCheckItemsResult>;
+  onDeleteReferenceItem: (item: ModuleReferenceCheckItem) => Promise<void>;
+  onJumpToProjectCheckItems: (module: InspectionModule) => void;
 }) {
   const { draft, setDraft, record, loading, error, dirty } = editor;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [references, setReferences] = useState<ModuleReferences | null>(null);
+  const [referencesLoading, setReferencesLoading] = useState(false);
+  const [referencesError, setReferencesError] = useState('');
+  const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
+  const [migrateTargetId, setMigrateTargetId] = useState('');
   const sessionKey = editor.sessionKey;
+  const recordId = record ? idOf(record.id) : '';
 
   useEffect(() => {
     setActionError('');
   }, [sessionKey]);
+
+  // 引用明细与删除门禁同口径（全局、含停用项）：抽屉打开时自查，不依赖工作区计数。
+  useEffect(() => {
+    setReferences(null);
+    setReferencesError('');
+    setSelectedItemIds([]);
+    setMigrateTargetId('');
+    if (!editor.open || !recordId) {
+      setReferencesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setReferencesLoading(true);
+    onFetchReferences(recordId)
+      .then(result => { if (!cancelled) setReferences(result); })
+      .catch(err => { if (!cancelled) setReferencesError(mutationErrorMessage(err, '引用明细加载失败')); })
+      .finally(() => { if (!cancelled) setReferencesLoading(false); });
+    return () => { cancelled = true; };
+  }, [editor.open, recordId, sessionKey]);
+
+  const refetchReferences = async () => {
+    if (!recordId) return;
+    setReferences(await onFetchReferences(recordId));
+  };
 
   const sequenceValue = Number(draft.sequence);
   const invalid =
@@ -8171,6 +8224,22 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCo
     !draft.name.trim() ||
     !Number.isFinite(sequenceValue) ||
     sequenceValue < 0;
+
+  const checkItemCount = references?.counts.checkItems ?? 0;
+  const checklistCount = references?.counts.checklistTemplates ?? 0;
+  const migrateTargets = record
+    ? modules.filter(module => idOf(module.id) !== recordId)
+    : [];
+  const referenceGroups: { key: string; project: ModuleReferenceCheckItem['project']; items: ModuleReferenceCheckItem[] }[] = [];
+  for (const item of references?.checkItems ?? []) {
+    const key = idOf(item.project.id);
+    let group = referenceGroups.find(entry => entry.key === key);
+    if (!group) {
+      group = { key, project: item.project, items: [] };
+      referenceGroups.push(group);
+    }
+    group.items.push(item);
+  }
 
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
@@ -8189,13 +8258,49 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCo
     editor.accept(saved, inspectionModuleDraftFrom(saved));
   });
   const remove = () => {
-    if (!record || checkItemCount > 0) return;
+    if (!record || referencesLoading || referencesError || !references || checkItemCount > 0) return;
     const cascadeNote = checklistCount ? `，并级联删除其下 ${checklistCount} 组清单模板` : '';
     if (!window.confirm(`确认删除检查模块「${record.name}」${cascadeNote}？删除后不可恢复。`)) return;
     void run(async () => {
       await onDelete(record);
       editor.removed();
     });
+  };
+  const migrate = (itemIds?: number[]) => {
+    if (!record || !migrateTargetId) return;
+    const target = migrateTargets.find(module => idOf(module.id) === migrateTargetId);
+    if (!target) return;
+    const scopeNote = itemIds?.length ? `选中的 ${itemIds.length} 个检查项` : `全部 ${checkItemCount} 个引用检查项`;
+    if (!window.confirm(`确认把${scopeNote}迁移到模块「${target.name}」？迁移只改变检查项的模块归属，不删除任何数据。`)) return;
+    void run(async () => {
+      try {
+        await onMigrateCheckItems(record.id, { targetModuleId: target.id, ...(itemIds?.length ? { itemIds } : {}) });
+      } catch (err) {
+        setActionError(moduleReferenceErrorMessage(err, '迁移失败'));
+        return;
+      }
+      setSelectedItemIds([]);
+      await refetchReferences();
+    });
+  };
+  const removeReferenceItem = (item: ModuleReferenceCheckItem) => {
+    if (!item.canDelete) return;
+    if (!window.confirm(`确认删除检查项「${item.title}」（${item.project.name} / ${item.phase.name || item.phase.phaseKey}）？删除后不可恢复。`)) return;
+    void run(async () => {
+      try {
+        await onDeleteReferenceItem(item);
+      } catch (err) {
+        setActionError(moduleReferenceErrorMessage(err, '检查项删除失败'));
+        return;
+      }
+      setSelectedItemIds(current => current.filter(id => id !== item.id));
+      await refetchReferences();
+    });
+  };
+  const toggleItemSelected = (itemId: number) => {
+    setSelectedItemIds(current =>
+      current.includes(itemId) ? current.filter(id => id !== itemId) : [...current, itemId]
+    );
   };
   const requestClose = () => {
     if (busy) return;
@@ -8276,6 +8381,132 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCo
             </div>
           </div>
           {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
+          {record ? (
+            <section className="rounded-lg border border-line p-4" aria-label="项目引用清单">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold">项目引用清单</h3>
+                {references ? (
+                  <span className="text-xs text-ink-muted">
+                    共 {checkItemCount} 个检查项（启用 {references.counts.checkItemsEnabled} / 停用 {references.counts.checkItemsDisabled}）· {checklistCount} 组清单模板
+                  </span>
+                ) : null}
+                <div className="ml-auto flex items-center gap-2">
+                  {canWrite ? (
+                    <button
+                      className="btn btn-ghost btn--sm"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onJumpToProjectCheckItems(record)}
+                      title="切换到项目侧，在该模块下新增检查项"
+                    >
+                      <ArrowUpRight className="h-4 w-4" />
+                      去项目侧新增检查项
+                    </button>
+                  ) : null}
+                  <button
+                    className="btn btn-ghost btn--sm"
+                    type="button"
+                    disabled={busy || referencesLoading}
+                    onClick={() => void run(refetchReferences)}
+                    aria-label="刷新引用清单"
+                  >
+                    <RefreshCcw className="h-4 w-4" />
+                    刷新
+                  </button>
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-ink-muted">
+                引用统计覆盖全部项目（含已停用检查项）；停用不解除引用，迁移或删除才能清零。
+              </p>
+              {referencesLoading ? <p className="mt-2 text-xs text-ink-muted">正在加载引用明细…</p> : null}
+              {referencesError ? (
+                <div role="alert" className="mt-2 text-xs text-danger">
+                  {referencesError}
+                  <button className="btn btn-ghost btn--sm ml-2" type="button" disabled={busy} onClick={() => void run(refetchReferences)}>
+                    重试
+                  </button>
+                </div>
+              ) : null}
+              {references && !referencesLoading && !checkItemCount ? (
+                <p className="mt-2 text-xs text-ink-muted">无项目检查项引用，模块可删除。</p>
+              ) : null}
+              {referenceGroups.map(group => (
+                <div key={group.key} className="mt-3">
+                  <p className="text-xs font-medium text-ink">
+                    {group.project.name}（{group.project.code}）· {group.items.length} 项
+                  </p>
+                  <ul className="mt-1 space-y-1">
+                    {group.items.map(item => (
+                      <li key={item.id} className="flex flex-wrap items-center gap-2 text-xs">
+                        {canWrite ? (
+                          <input
+                            type="checkbox"
+                            checked={selectedItemIds.includes(item.id)}
+                            disabled={busy}
+                            onChange={() => toggleItemSelected(item.id)}
+                            aria-label={`选择检查项 ${item.title}`}
+                          />
+                        ) : null}
+                        <span className="font-medium text-ink">{item.title}</span>
+                        <span className="text-ink-muted">{item.phase.name || item.phase.phaseKey}</span>
+                        <span className="text-ink-muted">{STATUS_LABEL[item.status] ?? item.status}</span>
+                        {!item.isEnabled ? <span className="chip">已停用</span> : null}
+                        <span className="chip">{moduleReferenceSourceLabel(item.source)}</span>
+                        {!item.canDelete ? (
+                          <span className="chip" title="模板来源检查项不可删除，仅可迁移到其他模块">仅可迁移</span>
+                        ) : null}
+                        {canWrite && item.canDelete ? (
+                          <button
+                            className="btn btn-ghost btn--sm text-danger"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => removeReferenceItem(item)}
+                            aria-label={`删除检查项 ${item.title}`}
+                          >
+                            删除
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {canWrite && references && checkItemCount > 0 ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                  <select
+                    className="input w-auto"
+                    value={migrateTargetId}
+                    disabled={busy || !migrateTargets.length}
+                    onChange={event => setMigrateTargetId(event.target.value)}
+                    aria-label="迁移目标模块"
+                  >
+                    <option value="">选择目标模块…</option>
+                    {migrateTargets.map(module => (
+                      <option key={idOf(module.id)} value={idOf(module.id)}>
+                        {module.name}（{module.code}）
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn btn-ghost btn--sm"
+                    type="button"
+                    disabled={busy || !migrateTargetId || !selectedItemIds.length}
+                    onClick={() => migrate(selectedItemIds)}
+                  >
+                    迁移所选（{selectedItemIds.length}）
+                  </button>
+                  <button
+                    className="btn btn-ghost btn--sm"
+                    type="button"
+                    disabled={busy || !migrateTargetId || !checkItemCount}
+                    onClick={() => migrate()}
+                  >
+                    迁移全部（{checkItemCount}）
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           {canWrite && record ? (
             <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
               <div className="flex flex-wrap items-center gap-2">
@@ -8285,15 +8516,23 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, checklistCo
               <p className="mt-1 text-xs text-ink-muted">
                 删除模块会级联删除其下 {checklistCount} 组清单模板；仍被项目检查项引用的模块不可删除。
               </p>
-              {checkItemCount > 0 ? (
+              {referencesLoading ? (
+                <p className="mt-2 text-xs text-ink-muted">正在核对全局引用…</p>
+              ) : null}
+              {!referencesLoading && referencesError ? (
                 <p className="mt-2 text-xs text-danger" role="note">
-                  当前模块仍被 {checkItemCount} 个项目检查项引用，无法删除。请先将相关检查项迁移到其他模块或停用。
+                  引用明细加载失败，暂不可删除；请在上方重试。
+                </p>
+              ) : null}
+              {!referencesLoading && !referencesError && checkItemCount > 0 ? (
+                <p className="mt-2 text-xs text-danger" role="note">
+                  当前模块仍被 {checkItemCount} 个项目检查项引用，无法删除。请先在上方引用清单中迁移或删除相关检查项。
                 </p>
               ) : null}
               <button
                 className="btn btn-ghost btn--sm mt-3 text-danger"
                 type="button"
-                disabled={busy || checkItemCount > 0}
+                disabled={busy || referencesLoading || Boolean(referencesError) || !references || checkItemCount > 0}
                 onClick={remove}
                 title={checkItemCount > 0 ? `仍被 ${checkItemCount} 个项目检查项引用` : undefined}
               >
@@ -8736,7 +8975,9 @@ function ProjectTemplateView({
   onSetChecklistTemplateItems,
   onCreateInspectionModule,
   onUpdateInspectionModule,
-  onDeleteInspectionModule
+  onDeleteInspectionModule,
+  onDeleteModuleReferenceItem,
+  onJumpToProjectCheckItems
 }: {
   data: WorkspaceData;
   canWrite: boolean;
@@ -8751,6 +8992,8 @@ function ProjectTemplateView({
   onCreateInspectionModule: (input: InspectionModuleInput) => Promise<InspectionModule>;
   onUpdateInspectionModule: (module: InspectionModule, input: InspectionModuleInput) => Promise<InspectionModule>;
   onDeleteInspectionModule: (module: InspectionModule) => Promise<void>;
+  onDeleteModuleReferenceItem: (item: ModuleReferenceCheckItem) => Promise<void>;
+  onJumpToProjectCheckItems: (module: InspectionModule) => void;
 }) {
   const [selectedPhaseTemplateId, setSelectedPhaseTemplateId] = useState('');
   const [cellTarget, setCellTarget] = useState<TemplateCellTarget | null>(null);
@@ -8856,13 +9099,6 @@ function ProjectTemplateView({
   const checklistDraftPhaseTemplate =
     data.phaseTemplates.find(template => idOf(template.id) === checklistEditor.draft.phaseTemplateId) ?? selectedPhaseTemplate;
   const checklistDraftPhaseDefinitions = checklistDraftPhaseTemplate ? phaseDefinitionsOf(checklistDraftPhaseTemplate) : [];
-  const moduleDrawerRecord = moduleEditor.record;
-  const moduleDrawerChecklistCount = moduleDrawerRecord
-    ? data.checklistTemplates.filter(template => idOf(template.moduleId) === idOf(moduleDrawerRecord.id)).length
-    : 0;
-  const moduleDrawerCheckItemCount = moduleDrawerRecord
-    ? data.checkItems.filter(item => idOf(item.moduleId) === idOf(moduleDrawerRecord.id)).length
-    : 0;
   const cellTemplates = cellTarget && selectedPhaseTemplateIdValue
     ? checklistTemplatesForCell(data.checklistTemplates, selectedPhaseTemplateIdValue, cellTarget.module, cellTarget.phase)
     : [];
@@ -9183,10 +9419,13 @@ function ProjectTemplateView({
         editor={moduleEditor}
         canWrite={canWrite}
         ownerCandidates={data.ownerCandidates}
-        checklistCount={moduleDrawerChecklistCount}
-        checkItemCount={moduleDrawerCheckItemCount}
+        modules={sortedInspectionModules}
         onSave={saveInspectionModule}
         onDelete={onDeleteInspectionModule}
+        onFetchReferences={fetchModuleReferences}
+        onMigrateCheckItems={migrateModuleCheckItems}
+        onDeleteReferenceItem={onDeleteModuleReferenceItem}
+        onJumpToProjectCheckItems={onJumpToProjectCheckItems}
       />
       <ChecklistTemplateDrawer
         editor={checklistEditor}
@@ -9578,7 +9817,9 @@ function BaseConfigView({
   onDeleteCheckItem,
   onApplyModuleOwner,
   onImportLibraryItems,
-  onDisableModule
+  onDisableModule,
+  pendingCheckItemModuleId,
+  onConsumePendingCheckItemModule
 }: {
   data: WorkspaceData;
   scope: ScopeState;
@@ -9599,6 +9840,8 @@ function BaseConfigView({
   onApplyModuleOwner: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<{ affectedCount: number; cleared: boolean }>;
   onImportLibraryItems: (module: InspectionModule, entryIds: Array<string | number>) => Promise<ImportLibraryItemsResult>;
   onDisableModule: (module: InspectionModule) => Promise<number>;
+  pendingCheckItemModuleId?: string;
+  onConsumePendingCheckItemModule?: () => void;
 }) {
   const [projectFilters, setProjectFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
@@ -9638,6 +9881,18 @@ function BaseConfigView({
   const libraryImportModule = data.inspectionModules.find(module => idOf(module.id) === libraryImportModuleId) ?? null;
   const phaseLabels = new Map(sortedPhases.map(phase => [phase.code, phase.name]));
   const moduleItemsOf = (moduleId: string) => data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
+  // 从模板侧「去项目侧新增检查项」跳入：预选该模块的矩阵单元格（取首个阶段）。
+  useEffect(() => {
+    if (!pendingCheckItemModuleId) return;
+    const targetModule = data.inspectionModules.find(item => idOf(item.id) === pendingCheckItemModuleId);
+    if (project && targetModule) {
+      setMatrixCell({ moduleId: pendingCheckItemModuleId, phaseId: idOf(sortedPhases[0]?.id) });
+      setMessage(`已在模块「${targetModule.name}」下打开检查项单元格，可直接新增。`);
+    } else if (!project) {
+      setMessage('请先在顶部选择项目，再为该模块新增检查项。');
+    }
+    onConsumePendingCheckItemModule?.();
+  }, [pendingCheckItemModuleId]);
   const handleLibraryImportAdd = (entries: CheckItemLibraryEntry[]) => {
     const module = libraryImportModule;
     if (!module || !entries.length) {
@@ -10268,6 +10523,7 @@ const mutationErrorMessage = (error: unknown, fallback: string) =>
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppTab>('dashboard');
+  const [pendingMatrixCellModuleId, setPendingMatrixCellModuleId] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | number | undefined>();
   const [scope, setScope] = useState<ScopeState>(EMPTY_SCOPE);
@@ -10967,8 +11223,25 @@ export default function App() {
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '检查项删除失败'));
+    }
+  };
+
+  // 模块抽屉引用清单中的逐行删除：引用项可能属于其他项目，按 id 删除后仍刷新当前工作区。
+  const handleDeleteModuleReferenceItem = async (item: ModuleReferenceCheckItem) => {
+    if (!canWrite) return;
+    try {
+      await deleteCheckItem(item.id);
+      await loadData();
+    } catch (err) {
+      setError(mutationErrorMessage(err, '检查项删除失败'));
       throw err;
     }
+  };
+
+  // 「去项目侧新增检查项」：切到项目配置视图并预选该模块的矩阵单元格。
+  const handleJumpToProjectCheckItems = (module: InspectionModule) => {
+    setPendingMatrixCellModuleId(idOf(module.id));
+    setCurrentView('baseConfig');
   };
 
   const handleCreateKeyIssue = async (draft: KeyIssueDraft) => {
@@ -11225,6 +11498,8 @@ export default function App() {
           onCreateInspectionModule={handleCreateInspectionModuleConfig}
           onUpdateInspectionModule={handleUpdateInspectionModuleConfig}
           onDeleteInspectionModule={handleDeleteInspectionModuleConfig}
+          onDeleteModuleReferenceItem={handleDeleteModuleReferenceItem}
+          onJumpToProjectCheckItems={handleJumpToProjectCheckItems}
         />
       );
     }
@@ -11261,6 +11536,8 @@ export default function App() {
           onApplyModuleOwner={handleApplyModuleOwner}
           onImportLibraryItems={handleImportLibraryItems}
           onDisableModule={handleDisableProjectModule}
+          pendingCheckItemModuleId={pendingMatrixCellModuleId}
+          onConsumePendingCheckItemModule={() => setPendingMatrixCellModuleId('')}
         />
       );
     }
