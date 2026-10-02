@@ -60,6 +60,7 @@ import {
   createExportTask,
   createKeyIssue,
   createProject,
+  createProjectPhase,
   deleteAttachment,
   deleteCheckItemLibraryEntry,
   deleteChecklistTemplate,
@@ -69,6 +70,7 @@ import {
   deleteKeyIssue,
   deletePhaseTemplate,
   deleteProjectPhase,
+  disableProjectModule,
   downloadCollisionReportTemplateExcel,
   exportCollisionReportExcel,
   exportCollisionReportsCsv,
@@ -98,6 +100,7 @@ import {
   listAuditLogs,
   importCollisionReportsCsv,
   importKeyIssuesCsv,
+  importLibraryItems,
   preflightProjectPhysicalDeletion,
   projectDeletionJobFromError,
   seedProjectTemplate,
@@ -119,6 +122,7 @@ import {
 import type {
   CreateChecklistTemplateInput,
   CreatePhaseTemplateInput,
+  ImportLibraryItemsResult,
   ProjectDeletionJob,
   ProjectDeletionState,
   UpdateChecklistTemplateInput,
@@ -5283,6 +5287,7 @@ function ProjectConfigDrawer({ editor, hierarchy, ownerCandidates, canWrite, onS
 
 function phaseConfigDraftFrom(phase: ProjectPhase | null): PhaseConfigDraft {
   return {
+    phaseKey: phase?.code ?? '',
     name: phase?.name ?? '',
     sequence: String(phase?.sequence ?? ''),
     goal: phase?.goal ?? '',
@@ -5292,6 +5297,9 @@ function phaseConfigDraftFrom(phase: ProjectPhase | null): PhaseConfigDraft {
     isActive: phase?.isActive !== false
   };
 }
+
+const PHASE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const EMPTY_ENTRY_ID_SET: Set<string> = new Set();
 
 function checkItemConfigDraftFrom(
   item: CheckItem | null,
@@ -5315,12 +5323,13 @@ function checkItemConfigDraftFrom(
 
 type PhaseConfigEditor = ReturnType<typeof useRecordEditor<ProjectPhase, PhaseConfigDraft>>;
 
-function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDelete, onMigrateItems }: {
+function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onCreate, onDelete, onMigrateItems }: {
   editor: PhaseConfigEditor;
   phases: ProjectPhase[];
   checkItems: CheckItem[];
   canWrite: boolean;
   onSave: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<ProjectPhase>;
+  onCreate: (draft: PhaseConfigDraft) => Promise<ProjectPhase>;
   onDelete: (phase: ProjectPhase) => Promise<void>;
   onMigrateItems: (phase: ProjectPhase, targetPhaseId: string) => Promise<number>;
 }) {
@@ -5335,6 +5344,7 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
     setTransferTargetId('');
   }, [sessionKey]);
 
+  const isCreate = !record && !loading && !error;
   const phaseItems = record ? checkItems.filter(item => idOf(item.projectPhaseId) === idOf(record.id)) : [];
   const transferTarget = phases.find(phase => idOf(phase.id) === transferTargetId);
 
@@ -5350,6 +5360,27 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
       setBusy(false);
     }
   };
+  const create = () => run(async () => {
+    const phaseKey = draft.phaseKey.trim();
+    if (!PHASE_KEY_PATTERN.test(phaseKey)) {
+      setActionError('阶段 Key 仅支持字母、数字、下划线与中划线，长度 1-64。');
+      return;
+    }
+    if (phases.some(phase => phase.code === phaseKey)) {
+      setActionError(`该项目下已存在相同阶段 Key「${phaseKey}」。`);
+      return;
+    }
+    if (!draft.name.trim()) {
+      setActionError('请填写阶段名称。');
+      return;
+    }
+    if (!draft.plannedStartDate || !draft.plannedEndDate) {
+      setActionError('请填写阶段计划开始与计划结束日期。');
+      return;
+    }
+    const created = await onCreate({ ...draft, phaseKey });
+    editor.accept(created, phaseConfigDraftFrom(created));
+  });
   const save = () => run(async () => {
     if (!record) return;
     const updated = await onSave(record, draft);
@@ -5378,8 +5409,8 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
   return (
     <SideDrawer
       open={editor.open}
-      title={`项目阶段 · ${record?.name ?? '加载中'}`}
-      subtitle={record ? `Key ${record.code} · ${phaseItems.length} 项检查配置` : undefined}
+      title={record ? `项目阶段 · ${record.name}` : '新增项目阶段'}
+      subtitle={record ? `Key ${record.code} · ${phaseItems.length} 项检查配置` : '自定义阶段 Key 用于检查项库条目按阶段落位，创建后不建议修改。'}
       size="lg"
       saving={busy}
       onClose={requestClose}
@@ -5388,7 +5419,7 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
           <button className="btn btn-ghost btn--sm" type="button" disabled={busy} onClick={requestClose}>
             取消
           </button>
-          {canWrite && (
+          {canWrite && !isCreate && (
             <button
               className="btn btn-primary btn--sm"
               type="button"
@@ -5397,6 +5428,17 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
             >
               <Save className="h-4 w-4" />
               {busy ? '处理中…' : '保存阶段'}
+            </button>
+          )}
+          {canWrite && isCreate && (
+            <button
+              className="btn btn-primary btn--sm"
+              type="button"
+              disabled={busy}
+              onClick={() => void create()}
+            >
+              <Plus className="h-4 w-4" />
+              {busy ? '处理中…' : '新增阶段'}
             </button>
           )}
         </>
@@ -5411,7 +5453,7 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
           </button>
         </div>
       ) : null}
-      {record && !loading && !error ? (
+      {(record || isCreate) && !loading && !error ? (
         <div className="space-y-4">
           <label className="flex items-center gap-2 text-sm text-ink-muted">
             <input
@@ -5423,6 +5465,20 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
             启用该阶段
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
+            {isCreate ? (
+              <label>
+                <span className="field-label">阶段 Key</span>
+                <input
+                  className="input"
+                  value={draft.phaseKey}
+                  disabled={!canWrite || busy}
+                  placeholder="如 pre-acceptance"
+                  aria-label="新增阶段 Key"
+                  onChange={event => setDraft({ ...draft, phaseKey: event.target.value })}
+                />
+                <span className="mt-1 block text-xs text-ink-muted">字母、数字、下划线或中划线；检查项库条目按此 Key 落位到本阶段。</span>
+              </label>
+            ) : null}
             <label>
               <span className="field-label">阶段名称</span>
               <input className="input" value={draft.name} disabled={!canWrite || busy} onChange={event => setDraft({ ...draft, name: event.target.value })} />
@@ -5453,7 +5509,7 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
             </label>
           </div>
           {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
-          {canWrite ? (
+          {canWrite && record ? (
             <section className="rounded-lg border border-outline bg-surface-soft p-4" aria-label="阶段工具">
               <h3 className="text-sm font-semibold text-ink">检查项迁移</h3>
               <p className="mt-1 text-xs text-ink-muted">将本阶段全部 {phaseItems.length} 个检查项迁移到目标阶段，计划日期缺省时沿用目标阶段窗口。</p>
@@ -5485,7 +5541,7 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
               </div>
             </section>
           ) : null}
-          {canWrite && record.canDelete === true ? (
+          {canWrite && record && record.canDelete === true ? (
             <section className="rounded-lg border border-danger/40 bg-danger/5 p-4" aria-label="危险操作">
               <div className="flex flex-wrap items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-danger" />
@@ -5496,6 +5552,14 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onDel
                 <Trash2 className="h-4 w-4" />
                 删除阶段
               </button>
+            </section>
+          ) : null}
+          {canWrite && record && record.canDelete !== true ? (
+            <section className="rounded-lg border border-outline bg-surface-soft p-4" aria-label="删除说明">
+              <h3 className="text-sm font-semibold text-ink">该阶段暂不可删除</h3>
+              <p className="mt-1 text-xs text-ink-muted">
+                阶段来自项目模板或阶段下仍有检查项时不可直接删除。可先用「检查项迁移」把检查项移到其他阶段后再删除，或仅停用该阶段（取消勾选“启用该阶段”）。
+              </p>
             </section>
           ) : null}
         </div>
@@ -7823,6 +7887,7 @@ type ProjectConfigDraft = {
 };
 
 type PhaseConfigDraft = {
+  phaseKey: string;
   name: string;
   sequence: string;
   goal: string;
@@ -9504,13 +9569,16 @@ function BaseConfigView({
   onUpdateProject,
   onProjectDeleted,
   onSeedTemplate,
+  onCreatePhase,
   onUpdatePhase,
   onDeletePhase,
   onMigratePhaseCheckItems,
   onCreateCheckItem,
   onUpdateCheckItem,
   onDeleteCheckItem,
-  onApplyModuleOwner
+  onApplyModuleOwner,
+  onImportLibraryItems,
+  onDisableModule
 }: {
   data: WorkspaceData;
   scope: ScopeState;
@@ -9521,6 +9589,7 @@ function BaseConfigView({
   onUpdateProject: (project: Project, draft: ProjectConfigDraft) => Promise<Project>;
   onProjectDeleted: (project: Project) => void;
   onSeedTemplate: () => Promise<void>;
+  onCreatePhase: (draft: PhaseConfigDraft) => Promise<ProjectPhase>;
   onUpdatePhase: (phase: ProjectPhase, draft: PhaseConfigDraft) => Promise<ProjectPhase>;
   onDeletePhase: (phase: ProjectPhase) => Promise<void>;
   onMigratePhaseCheckItems: (phase: ProjectPhase, targetPhaseId: string) => Promise<number>;
@@ -9528,10 +9597,14 @@ function BaseConfigView({
   onUpdateCheckItem: (item: CheckItem, draft: CheckItemConfigDraft) => Promise<void>;
   onDeleteCheckItem: (item: CheckItem) => Promise<void>;
   onApplyModuleOwner: (module: InspectionModule, owners: CheckItemOwner[]) => Promise<{ affectedCount: number; cleared: boolean }>;
+  onImportLibraryItems: (module: InspectionModule, entryIds: Array<string | number>) => Promise<ImportLibraryItemsResult>;
+  onDisableModule: (module: InspectionModule) => Promise<number>;
 }) {
   const [projectFilters, setProjectFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [phaseFilters, setPhaseFilters] = useState<SearchFilterState>(EMPTY_FILTERS);
   const [moduleOwnerTargetId, setModuleOwnerTargetId] = useState('');
+  const [libraryImportModuleId, setLibraryImportModuleId] = useState('');
+  const [moduleActionBusy, setModuleActionBusy] = useState('');
   const [matrixCell, setMatrixCell] = useState<{ moduleId: string; phaseId: string } | null>(null);
   const [createPhaseTemplateId, setCreatePhaseTemplateId] = useState('');
   const [createProjectPanelOpen, setCreateProjectPanelOpen] = useState(false);
@@ -9562,6 +9635,35 @@ function BaseConfigView({
   const moduleOwnerAffectedCount = moduleOwnerTarget
     ? data.checkItems.filter(item => idOf(item.moduleId) === idOf(moduleOwnerTarget.id)).length
     : 0;
+  const libraryImportModule = data.inspectionModules.find(module => idOf(module.id) === libraryImportModuleId) ?? null;
+  const phaseLabels = new Map(sortedPhases.map(phase => [phase.code, phase.name]));
+  const moduleItemsOf = (moduleId: string) => data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
+  const handleLibraryImportAdd = (entries: CheckItemLibraryEntry[]) => {
+    const module = libraryImportModule;
+    if (!module || !entries.length) {
+      if (!entries.length) setLibraryImportModuleId('');
+      return;
+    }
+    setModuleActionBusy(`import-${idOf(module.id)}`);
+    void onImportLibraryItems(module, entries.map(entry => entry.id))
+      .then(result => {
+        const skippedNote = result.skipped.length ? `，跳过 ${result.skipped.length} 条（${result.skipped.map(item => item.reason).join('；')}）` : '';
+        setMessage(`已从检查项库为模块「${module.name}」导入 ${result.createdCount} 个检查项${skippedNote}。`);
+        setLibraryImportModuleId('');
+      })
+      .catch(err => setMessage(mutationErrorMessage(err, '从检查项库导入失败')))
+      .finally(() => setModuleActionBusy(''));
+  };
+  const handleDisableModuleClick = (module: InspectionModule) => {
+    const moduleId = idOf(module.id);
+    const enabledCount = moduleItemsOf(moduleId).filter(item => item.isActive !== false).length;
+    if (!window.confirm(`确认将模块「${module.name}」退出当前项目？将停用本项目该模块 ${enabledCount} 个启用检查项，不删除任何数据，可随时重新导入或启用。`)) return;
+    setModuleActionBusy(`disable-${moduleId}`);
+    void onDisableModule(module)
+      .then(disabledCount => setMessage(`模块「${module.name}」已退出当前项目：停用 ${disabledCount} 个启用检查项，数据全部保留。`))
+      .catch(err => setMessage(mutationErrorMessage(err, '模块退出项目失败')))
+      .finally(() => setModuleActionBusy(''));
+  };
   const projectStatusOptions = statusOptionValues(data.projects.map(item => item.status));
   const phaseStatusOptions = statusOptionValues(data.phases.map(item => item.status));
   const sortedCreatePhaseTemplates = bySequence(data.phaseTemplates).filter(template => template.isActive !== false);
@@ -9760,6 +9862,17 @@ function BaseConfigView({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="chip">{visiblePhases.length}/{sortedPhases.length} 阶段</span>
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={!canWrite || !project}
+              onClick={() => void phaseEditor.openRecord()}
+              aria-label="新增项目阶段"
+              title="为当前项目实例新增自定义阶段；阶段 Key 用于检查项库条目按阶段落位"
+            >
+              <Plus className="h-4 w-4" />
+              新增阶段
+            </button>
             <button
               className="btn btn-secondary"
               type="button"
@@ -9961,17 +10074,17 @@ function BaseConfigView({
         <div className="panel-header">
           <div>
             <p className="kicker">Base Data</p>
-            <h2 className="text-xl font-semibold">模块负责人配置</h2>
-            <p className="text-sm text-ink-muted">为检查模块维护默认负责人；保存时单事务同步当前项目该模块的全部检查项，项目模板源数据在侧边栏“项目模板”模块维护。</p>
+            <h2 className="text-xl font-semibold">项目模块配置</h2>
+            <p className="text-sm text-ink-muted">维护本项目各模块的默认负责人、从检查项库批量导入检查项，或将模块整体退出项目（仅停用本项目该模块的启用检查项，不删除数据）；项目模板源数据在侧边栏“项目模板”模块维护。</p>
           </div>
           <span className="chip">{data.inspectionModules.length} 模块</span>
         </div>
         <div className="table-shell mt-4">
-          <table className="data-table min-w-[900px]">
+          <table className="data-table min-w-[1080px]">
             <thead>
               <tr>
                 <th>模块</th>
-                <th>检查项</th>
+                <th>本项目检查项</th>
                 <th>模块负责人</th>
                 <th>状态</th>
                 <th>操作</th>
@@ -9981,15 +10094,21 @@ function BaseConfigView({
               {bySequence(data.inspectionModules).map(module => {
                 const moduleId = idOf(module.id);
                 const moduleOwners = ownersOfModule(module);
-                const moduleCheckItems = data.checkItems.filter(item => idOf(item.moduleId) === moduleId);
+                const moduleCheckItems = moduleItemsOf(moduleId);
+                const enabledItems = moduleCheckItems.filter(item => item.isActive !== false);
+                const disabledItems = moduleCheckItems.length - enabledItems.length;
+                const completedItems = moduleCheckItems.filter(item => isComplete(item.status)).length;
                 return (
                   <tr key={module.id}>
-                    <td className="min-w-[260px]">
+                    <td className="min-w-[220px]">
                       <div className="font-semibold text-ink">{module.name}</div>
                       <div className="mt-1 text-xs text-ink-muted">{module.code}</div>
                     </td>
-                    <td className="whitespace-nowrap text-ink-muted">{moduleCheckItems.length} 项</td>
-                    <td className="min-w-[180px]">
+                    <td className="whitespace-nowrap text-ink-muted">
+                      <div>{moduleCheckItems.length} 项</div>
+                      <div className="mt-1 text-xs">启用 {enabledItems.length} · 停用 {disabledItems} · 完成 {completedItems}</div>
+                    </td>
+                    <td className="min-w-[160px]">
                       {moduleOwners.length ? (
                         <div className="flex items-center gap-2">
                           <OwnerAvatarStack owners={moduleOwners} maxVisible={4} />
@@ -10002,17 +10121,42 @@ function BaseConfigView({
                     <td className="whitespace-nowrap">
                       <StatusPill status={module.isActive ? 'active' : 'disabled'} />
                     </td>
-                    <td className="min-w-[160px]">
-                      <button
-                        className="btn btn-ghost btn--sm"
-                        type="button"
-                        onClick={() => setModuleOwnerTargetId(moduleId)}
-                        aria-label={`配置模块负责人 ${module.name}`}
-                        aria-haspopup="dialog"
-                      >
-                        <Settings2 className="h-4 w-4" />
-                        配置
-                      </button>
+                    <td className="min-w-[300px]">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          onClick={() => setModuleOwnerTargetId(moduleId)}
+                          aria-label={`配置模块负责人 ${module.name}`}
+                          aria-haspopup="dialog"
+                        >
+                          <Settings2 className="h-4 w-4" />
+                          负责人
+                        </button>
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={!canWrite || !project || Boolean(moduleActionBusy)}
+                          onClick={() => setLibraryImportModuleId(moduleId)}
+                          aria-label={`从检查项库导入到模块 ${module.name}`}
+                          aria-haspopup="dialog"
+                          title="从检查项库选择条目，按其阶段 Key 落位到当前项目并归属该模块"
+                        >
+                          <Plus className="h-4 w-4" />
+                          从库导入
+                        </button>
+                        <button
+                          className="btn btn-ghost btn--sm text-danger"
+                          type="button"
+                          disabled={!canWrite || !project || Boolean(moduleActionBusy)}
+                          onClick={() => handleDisableModuleClick(module)}
+                          aria-label={`模块 ${module.name} 退出当前项目`}
+                          title="停用当前项目该模块的全部启用检查项；不删除任何数据，可再次导入或启用"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          {moduleActionBusy === `disable-${moduleId}` ? '退出中…' : '退出项目'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -10025,6 +10169,7 @@ function BaseConfigView({
             </tbody>
           </table>
         </div>
+        {message ? <p role="status" className="mt-3 text-sm text-ink-muted">{message}</p> : null}
       </section>
       <PhaseConfigDrawer
         editor={phaseEditor}
@@ -10032,6 +10177,7 @@ function BaseConfigView({
         checkItems={data.checkItems}
         canWrite={canWrite}
         onSave={(phase, draft) => onUpdatePhase(phase, draft)}
+        onCreate={onCreatePhase}
         onDelete={onDeletePhase}
         onMigrateItems={onMigratePhaseCheckItems}
       />
@@ -10064,6 +10210,14 @@ function BaseConfigView({
           return result;
         }}
         onClose={() => setModuleOwnerTargetId('')}
+      />
+      <LibraryEntryPickerDrawer
+        open={Boolean(libraryImportModule)}
+        phaseKey=""
+        phaseLabels={phaseLabels}
+        existingEntryIds={EMPTY_ENTRY_ID_SET}
+        onAdd={handleLibraryImportAdd}
+        onClose={() => setLibraryImportModuleId('')}
       />
     </div>
   );
@@ -10633,6 +10787,28 @@ export default function App() {
     }
   };
 
+  const handleCreatePhase = async (draft: PhaseConfigDraft): Promise<ProjectPhase> => {
+    if (!canWrite) throw new Error('readonly');
+    if (!workspace.selectedProject) throw new Error('请先选择项目实例。');
+    try {
+      const created = await createProjectPhase(workspace.selectedProject.id, {
+        phaseKey: draft.phaseKey.trim(),
+        name: draft.name.trim(),
+        sequence: Number(draft.sequence) || undefined,
+        goal: draft.goal,
+        plannedStartDate: draft.plannedStartDate,
+        plannedEndDate: draft.plannedEndDate,
+        status: draft.status,
+        isActive: draft.isActive
+      });
+      await loadData();
+      return created;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '阶段新增失败'));
+      throw err;
+    }
+  };
+
   const handleUpdatePhase = async (phase: ProjectPhase, draft: PhaseConfigDraft): Promise<ProjectPhase> => {
     if (!canWrite) throw new Error('readonly');
     try {
@@ -10704,6 +10880,33 @@ export default function App() {
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '阶段删除失败'));
+      throw err;
+    }
+  };
+
+  const handleImportLibraryItems = async (
+    module: InspectionModule,
+    entryIds: Array<string | number>
+  ): Promise<ImportLibraryItemsResult> => {
+    if (!canWrite || !workspace.selectedProject) throw new Error('readonly');
+    try {
+      const result = await importLibraryItems(workspace.selectedProject.id, module.id, entryIds);
+      await loadData();
+      return result;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '从检查项库导入失败'));
+      throw err;
+    }
+  };
+
+  const handleDisableProjectModule = async (module: InspectionModule): Promise<number> => {
+    if (!canWrite || !workspace.selectedProject) throw new Error('readonly');
+    try {
+      const result = await disableProjectModule(workspace.selectedProject.id, module.id);
+      await loadData();
+      return result.disabledCount;
+    } catch (err) {
+      setError(mutationErrorMessage(err, '模块退出项目失败'));
       throw err;
     }
   };
@@ -11048,6 +11251,7 @@ export default function App() {
           onUpdateProject={handleUpdateProject}
           onProjectDeleted={handleProjectDeleted}
           onSeedTemplate={handleSeedTemplate}
+          onCreatePhase={handleCreatePhase}
           onUpdatePhase={handleUpdatePhase}
           onDeletePhase={handleDeletePhase}
           onMigratePhaseCheckItems={handleMigratePhaseCheckItems}
@@ -11055,6 +11259,8 @@ export default function App() {
           onUpdateCheckItem={handleUpdateCheckItemConfig}
           onDeleteCheckItem={handleDeleteCheckItem}
           onApplyModuleOwner={handleApplyModuleOwner}
+          onImportLibraryItems={handleImportLibraryItems}
+          onDisableModule={handleDisableProjectModule}
         />
       );
     }

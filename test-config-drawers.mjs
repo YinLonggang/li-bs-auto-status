@@ -554,7 +554,7 @@ async function mount() {
   data = await api.fetchWorkspaceData(selectedId);
   renderer = createRoot(container());
   await render();
-  await until(() => container().textContent.includes('项目实例列表') && container().textContent.includes('模块负责人配置'), 'Config center did not settle');
+  await until(() => container().textContent.includes('项目实例列表') && container().textContent.includes('项目模块配置'), 'Config center did not settle');
 }
 async function openProjectDrawer(name = '配置验证项目') {
   await click(byAria(`配置项目实例 ${name}`));
