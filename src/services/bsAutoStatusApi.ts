@@ -703,7 +703,6 @@ const normalizeCheckItem = (input: unknown): CheckItem => {
     actualEndAt: firstString(raw, ['actualEndAt', 'completed_at']) || null,
     status: firstString(raw, ['status'], 'pending'),
     isActive: asBoolean(raw.isEnabled, asBoolean(raw.is_enabled, asBoolean(raw.isActive, asBoolean(raw.is_active, true)))),
-    canDelete: asBoolean(raw.canDelete, asBoolean(raw.can_delete, false)),
     isDefault: asBoolean(raw.isDefault, asBoolean(raw.is_default, false)),
     result: firstString(raw, ['result', 'result_note']),
     blockerReason: firstString(raw, ['blockerReason', 'blocker_reason']),
@@ -2232,7 +2231,6 @@ export interface ModuleReferenceCheckItem {
   title: string;
   status: string;
   isEnabled: boolean;
-  canDelete: boolean;
   source: string;
 }
 
@@ -2273,13 +2271,12 @@ const normalizeModuleReferenceCheckItem = (input: unknown): ModuleReferenceCheck
     title: String(record.title ?? ''),
     status: String(record.status ?? ''),
     isEnabled: Boolean(record.is_enabled),
-    canDelete: Boolean(record.can_delete),
     source: String(record.source ?? '')
   };
 };
 
 /**
- * 模块引用明细（只读）：跨全部项目的检查项（含停用项、来源与 canDelete 标记）
+ * 模块引用明细（只读）：跨全部项目的检查项（含停用项与来源标记；检查项均可物理删除）
  * 与清单模板；计数口径与模块删除门禁一致（全局，停用不解除阻断）。
  */
 export async function fetchModuleReferences(

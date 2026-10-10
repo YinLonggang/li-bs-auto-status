@@ -5575,6 +5575,15 @@ function PhaseConfigDrawer({ editor, phases, checkItems, canWrite, onSave, onCre
 
 const MATRIX_CELL_FILTER_DEFAULT: SearchFilterState = EMPTY_FILTERS;
 
+/** 实例检查项硬删除确认：提示级联删除附件、不可恢复，模板来源项再次补齐/同步会重建。 */
+const confirmCheckItemRemoval = (title: string, attachmentCount = 0, discardDraft = false): boolean => {
+  const cascade = attachmentCount > 0 ? `，并级联删除 ${attachmentCount} 个附件` : '，附件（如有）将一并删除';
+  const draft = discardDraft ? '未保存草稿也会放弃。' : '';
+  return window.confirm(`确认删除检查项「${title}」${cascade}？删除后不可恢复；若该项来自项目模板，再次点击补齐/同步会重新生成。${draft}`);
+};
+
+const checkItemAttachmentTotal = (item: CheckItem): number => item.attachmentCount ?? item.attachments?.length ?? 0;
+
 function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCandidates, canWrite, onCreate, onUpdate, onDelete, onClose }: {
   project: Project | null;
   cell: { moduleId: string; phaseId: string } | null;
@@ -5669,9 +5678,13 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
     });
   };
   const deleteItem = () => {
-    if (!editing?.item || editing.item.canDelete !== true) return;
-    if (!window.confirm(`确认删除检查项「${editing.item.title}」？`)) return;
+    if (!editing?.item) return;
+    if (!confirmCheckItemRemoval(editing.item.title, checkItemAttachmentTotal(editing.item), editingDirty)) return;
     void runItem(() => onDelete(editing.item!));
+  };
+  const removeItem = (item: CheckItem) => {
+    if (!canWrite || !confirmCheckItemRemoval(item.title, checkItemAttachmentTotal(item))) return;
+    void runItem(() => onDelete(item));
   };
 
   const disabledContext = (module && module.isActive === false) || (phase && phase.isActive === false);
@@ -5777,16 +5790,29 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
                     <td><StatusPill status={item.status} /></td>
                     <td>{item.isActive === false ? '停用' : '启用'}</td>
                     <td>
-                      <button
-                        className="btn btn-ghost btn--sm"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => openItem(item)}
-                        aria-label={`编辑检查项 ${item.title}`}
-                        aria-haspopup="dialog"
-                      >
-                        编辑
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          className="btn btn-ghost btn--sm"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => openItem(item)}
+                          aria-label={`编辑检查项 ${item.title}`}
+                          aria-haspopup="dialog"
+                        >
+                          编辑
+                        </button>
+                        {canWrite ? (
+                          <button
+                            className="btn btn-ghost btn--sm text-danger"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => removeItem(item)}
+                            aria-label={`删除检查项 ${item.title}`}
+                          >
+                            删除
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -5911,16 +5937,12 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
               </label>
             </div>
             {actionError ? <div role="alert" className="text-sm text-danger">{actionError}</div> : null}
-            {editing.item ? (
+            {editing.item && canWrite ? (
               <div className="border-t border-outline pt-3">
-                {editing.item.canDelete === true ? (
-                  <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={!canWrite || busy} onClick={deleteItem}>
-                    <Trash2 className="h-4 w-4" />
-                    删除检查项
-                  </button>
-                ) : (
-                  <p className="text-xs text-ink-muted">该检查项受删除保护，如不再使用请设置为停用。</p>
-                )}
+                <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={busy} onClick={deleteItem}>
+                  <Trash2 className="h-4 w-4" />
+                  删除检查项
+                </button>
               </div>
             ) : null}
           </div>
@@ -6091,7 +6113,7 @@ function ChecksView({ project, phases, modules, ownerCandidates, canWrite, works
     return completed;
   };
   const remove = async () => {
-    if (!selectedItem?.canDelete || !window.confirm(`确认删除检查项「${selectedItem.title}」？未保存草稿也会放弃。`)) return;
+    if (!selectedItem || !confirmCheckItemRemoval(selectedItem.title, checkItemAttachmentTotal(selectedItem), true)) return;
     if (!beginMutation()) return;
     try {
       await deleteCheckItem(selectedItem.id);
@@ -6161,7 +6183,7 @@ function ChecksView({ project, phases, modules, ownerCandidates, canWrite, works
               <div className="sm:col-span-2"><span className="field-label">负责人（IDaaS）</span><OwnerListEditor owners={draft.owners} ownerCandidates={ownerCandidates} canWrite={canWrite && !saving} candidateLabel="检查项 IDaaS 负责人" onChange={next => setDraft({ ...draft, ...next })} /></div>
             </div>
             {canWrite && validation && <p className="mt-3 text-sm text-warning">{validation}</p>}
-            {canWrite && selectedItem && <div className="mt-5 border-t border-outline pt-3">{selectedItem.canDelete ? <button className="btn btn-ghost btn--sm text-danger" type="button" disabled={saving} onClick={() => void remove()}><Trash2 className="h-4 w-4" />删除检查项</button> : <p className="text-xs text-ink-muted">该检查项受删除保护，如不再使用请设置为停用。</p>}</div>}
+            {canWrite && selectedItem && <div className="mt-5 border-t border-outline pt-3"><button className="btn btn-ghost btn--sm text-danger" type="button" disabled={saving} onClick={() => void remove()}><Trash2 className="h-4 w-4" />删除检查项</button></div>}
           </div>
           <div hidden={tab !== 'attachments'}><CheckItemAttachmentsEditor item={selectedItem} active={tab === 'attachments'} canWrite={canWrite} saving={saving} validation={validation} onUpload={upload} onDownload={onDownloadAttachment} onDelete={attachment => mutateAsset(() => deleteAttachment(attachment.id))} onCaption={(attachment, caption) => mutateAsset(() => updateAttachmentMetadata(attachment.id, { ...(attachment.metadata ?? {}), caption }))} /></div>
           <div hidden={tab !== 'audit'}><ObjectAuditHistory objectType="CheckItem" objectId={selectedItem?.id} revision={auditRevision} /></div>
@@ -8284,8 +8306,7 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, modules, on
     });
   };
   const removeReferenceItem = (item: ModuleReferenceCheckItem) => {
-    if (!item.canDelete) return;
-    if (!window.confirm(`确认删除检查项「${item.title}」（${item.project.name} / ${item.phase.name || item.phase.phaseKey}）？删除后不可恢复。`)) return;
+    if (!window.confirm(`确认删除检查项「${item.title}」（${item.project.name} / ${item.phase.name || item.phase.phaseKey}）？附件（如有）将一并删除，删除后不可恢复；若该项来自项目模板，再次点击补齐/同步会重新生成。`)) return;
     void run(async () => {
       try {
         await onDeleteReferenceItem(item);
@@ -8452,10 +8473,7 @@ function InspectionModuleDrawer({ editor, canWrite, ownerCandidates, modules, on
                         <span className="text-ink-muted">{STATUS_LABEL[item.status] ?? item.status}</span>
                         {!item.isEnabled ? <span className="chip">已停用</span> : null}
                         <span className="chip">{moduleReferenceSourceLabel(item.source)}</span>
-                        {!item.canDelete ? (
-                          <span className="chip" title="模板来源检查项不可删除，仅可迁移到其他模块">仅可迁移</span>
-                        ) : null}
-                        {canWrite && item.canDelete ? (
+                        {canWrite ? (
                           <button
                             className="btn btn-ghost btn--sm text-danger"
                             type="button"
