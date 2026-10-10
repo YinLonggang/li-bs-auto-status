@@ -5695,7 +5695,7 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
         open={Boolean(cell)}
         title={module && phase ? `${module.name} × ${phase.name}` : '检查项配置'}
         subtitle={project ? `项目 ${project.name} · ${phase?.code ?? ''}` : undefined}
-        size="lg"
+        size="wide"
         saving={busy}
         onClose={requestClose}
         footer={
@@ -5754,7 +5754,7 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
           </div>
         </div>
         <div className="table-shell mt-3">
-          <table className="data-table min-w-[900px]">
+          <table className="data-table min-w-0">
             <thead>
               <tr>
                 <th>检查项</th>
@@ -5771,26 +5771,26 @@ function MatrixCellDrawer({ project, cell, phases, modules, checkItems, ownerCan
                 const itemOwners = ownersOfItem(item);
                 return (
                   <tr key={item.id}>
-                    <td className="min-w-[220px]">
+                    <td className="min-w-[200px]">
                       <div className="font-semibold text-ink">{item.title}</div>
                       {item.description ? <div className="mt-1 text-xs text-ink-muted">{item.description}</div> : null}
                     </td>
-                    <td className="min-w-[140px] text-xs text-ink-muted">{(item.tags ?? []).join('、') || '—'}</td>
-                    <td className="min-w-[170px]">{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
-                    <td className="min-w-[150px]">
+                    <td className="min-w-[90px] text-xs text-ink-muted">{(item.tags ?? []).join('、') || '—'}</td>
+                    <td className="whitespace-nowrap">{formatDate(item.plannedStartDate)} 至 {formatDate(item.plannedEndDate)}</td>
+                    <td className="min-w-[130px]">
                       {itemOwners.length ? (
                         <div className="flex items-center gap-2">
                           <OwnerAvatarStack owners={itemOwners} maxVisible={3} />
-                          <span className="text-xs text-ink-muted">{itemOwners.map(owner => owner.displayName || owner.idaasId).join('、')}</span>
+                          <span className="whitespace-nowrap text-xs text-ink-muted">{itemOwners.map(owner => owner.displayName || owner.idaasId).join('、')}</span>
                         </div>
                       ) : (
                         <span className="text-xs text-ink-muted">未设置</span>
                       )}
                     </td>
-                    <td><StatusPill status={item.status} /></td>
-                    <td>{item.isActive === false ? '停用' : '启用'}</td>
+                    <td className="whitespace-nowrap"><StatusPill status={item.status} /></td>
+                    <td className="whitespace-nowrap">{item.isActive === false ? '停用' : '启用'}</td>
                     <td>
-                      <div className="flex flex-wrap items-center gap-1">
+                      <div className="flex items-center gap-1 whitespace-nowrap">
                         <button
                           className="btn btn-ghost btn--sm"
                           type="button"
