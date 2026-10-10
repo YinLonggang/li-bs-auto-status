@@ -348,7 +348,6 @@ export type CheckItem = {
   actualEndAt?: string | null;
   status: CheckItemStatus;
   isActive?: boolean;
-  canDelete?: boolean;
   isDefault?: boolean;
   result?: string;
   blockerReason?: string;
