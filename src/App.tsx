@@ -8038,7 +8038,7 @@ function PhaseTemplateDrawer({ editor, canWrite, onSave, onCopy, onDelete }: {
       open={editor.open}
       title={record ? `项目模板 · ${record.name}` : '新建项目模板源数据'}
       subtitle={record ? `${record.code} · ${draft.phaseDefinitions.length} 阶段` : '保存后可在矩阵中维护模块阶段清单模板'}
-      size="xl"
+      size="wide"
       saving={busy}
       onClose={requestClose}
       footer={
@@ -8119,7 +8119,7 @@ function PhaseTemplateDrawer({ editor, canWrite, onSave, onCopy, onDelete }: {
             </button>
           </div>
           <div className="table-shell">
-            <table className="data-table min-w-[1080px]">
+            <table className="data-table min-w-0">
               <thead>
                 <tr>
                   <th>排序</th>
@@ -8135,29 +8135,29 @@ function PhaseTemplateDrawer({ editor, canWrite, onSave, onCopy, onDelete }: {
               <tbody>
                 {draft.phaseDefinitions.map((phase, index) => (
                   <tr key={`${phase.key || 'phase'}-${index}`}>
-                    <td className="min-w-[100px]">
+                    <td className="min-w-[80px]">
                       <input className="input" type="number" value={phase.sortOrder ?? (index + 1) * 10} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { sortOrder: Number(event.target.value) })} />
                     </td>
-                    <td className="min-w-[150px]">
+                    <td className="min-w-[130px]">
                       <input className="input" value={phase.key} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { key: event.target.value })} />
                     </td>
-                    <td className="min-w-[180px]">
+                    <td className="min-w-[160px]">
                       <input className="input" value={phase.name} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { name: event.target.value })} />
                     </td>
-                    <td className="min-w-[240px]">
+                    <td className="min-w-[200px]">
                       <input className="input" value={phase.description ?? ''} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { description: event.target.value })} />
                     </td>
-                    <td className="min-w-[150px]">
+                    <td className="min-w-[140px]">
                       <input className="input" type="date" value={dateInputValue(phase.plannedStart)} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { plannedStart: event.target.value || null })} />
                     </td>
-                    <td className="min-w-[150px]">
+                    <td className="min-w-[140px]">
                       <input className="input" type="date" value={dateInputValue(phase.plannedEnd)} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { plannedEnd: event.target.value || null })} />
                     </td>
-                    <td className="min-w-[120px]">
+                    <td className="min-w-[90px]">
                       <input className="input" type="number" value={phase.durationDays ?? ''} disabled={!canWrite || busy} onChange={event => updatePhaseDefinition(index, { durationDays: event.target.value ? Number(event.target.value) : null })} />
                     </td>
                     <td>
-                      <button className="btn btn-ghost btn--sm" type="button" disabled={!canWrite || busy || draft.phaseDefinitions.length <= 1} onClick={() => removePhaseDefinition(index)}>
+                      <button className="btn btn-ghost btn--sm whitespace-nowrap" type="button" disabled={!canWrite || busy || draft.phaseDefinitions.length <= 1} onClick={() => removePhaseDefinition(index)}>
                         <Trash2 className="h-4 w-4" />
                         删除
                       </button>
@@ -8617,7 +8617,7 @@ function LibraryEntryPickerDrawer({ open, phaseKey, phaseLabel, phaseLabels, exi
       open={open}
       title="从检查项库选择"
       subtitle={phaseKey ? `仅显示 ${phaseLabel || phaseKey} 阶段的启用条目` : '显示全部阶段的启用条目'}
-      size="lg"
+      size="xl"
       onClose={onClose}
       footer={
         <>
@@ -8649,7 +8649,7 @@ function LibraryEntryPickerDrawer({ open, phaseKey, phaseLabel, phaseLabels, exi
       ) : null}
       {!loading && !error ? (
         <div className="table-shell mt-3">
-          <table className="data-table min-w-[720px]">
+          <table className="data-table min-w-0">
             <thead>
               <tr>
                 <th>选择</th>
@@ -8678,13 +8678,13 @@ function LibraryEntryPickerDrawer({ open, phaseKey, phaseLabel, phaseLabels, exi
                         {added ? '已添加' : ''}
                       </label>
                     </td>
-                    <td className="min-w-[260px]">
+                    <td className="min-w-[220px]">
                       <div className="font-semibold text-ink">{entry.title}</div>
                       {entry.description ? <div className="mt-1 text-xs text-ink-muted">{entry.description}</div> : null}
                     </td>
-                    <td className="text-xs text-ink-muted">{phaseLabels.get(entry.phaseKey) || entry.phaseKey}</td>
-                    <td>{entry.priority || '-'}</td>
-                    <td>{entry.linkedTemplateCount ?? 0} 组</td>
+                    <td className="whitespace-nowrap text-xs text-ink-muted">{phaseLabels.get(entry.phaseKey) || entry.phaseKey}</td>
+                    <td className="whitespace-nowrap">{entry.priority || '-'}</td>
+                    <td className="whitespace-nowrap">{entry.linkedTemplateCount ?? 0} 组</td>
                   </tr>
                 );
               })}
@@ -8804,7 +8804,7 @@ function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabel
         open={editor.open}
         title={record ? `清单模板 · ${record.title}` : '新增清单模板'}
         subtitle={`${moduleName || '未设置模块'} / ${phaseLabel || draft.phaseKey || '未设置阶段'}`}
-        size="xl"
+        size="wide"
         saving={busy}
         onClose={requestClose}
         footer={
@@ -8899,7 +8899,7 @@ function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabel
               </button>
             </div>
             <div className="table-shell">
-              <table className="data-table min-w-[900px]">
+              <table className="data-table min-w-0">
                 <thead>
                   <tr>
                     <th>排序</th>
@@ -8913,7 +8913,7 @@ function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabel
                 <tbody>
                   {draft.items.map((item, index) => (
                     <tr key={item.entryId || index}>
-                      <td className="min-w-[110px]">
+                      <td className="min-w-[80px]">
                         <input
                           className="input"
                           type="number"
@@ -8923,14 +8923,14 @@ function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabel
                           aria-label={`检查项 ${item.title} 排序`}
                         />
                       </td>
-                      <td className="min-w-[280px]">
+                      <td className="min-w-[240px]">
                         <div className="font-semibold text-ink">{item.title}</div>
                         {item.description ? <div className="mt-1 text-xs text-ink-muted">{item.description}</div> : null}
                         {!item.entryIsActive ? <div className="mt-1 text-xs text-warning">库条目已停用，种子生成时会跳过</div> : null}
                       </td>
-                      <td className="text-xs text-ink-muted">{phaseLabels.get(item.phaseKey) || item.phaseKey || '-'}</td>
-                      <td>{item.priority || '-'}</td>
-                      <td>
+                      <td className="whitespace-nowrap text-xs text-ink-muted">{phaseLabels.get(item.phaseKey) || item.phaseKey || '-'}</td>
+                      <td className="whitespace-nowrap">{item.priority || '-'}</td>
+                      <td className="whitespace-nowrap">
                         <label className="flex items-center gap-2 text-sm text-ink-muted">
                           <input
                             type="checkbox"
@@ -8943,7 +8943,7 @@ function ChecklistTemplateDrawer({ editor, modules, phaseDefinitions, phaseLabel
                       </td>
                       <td>
                         <button
-                          className="btn btn-ghost btn--sm"
+                          className="btn btn-ghost btn--sm whitespace-nowrap"
                           type="button"
                           disabled={!canWrite || busy}
                           onClick={() => removeItem(index)}
