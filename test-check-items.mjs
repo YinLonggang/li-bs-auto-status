@@ -135,7 +135,6 @@ class MemoryApi {
         return json(clone(item));
       }
       if (call.method === 'DELETE') {
-        if (!item.can_delete) return json({ detail: 'Protected item' }, 400);
         this.rows.delete(item.id); this.recordAudit(item.id, 'check_item.delete');
         return new Response(null, { status: 204 });
       }
@@ -450,10 +449,11 @@ try {
     assert.equal(field('描述').value, 'Unsaved body');
   });
 
-  await run('protected delete is absent; deleting last page falls back and retains audit', async () => {
-    await mount(Array.from({ length: 21 }, (_, i) => row(i + 1, { can_delete: i !== 0 })));
-    await open('Check 01'); assert.ok(dialog().textContent.includes('删除保护'));
-    assert.ok(!buttons(dialog()).some(item => item.textContent === '删除检查项'));
+  await run('delete protection removed; deleting last page falls back and retains audit', async () => {
+    await mount(Array.from({ length: 21 }, (_, i) => row(i + 1)));
+    await open('Check 01');
+    assert.ok(button('删除检查项'), 'Any item must expose the delete action');
+    assert.ok(!dialog().textContent.includes('删除保护'), 'Delete protection copy must be gone');
     await click(button('关闭', footer())); await click(button('下一页', listNav()));
     await until(() => tableRows().length === 1, 'Last page not loaded'); await open('Check 21');
     confirmResult = true; await click(button('删除检查项'));
