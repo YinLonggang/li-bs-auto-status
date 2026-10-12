@@ -11241,6 +11241,7 @@ export default function App() {
       await loadData();
     } catch (err) {
       setError(mutationErrorMessage(err, '检查项删除失败'));
+      throw err;
     }
   };
 
