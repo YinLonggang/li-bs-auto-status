@@ -868,9 +868,9 @@ try {
     assert.equal(backend.matching('DELETE', '/check-items/902/').length, 1);
 
     await click(byAria('编辑检查项 间隙面差检测', dialog));
-    const protectedDialog = dialogByTitle('编辑检查项 · 间隙面差检测');
-    assert.equal(maybeButton('删除检查项', protectedDialog), null, '受保护检查项不展示删除按钮');
-    assert.ok(protectedDialog.textContent.includes('受删除保护'), '受保护检查项展示提示');
+    const templateSourceDialog = dialogByTitle('编辑检查项 · 间隙面差检测');
+    assert.ok(maybeButton('删除检查项', templateSourceDialog), '硬删除契约下全部检查项都展示删除按钮');
+    assert.ok(!templateSourceDialog.textContent.includes('受删除保护'), '旧删除保护提示必须消失');
   });
 
   await run('matrix cell: dirty guards, nested owner search and scroll lock', async () => {

@@ -145,7 +145,7 @@ class MemoryApi {
     this.modules.set(82, moduleWire(82, 'MOD-B', '外观检测', 2));
     this.modules.set(83, moduleWire(83, 'MOD-C', '电气检测', 3));
     this.checklists.set(301, checklistWire(301, 61, 81, 'design', 'TPL-DEFAULT-MOD-A-design'));
-    // 模块 81 的引用覆盖：两个项目 × 模板来源（仅可迁移）/库来源/手动/已停用。
+    // 模块 81 的引用覆盖：两个项目 × 模板来源/库来源/手动/已停用；硬删除契约下全部可逐行删除。
     this.checkItems.set(1001, checkItemWire(1001, 81, '机器人程序核对', {
       source: 'MODULES.items', can_delete: false
     }));
@@ -427,13 +427,13 @@ try {
     for (const title of ['机器人程序核对', '尺寸链抽检', '焊点间距抽检', '旧涂装检查']) {
       assert.ok(dialog.textContent.includes(title), `Reference row ${title} must render`);
     }
-    assert.ok(dialog.textContent.includes('仅可迁移'), 'Template-source item must carry the migrate-only badge');
+    assert.ok(!dialog.textContent.includes('仅可迁移'), 'Migrate-only badge must be gone from the reference list');
     assert.ok(dialog.textContent.includes('已停用'), 'Disabled item must carry the disabled badge');
     assert.ok(dialog.textContent.includes('模板导入') && dialog.textContent.includes('检查项库') && dialog.textContent.includes('手动创建'), 'Source labels must distinguish template/library/manual');
     assert.ok(!dialog.textContent.includes('或停用'), 'The misleading disable-to-unblock copy must be gone');
-    // 逐行删除只开放给 can_delete 项：模板来源项没有删除按钮，其余三项有。
-    assert.equal(dialog.querySelectorAll('[aria-label^="删除检查项 "]').length, 3, 'Only deletable items get a per-row delete button');
-    assert.ok(!dialog.querySelector('[aria-label="删除检查项 机器人程序核对"]'), 'Template-source item must not offer delete');
+    // 硬删除契约：全部引用行都提供逐行删除（模板来源项不再只可迁移）。
+    assert.equal(dialog.querySelectorAll('[aria-label^="删除检查项 "]').length, 4, 'Every referenced item gets a per-row delete button');
+    assert.ok(dialog.querySelector('[aria-label="删除检查项 机器人程序核对"]'), 'Template-source item must offer delete');
     assert.ok(dialog.textContent.includes('仍被 4 个项目检查项引用，无法删除'), 'Delete gate note must surface the global count');
     assert.ok(button('删除模块', dialog).disabled, 'Delete stays disabled while references exist');
   });
