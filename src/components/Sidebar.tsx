@@ -89,9 +89,16 @@ export default function Sidebar({
           isDesktopCollapsed ? 'lg:justify-center lg:px-3' : 'justify-between'
         }`}
       >
-        <div className={isDesktopCollapsed ? 'lg:sr-only' : undefined}>
-          <div className="text-[11px] font-semibold uppercase text-ink-muted">LI-SICAR · BIW CLOUD LINE</div>
-          <div className="text-base font-semibold text-ink">理想BIW焊接产线运营智能平台</div>
+        <div className={`min-w-0 ${isDesktopCollapsed ? 'lg:sr-only' : ''}`}>
+          <div className="text-[11px] font-semibold uppercase leading-4 text-ink-muted">
+            <span className="whitespace-nowrap">LI-SICAR ·</span>{' '}
+            <span className="whitespace-nowrap">BIW WELDING OPS INTELLIGENCE</span>
+          </div>
+          <div className="text-base font-semibold leading-snug text-ink">
+            <span className="whitespace-nowrap">理想BIW焊接产线</span>
+            <wbr />
+            <span className="whitespace-nowrap">运营智能平台</span>
+          </div>
           <div className="text-xs text-ink-muted">项目状态中心</div>
         </div>
         <div className="flex items-center gap-2">
