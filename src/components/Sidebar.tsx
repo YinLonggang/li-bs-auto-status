@@ -91,7 +91,7 @@ export default function Sidebar({
       >
         <div className={isDesktopCollapsed ? 'lg:sr-only' : undefined}>
           <div className="text-[11px] font-semibold uppercase text-ink-muted">LI-SICAR · BIW CLOUD LINE</div>
-          <div className="text-base font-semibold text-ink">理想BIW云上产线</div>
+          <div className="text-base font-semibold text-ink">理想BIW焊接产线运营智能平台</div>
           <div className="text-xs text-ink-muted">项目状态中心</div>
         </div>
         <div className="flex items-center gap-2">
