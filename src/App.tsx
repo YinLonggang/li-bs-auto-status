@@ -11684,7 +11684,7 @@ export default function App() {
             <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
               <MobileMenuButton onClick={() => setSidebarOpen(true)} />
               <div className="min-w-0">
-                <p className="kicker">理想BIW云上产线-AutoStatus</p>
+                <p className="kicker">理想BIW焊接产线运营智能平台-AutoStatus</p>
                 <h1 className="truncate text-lg font-semibold sm:text-xl">
                   Auto Status 自动化项目状态
                 </h1>
